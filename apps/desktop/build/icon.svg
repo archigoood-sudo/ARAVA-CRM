@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ARAVA CRM</title>
+  <rect width="1024" height="1024" rx="228" fill="#171717" />
+  <rect x="136" y="136" width="752" height="752" rx="190" fill="#9CFF2E" />
+  <path
+    fill="#171717"
+    fill-rule="evenodd"
+    d="M443 286c12-28 40-46 71-46s59 18 71 46l207 498H650l-43-112H416l-43 112H232l211-498Zm16 274h105l-52-136-53 136Z"
+  />
+  <path d="M701 119 905 323 792 436 588 232 701 119Z" fill="#FFFFFF" fill-opacity="0.3" />
+</svg>

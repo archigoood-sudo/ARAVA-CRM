@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 247 248 250;
+    --border: 226 228 232;
+    --foreground: 24 24 27;
+    --muted: 239 240 243;
+    --muted-foreground: 105 108 116;
+    --surface: 255 255 255;
+  }
+
+  :root.dark {
+    --background: 18 18 18;
+    --border: 48 48 48;
+    --foreground: 245 245 245;
+    --muted: 39 39 42;
+    --muted-foreground: 161 161 170;
+    --surface: 27 27 29;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply m-0 min-h-screen overflow-hidden bg-background font-sans text-foreground antialiased;
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+
+  ::selection {
+    background: rgba(156, 255, 46, 0.45);
+    color: #171717;
+  }
+}
+
+@layer utilities {
+  .app-drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}

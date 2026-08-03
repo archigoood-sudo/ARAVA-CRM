@@ -1,0 +1,14 @@
+{
+  "extends": "../../packages/config/typescript/react.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "composite": true,
+    "noEmit": true,
+    "paths": {
+      "@renderer/*": ["src/renderer/src/*"]
+    },
+    "tsBuildInfoFile": ".tsbuild/web.tsbuildinfo",
+    "types": ["vite/client"]
+  },
+  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx"]
+}

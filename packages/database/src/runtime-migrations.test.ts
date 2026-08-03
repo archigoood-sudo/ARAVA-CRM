@@ -1,0 +1,11 @@
+import { describe, expect, it } from 'vitest';
+
+import { runtimeMigrations } from './runtime-migrations';
+
+describe('runtime migrations', () => {
+  it('keeps stable unique migration identifiers', () => {
+    const identifiers = runtimeMigrations.map(({ id }) => id);
+    expect(new Set(identifiers).size).toBe(identifiers.length);
+    expect(identifiers).toEqual(['20260803000000_initial']);
+  });
+});

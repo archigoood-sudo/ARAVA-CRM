@@ -1,0 +1,35 @@
+appId: com.arava.crm
+productName: ARAVA CRM
+copyright: Copyright © 2026 ARAVA
+asar: true
+npmRebuild: false
+asarUnpack:
+  - node_modules/.prisma/client/**
+  - node_modules/@prisma/client/**
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+  - from: .packaging/node_modules/.prisma/client
+    to: node_modules/.prisma/client
+    filter:
+      - '**/*'
+win:
+  executableName: ARAVA CRM
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  verifyUpdateCodeSignature: false
+nsis:
+  artifactName: ARAVA-CRM-Setup-${version}-${arch}.${ext}
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: ARAVA CRM

@@ -1,0 +1,47 @@
+{
+  "name": "arava-crm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ARAVA CRM commercial desktop application monorepo",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.12.0",
+    "npm": ">=10.9.0"
+  },
+  "workspaces": [
+    "packages/config",
+    "packages/shared",
+    "packages/ui",
+    "packages/database",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "build": "npm run build:packages && npm run build -w @arava/desktop",
+    "build:packages": "npm run build -w @arava/config && npm run build -w @arava/shared && npm run build -w @arava/ui && npm run build -w @arava/database",
+    "build:win": "npm run build && npm run package:win -w @arava/desktop",
+    "clean": "node scripts/clean.mjs",
+    "db:generate": "npm run db:generate -w @arava/database",
+    "db:migrate": "npm run db:migrate -w @arava/database",
+    "dev": "npm run build:packages && npm run dev -w @arava/desktop",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "postinstall": "npm run db:generate",
+    "test": "vitest run",
+    "test:e2e": "npm run test:e2e -w @arava/desktop",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@types/node": "^22.13.4",
+    "eslint": "^9.20.1",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.18",
+    "globals": "^15.15.0",
+    "prettier": "^3.5.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.24.0",
+    "vitest": "^3.0.5"
+  }
+}
