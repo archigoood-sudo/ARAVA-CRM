@@ -1,6 +1,12 @@
 export { Badge, type BadgeProps } from './badge';
 export { Button, type ButtonProps } from './button';
 export { Card, CardContent, CardDescription, CardHeader, CardTitle } from './card';
+export { Checkbox, type CheckboxProps } from './checkbox';
+export { EmptyState, ErrorState, LoadingState } from './data-state';
+export { Dialog, type DialogProps } from './dialog';
 export { Input, type InputProps } from './input';
 export { Label, type LabelProps } from './label';
+export { Select, type SelectProps } from './select';
+export { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './table';
+export { Textarea, type TextareaProps } from './textarea';
 export { cn } from './utils';

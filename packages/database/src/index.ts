@@ -1,6 +1,10 @@
 import { PrismaClient } from '@prisma/client';
 
 import { runtimeMigrations } from './runtime-migrations';
+import { hashPassword } from './security';
+
+export const INITIAL_OWNER_EMAIL = 'owner@arava.local';
+export const INITIAL_OWNER_PASSWORD = 'Arava!ChangeMe1';
 
 export type DatabaseClient = PrismaClient;
 
@@ -53,10 +57,28 @@ export async function initializeDatabase(database: DatabaseClient): Promise<void
     where: { key: 'general.workspaceName' },
   });
 
+  if ((await database.user.count()) === 0) {
+    const configuredEmail = process.env.ARAVA_INITIAL_OWNER_EMAIL?.trim().toLowerCase();
+    const configuredPassword = process.env.ARAVA_INITIAL_OWNER_PASSWORD;
+    const email = configuredEmail?.length ? configuredEmail : INITIAL_OWNER_EMAIL;
+    const password = configuredPassword?.length ? configuredPassword : INITIAL_OWNER_PASSWORD;
+    await database.user.create({
+      data: {
+        email,
+        fullName: 'ARAVA Owner',
+        mustChangePassword: true,
+        passwordHash: await hashPassword(password),
+        role: 'OWNER',
+      },
+    });
+  }
+
+  await database.session.deleteMany({ where: { expiresAt: { lte: new Date() } } });
+
   if ((await database.activityEvent.count()) === 0) {
     await database.activityEvent.create({
       data: {
-        detail: 'Your CRM workspace is ready for contacts, companies, and opportunities.',
+        detail: 'Your secure local workspace is ready for branches, students, and families.',
         title: 'ARAVA CRM initialized',
       },
     });
@@ -66,3 +88,21 @@ export async function initializeDatabase(database: DatabaseClient): Promise<void
 export async function closeDatabase(database: DatabaseClient): Promise<void> {
   await database.$disconnect();
 }
+
+export { ApplicationService, isBranchVisibleToUser } from './services';
+export {
+  accessibleBranchIds,
+  assertBranchAccess,
+  assertPermission,
+  canAccessBranch,
+  type DomainAction,
+} from './permissions';
+export {
+  createSessionToken,
+  DomainError,
+  type DomainErrorCode,
+  hashPassword,
+  hashSessionToken,
+  normalizePhone,
+  verifyPassword,
+} from './security';

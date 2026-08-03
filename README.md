@@ -17,6 +17,8 @@ npm run dev
 
 The desktop app creates its SQLite database under Electron's per-user application data directory. Prisma CLI commands use `DATABASE_URL`; copy `.env.example` to `.env` when developing schema changes.
 
+On a fresh database, ARAVA creates `owner@arava.local` with the temporary password `Arava!ChangeMe1`. The owner must replace it immediately after the first login. Production deployments may override these one-time values with `ARAVA_INITIAL_OWNER_EMAIL` and `ARAVA_INITIAL_OWNER_PASSWORD` during first startup.
+
 ## Quality commands
 
 ```bash
@@ -25,6 +27,7 @@ npm run lint
 npm test
 npm run build
 npm run test:e2e
+npm run test:e2e:packaged
 ```
 
 Build the Windows NSIS installer on Windows with:

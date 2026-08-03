@@ -6,6 +6,9 @@ import { useAuthStore } from '../stores/auth-store';
 
 const pageTitles: Record<string, { eyebrow: string; title: string }> = {
   '/dashboard': { eyebrow: 'Overview', title: 'Dashboard' },
+  '/branches': { eyebrow: 'Organization', title: 'Branches' },
+  '/students': { eyebrow: 'Community', title: 'Students' },
+  '/users': { eyebrow: 'Security', title: 'Users & access' },
   '/settings': { eyebrow: 'Workspace', title: 'Settings' },
 };
 
@@ -14,10 +17,12 @@ export function AppLayout() {
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
-  const page = pageTitles[location.pathname] ?? pageTitles['/dashboard'];
+  const page = location.pathname.startsWith('/students/')
+    ? { eyebrow: 'Student record', title: 'Profile' }
+    : (pageTitles[location.pathname] ?? pageTitles['/dashboard']);
 
   const handleLogout = async () => {
-    logout();
+    await logout();
     await navigate('/login');
   };
 
@@ -65,9 +70,9 @@ export function AppLayout() {
               type="button"
             >
               <span className="flex size-8 items-center justify-center rounded-lg bg-neutral-900 text-xs font-bold text-white dark:bg-accent dark:text-neutral-950">
-                {user?.name.charAt(0).toUpperCase()}
+                {user?.fullName.charAt(0).toUpperCase()}
               </span>
-              <span className="max-w-24 truncate text-sm font-semibold">{user?.name}</span>
+              <span className="max-w-24 truncate text-sm font-semibold">{user?.fullName}</span>
               <ChevronsUpDown className="size-3.5 text-muted-foreground group-hover:hidden" />
               <LogOut className="hidden size-3.5 text-muted-foreground group-hover:block" />
             </button>

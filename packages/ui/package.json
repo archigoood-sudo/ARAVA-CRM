@@ -24,10 +24,12 @@
     "tailwind-merge": "^3.0.1"
   },
   "peerDependencies": {
+    "lucide-react": "^0.475.0",
     "react": "^18.3.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",
+    "lucide-react": "^0.475.0",
     "react": "^18.3.1"
   }
 }

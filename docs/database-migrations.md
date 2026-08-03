@@ -6,4 +6,6 @@
 4. Add the equivalent ordered statements to `packages/database/src/runtime-migrations.ts` using the generated migration identifier.
 5. Run type checking, lint, unit tests, the production build, and the desktop end-to-end test.
 
+`migration-compatibility.test.ts` applies every Prisma SQL migration to one temporary database and every packaged runtime migration to another, then compares tables, columns, foreign keys, and indexes. This test must remain green for every schema change.
+
 Never edit an already released migration. Add a new migration so existing customer databases remain upgradeable.

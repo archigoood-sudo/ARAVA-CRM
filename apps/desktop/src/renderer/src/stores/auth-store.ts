@@ -1,37 +1,68 @@
-import type { AuthenticatedUser, LoginCredentials } from '@arava/shared';
+import type { AuthenticatedUser, LoginCredentials, PasswordChangeInput } from '@arava/shared';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-interface AuthState {
-  login: (credentials: LoginCredentials) => void;
-  logout: () => void;
-  user: AuthenticatedUser | null;
-}
+import { getDesktopApi } from '../lib/desktop-api';
 
-function nameFromEmail(email: string): string {
-  const localPart = email.split('@')[0] ?? 'User';
-  return localPart
-    .split(/[._-]/u)
-    .filter(Boolean)
-    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
-    .join(' ');
+interface AuthState {
+  changePassword: (input: PasswordChangeInput) => Promise<void>;
+  login: (credentials: LoginCredentials) => Promise<void>;
+  logout: () => Promise<void>;
+  restore: () => Promise<void>;
+  status: 'ready' | 'restoring';
+  token: string | null;
+  user: AuthenticatedUser | null;
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
-      login: ({ email }) => {
-        set({ user: { email, name: nameFromEmail(email) } });
+    (set, get) => ({
+      changePassword: async (input) => {
+        const token = get().token;
+        if (!token) throw new Error('Authentication is required');
+        const user = await getDesktopApi().auth.changePassword(token, input);
+        set({ user });
       },
-      logout: () => {
-        set({ user: null });
+      login: async (credentials) => {
+        const session = await getDesktopApi().auth.login(credentials);
+        set({ status: 'ready', token: session.token, user: session.user });
       },
+      logout: async () => {
+        const token = get().token;
+        set({ status: 'ready', token: null, user: null });
+        if (token)
+          await getDesktopApi()
+            .auth.logout(token)
+            .catch(() => undefined);
+      },
+      restore: async () => {
+        const token = get().token;
+        if (!token) {
+          set({ status: 'ready', user: null });
+          return;
+        }
+        set({ status: 'restoring' });
+        try {
+          const user = await getDesktopApi().auth.restore(token);
+          set({ status: 'ready', user });
+        } catch {
+          set({ status: 'ready', token: null, user: null });
+        }
+      },
+      status: 'restoring',
+      token: null,
       user: null,
     }),
     {
       name: 'arava-auth',
-      partialize: (state) => ({ user: state.user }),
+      partialize: (state) => ({ token: state.token, user: state.user }),
       storage: createJSONStorage(() => localStorage),
     },
   ),
 );
+
+export function getSessionToken(): string {
+  const token = useAuthStore.getState().token;
+  if (!token) throw new Error('Authentication is required');
+  return token;
+}

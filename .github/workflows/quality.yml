@@ -19,11 +19,13 @@ jobs:
           cache: npm
           node-version: 22
       - run: npm ci
+      - run: npm run format:check
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
       - run: npm run build
       - run: xvfb-run --auto-servernum npm run test:e2e
+      - run: xvfb-run --auto-servernum npm run test:e2e:packaged
 
   windows-installer:
     runs-on: windows-latest

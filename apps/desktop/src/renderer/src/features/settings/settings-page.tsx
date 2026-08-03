@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { useThemeStore, type ThemeMode } from '../../stores/theme-store';
+import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 
 const settingsSchema = z.object({
   workspaceName: z.string().trim().min(2, 'Workspace name is too short').max(80),
@@ -28,16 +29,18 @@ const themeChoices: {
 ];
 
 export function SettingsPage() {
+  const user = useAuthStore((state) => state.user);
+  const canManageWorkspace = user?.role === 'OWNER' || user?.role === 'ADMIN';
   const queryClient = useQueryClient();
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
 
   const workspaceQuery = useQuery({
-    queryFn: () => getDesktopApi().settings.get('general.workspaceName'),
+    queryFn: () => getDesktopApi().settings.get(getSessionToken(), 'general.workspaceName'),
     queryKey: queryKeys.setting('general.workspaceName'),
   });
   const systemQuery = useQuery({
-    queryFn: () => getDesktopApi().system.information(),
+    queryFn: () => getDesktopApi().system.information(getSessionToken()),
     queryKey: queryKeys.system,
   });
   const {
@@ -56,7 +59,7 @@ export function SettingsPage() {
 
   const saveWorkspace = useMutation({
     mutationFn: async ({ workspaceName }: SettingsForm) => {
-      await getDesktopApi().settings.set({
+      await getDesktopApi().settings.set(getSessionToken(), {
         key: 'general.workspaceName',
         value: workspaceName,
       });
@@ -74,7 +77,7 @@ export function SettingsPage() {
 
   const selectTheme = async (value: ThemeMode) => {
     setTheme(value);
-    await getDesktopApi().settings.set({ key: 'appearance.theme', value });
+    await getDesktopApi().settings.set(getSessionToken(), { key: 'appearance.theme', value });
   };
 
   return (
@@ -141,7 +144,7 @@ export function SettingsPage() {
               <div className="min-w-0 flex-1 space-y-2.5">
                 <Label htmlFor="workspaceName">Workspace name</Label>
                 <Input
-                  disabled={workspaceQuery.isLoading}
+                  disabled={!canManageWorkspace || workspaceQuery.isLoading}
                   id="workspaceName"
                   placeholder="ARAVA Workspace"
                   {...register('workspaceName')}
@@ -152,7 +155,10 @@ export function SettingsPage() {
                   </p>
                 ) : null}
               </div>
-              <Button disabled={!isDirty || saveWorkspace.isPending} type="submit">
+              <Button
+                disabled={!canManageWorkspace || !isDirty || saveWorkspace.isPending}
+                type="submit"
+              >
                 <Save className="size-4" />
                 {saveWorkspace.isPending ? 'Saving…' : 'Save changes'}
               </Button>

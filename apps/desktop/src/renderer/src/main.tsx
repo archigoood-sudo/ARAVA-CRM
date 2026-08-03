@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
 
 import { router } from './router';
+import { SessionRestorer } from './session-restorer';
 import { ThemeSynchronizer } from './theme-synchronizer';
 import './styles/index.css';
 
@@ -23,8 +24,10 @@ if (!root) throw new Error('Renderer root element was not found');
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeSynchronizer />
-      <RouterProvider router={router} />
+      <SessionRestorer>
+        <ThemeSynchronizer />
+        <RouterProvider router={router} />
+      </SessionRestorer>
     </QueryClientProvider>
   </StrictMode>,
 );

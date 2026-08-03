@@ -8,6 +8,127 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  OWNER
+  ADMIN
+  BRANCH_MANAGER
+  COACH
+}
+
+enum StudentStatus {
+  ACTIVE
+  TRIAL
+  FROZEN
+  LEFT
+  ARCHIVED
+}
+
+enum Gender {
+  FEMALE
+  MALE
+  OTHER
+}
+
+model User {
+  id                 String       @id @default(cuid())
+  email              String       @unique
+  fullName           String
+  passwordHash       String
+  role               UserRole
+  isActive           Boolean      @default(true)
+  mustChangePassword Boolean      @default(false)
+  branchAssignments  UserBranch[]
+  sessions           Session[]
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([role, isActive])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Branch {
+  id          String       @id @default(cuid())
+  name        String
+  address     String
+  phone       String
+  description String?
+  isActive    Boolean      @default(true)
+  users       UserBranch[]
+  students    Student[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([name])
+  @@index([isActive])
+}
+
+model UserBranch {
+  userId   String
+  branchId String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@id([userId, branchId])
+  @@index([branchId])
+}
+
+model Student {
+  id          String          @id @default(cuid())
+  firstName   String
+  lastName    String
+  middleName  String?
+  birthDate   DateTime?
+  gender      Gender?
+  phone       String?
+  email       String?
+  status      StudentStatus   @default(ACTIVE)
+  branchId    String
+  branch      Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  notes       String?
+  contacts    StudentContact[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  archivedAt  DateTime?
+
+  @@index([branchId, status])
+  @@index([lastName, firstName])
+  @@index([phone])
+  @@index([archivedAt])
+}
+
+model StudentContact {
+  id             String   @id @default(cuid())
+  studentId      String
+  student        Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  fullName       String
+  relationship   String
+  phone          String
+  secondaryPhone String?
+  email          String?
+  telegram       String?
+  whatsapp       Boolean  @default(false)
+  isPrimary      Boolean  @default(false)
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([studentId])
+  @@index([studentId, isPrimary])
+  @@index([phone])
+}
+
 model Contact {
   id        String   @id @default(cuid())
   firstName String

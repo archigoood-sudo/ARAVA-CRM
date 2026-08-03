@@ -21,15 +21,20 @@ export function LoginPage() {
     formState: { errors, isSubmitting },
     handleSubmit,
     register,
+    setError,
   } = useForm<LoginCredentials>({
     defaultValues: { email: '', password: '' },
     resolver: zodResolver(loginCredentialsSchema),
   });
 
   const submit = handleSubmit(async (credentials) => {
-    await Promise.resolve();
-    login(credentials);
-    await navigate('/dashboard');
+    try {
+      await login(credentials);
+      const user = useAuthStore.getState().user;
+      await navigate(user?.mustChangePassword ? '/change-password' : '/dashboard');
+    } catch {
+      setError('root', { message: 'Invalid email or password, or this account is disabled.' });
+    }
   });
 
   return (
@@ -111,9 +116,7 @@ export function LoginPage() {
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
                 <Label htmlFor="password">Password</Label>
-                <span className="text-xs font-medium text-muted-foreground">
-                  8 characters minimum
-                </span>
+                <span className="text-xs font-medium text-muted-foreground">Stored securely</span>
               </div>
               <Input
                 autoComplete="current-password"
@@ -129,6 +132,12 @@ export function LoginPage() {
               ) : null}
             </div>
 
+            {errors.root ? (
+              <p className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+                {errors.root.message}
+              </p>
+            ) : null}
+
             <Button className="mt-2 w-full" disabled={isSubmitting} size="large" type="submit">
               {isSubmitting ? 'Signing in…' : 'Continue to workspace'}
               <ArrowRight className="size-4" />
@@ -136,8 +145,8 @@ export function LoginPage() {
           </form>
 
           <p className="mt-8 text-center text-xs leading-5 text-muted-foreground">
-            Authentication is local in this foundation build. Your password is validated but never
-            stored.
+            Fresh workspace credentials are supplied with deployment and must be replaced after the
+            first sign-in.
           </p>
         </div>
       </section>

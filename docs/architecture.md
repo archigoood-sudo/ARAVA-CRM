@@ -12,7 +12,7 @@ External navigation is denied inside ARAVA and delegated to the operating system
 
 ## Persistence
 
-SQLite is stored in Electron's per-user data directory. Prisma provides the typed query layer. The checked-in Prisma migration is the schema source of truth for development and deployment tooling.
+SQLite is stored in Electron's per-user data directory. Prisma provides the typed query layer. The checked-in Prisma migration is the schema source of truth for development and deployment tooling. Local passwords use salted scrypt hashes with a memory cost of 64 MiB; only opaque session tokens reach the renderer and only their SHA-256 digests are persisted.
 
 Packaged desktop software cannot assume that a Prisma CLI exists on an end user's machine, so startup also runs ordered, idempotently recorded SQL migrations through the Prisma connection. Every runtime migration has a stable identifier stored in `_AppMigration`. New schema changes must add both a Prisma migration and its equivalent runtime migration in the same change set.
 
@@ -20,9 +20,13 @@ Currency values are stored as integer minor units when monetary records are intr
 
 ## Renderer
 
-React Router owns navigation, TanStack Query owns asynchronous desktop state, and Zustand owns small persisted client preferences and the local foundation session. React Hook Form and Zod own form state and validation. Reusable visual primitives live in `@arava/ui`; application-specific compositions remain inside the desktop app.
+React Router owns navigation, TanStack Query owns asynchronous desktop state, and Zustand owns small persisted client preferences and the opaque local session token. React Hook Form and Zod own form state and validation. Reusable visual primitives live in `@arava/ui`; application-specific compositions remain inside the desktop app.
 
-The renderer uses hash routing because it is reliable under Electron's `file://` production loading model. A browser-only API adapter supplies deterministic preview data for UI development; production always receives the preload bridge.
+The renderer uses hash routing because it is reliable under Electron's `file://` production loading model. Production and development both use the sandboxed preload bridge so authorization behavior cannot diverge between preview and packaged builds.
+
+## Authorization
+
+Every protected IPC call carries an opaque session token. The main-process application service resolves the current local user, rejects expired or disabled sessions, applies the role matrix, and enforces assigned-branch scope before querying or mutating data. Renderer guards and hidden actions are usability controls only; they are not security boundaries.
 
 ## Configuration and observability
 

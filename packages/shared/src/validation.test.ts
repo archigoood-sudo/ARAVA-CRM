@@ -9,9 +9,9 @@ describe('loginCredentialsSchema', () => {
     ).toEqual({ email: 'owner@arava.app', password: 'secure-pass' });
   });
 
-  it('rejects short passwords', () => {
+  it('accepts any non-empty password for a constant login response', () => {
     expect(
       loginCredentialsSchema.safeParse({ email: 'owner@arava.app', password: 'short' }).success,
-    ).toBe(false);
+    ).toBe(true);
   });
 });
