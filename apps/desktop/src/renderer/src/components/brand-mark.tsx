@@ -8,9 +8,9 @@ interface BrandMarkProps {
 export function BrandMark({ className, compact = false }: BrandMarkProps) {
   return (
     <div className={cn('flex items-center gap-3', className)}>
-      <span className="relative flex size-10 items-center justify-center overflow-hidden rounded-xl bg-accent">
-        <span className="absolute -right-1 -top-2 size-6 rotate-45 rounded-md bg-white/40" />
-        <span className="relative text-lg font-black tracking-[-0.1em] text-neutral-950">A</span>
+      <span className="relative flex size-10 items-center justify-center overflow-hidden rounded-xl bg-sidebar shadow-lg ring-1 ring-white/10">
+        <span className="relative text-lg font-black tracking-[-0.1em] text-white">A</span>
+        <span className="absolute bottom-1.5 right-1.5 size-2 rounded-full bg-accent" />
       </span>
       {compact ? null : (
         <div>

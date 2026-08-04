@@ -2,7 +2,7 @@
   "name": "@arava/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "ARAVA CRM desktop application",
+  "description": "ARAVA CRM — приложение для управления школой",
   "author": "ARAVA",
   "license": "UNLICENSED",
   "type": "module",

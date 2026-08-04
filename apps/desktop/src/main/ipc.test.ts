@@ -13,7 +13,7 @@ import {
   toSqliteUrl,
   type DatabaseClient,
 } from '@arava/database';
-import { IPC_CHANNELS, type AuthSession, type BranchSummary } from '@arava/shared';
+import { IPC_CHANNELS, t, type AuthSession, type BranchSummary } from '@arava/shared';
 
 vi.mock('electron', () => ({
   app: { getVersion: () => 'test' },
@@ -83,7 +83,7 @@ describe('Electron IPC boundary', () => {
         name: 'Blocked',
         phone: '+79990000001',
       }),
-    ).rejects.toThrow('permission');
+    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
     const visible = (await handlers[IPC_CHANNELS.branchList]?.(
       coach.token,
       false,

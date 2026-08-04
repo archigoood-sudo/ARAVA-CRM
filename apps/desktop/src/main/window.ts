@@ -1,11 +1,16 @@
 import { APP_NAME } from '@arava/config';
-import { BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'node:path';
 
 export function createMainWindow(): BrowserWindow {
+  const icon = app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(import.meta.dirname, '../../build/icon.png');
   const mainWindow = new BrowserWindow({
+    autoHideMenuBar: true,
     backgroundColor: '#F7F8FA',
     height: 900,
+    icon,
     minHeight: 720,
     minWidth: 1080,
     show: false,
@@ -19,6 +24,8 @@ export function createMainWindow(): BrowserWindow {
     },
     width: 1440,
   });
+
+  mainWindow.setMenuBarVisibility(false);
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();

@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { t } from '@arava/shared';
 
 import {
   closeDatabase,
@@ -40,9 +41,13 @@ describe('Sprint 1 application service', () => {
     expect(session).not.toHaveProperty('passwordHash');
     expect(session.user).not.toHaveProperty('passwordHash');
     await expect(service.restoreSession(session.token)).resolves.toEqual(session.user);
-    await expect(service.listBranches(session.token)).rejects.toThrow('temporary password');
+    await expect(service.listBranches(session.token)).rejects.toThrow(
+      t('domain.authorization.passwordChange'),
+    );
     await service.logout(session.token);
-    await expect(service.restoreSession(session.token)).rejects.toThrow('expired');
+    await expect(service.restoreSession(session.token)).rejects.toThrow(
+      t('domain.authentication.sessionExpired'),
+    );
   });
 
   it('requires the initial password change and rejects disabled accounts', async () => {
@@ -75,7 +80,7 @@ describe('Sprint 1 application service', () => {
     });
     await expect(
       service.login({ email: coach.email, password: 'Coach!Secure2026' }),
-    ).rejects.toThrow('Invalid');
+    ).rejects.toThrow(t('domain.authentication.invalidCredentials'));
     const storedOwner = await database.user.findUniqueOrThrow({
       where: { email: INITIAL_OWNER_EMAIL },
     });
@@ -130,7 +135,7 @@ describe('Sprint 1 application service', () => {
     });
     await expect(
       service.createBranch(manager.token, { address: 'X', name: 'X', phone: '+79990000009' }),
-    ).rejects.toThrow('permission');
+    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
     await expect(
       service.createStudent(manager.token, {
         branchId: branchB.id,
@@ -138,7 +143,7 @@ describe('Sprint 1 application service', () => {
         lastName: 'Access',
         status: 'ACTIVE',
       }),
-    ).rejects.toThrow('access');
+    ).rejects.toThrow(t('domain.authorization.branchDenied'));
     const student = await service.createStudent(manager.token, {
       branchId: branchA.id,
       firstName: 'Mila',
@@ -151,7 +156,7 @@ describe('Sprint 1 application service', () => {
     });
     await expect(
       service.updateStudent(coach.token, student.id, { ...student, firstName: 'Blocked' }),
-    ).rejects.toThrow('permission');
+    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
     const first = await service.createContact(manager.token, student.id, {
       fullName: 'First Parent',
       isPrimary: true,

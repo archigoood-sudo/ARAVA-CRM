@@ -19,7 +19,7 @@ const queryClient = new QueryClient({
 });
 
 const root = document.querySelector('#root');
-if (!root) throw new Error('Renderer root element was not found');
+if (!root) throw new Error('Не найден корневой элемент интерфейса.');
 
 createRoot(root).render(
   <StrictMode>

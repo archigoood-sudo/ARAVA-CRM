@@ -1,5 +1,16 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label, cn } from '@arava/ui';
+import { t } from '@arava/shared';
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
+  Label,
+  PageHeader,
+  cn,
+} from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Database, Laptop, Moon, Save, Sun } from 'lucide-react';
 import { useEffect } from 'react';
@@ -12,7 +23,7 @@ import { useThemeStore, type ThemeMode } from '../../stores/theme-store';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 
 const settingsSchema = z.object({
-  workspaceName: z.string().trim().min(2, 'Workspace name is too short').max(80),
+  workspaceName: z.string().trim().min(2, t('validation.workspaceName')).max(80),
 });
 
 type SettingsForm = z.infer<typeof settingsSchema>;
@@ -23,10 +34,31 @@ const themeChoices: {
   label: string;
   value: ThemeMode;
 }[] = [
-  { description: 'Bright and focused', icon: Sun, label: 'Light', value: 'light' },
-  { description: 'Easy on the eyes', icon: Moon, label: 'Dark', value: 'dark' },
-  { description: 'Match your device', icon: Laptop, label: 'System', value: 'system' },
+  {
+    description: t('settings.theme.lightDescription'),
+    icon: Sun,
+    label: t('settings.theme.light'),
+    value: 'light',
+  },
+  {
+    description: t('settings.theme.darkDescription'),
+    icon: Moon,
+    label: t('settings.theme.dark'),
+    value: 'dark',
+  },
+  {
+    description: t('settings.theme.systemDescription'),
+    icon: Laptop,
+    label: t('settings.theme.system'),
+    value: 'system',
+  },
 ];
+
+const platformNames: Record<string, string> = {
+  darwin: 'macOS',
+  linux: 'Linux',
+  win32: 'Windows',
+};
 
 export function SettingsPage() {
   const user = useAuthStore((state) => state.user);
@@ -82,20 +114,13 @@ export function SettingsPage() {
 
   return (
     <main className="mx-auto w-full max-w-5xl p-9 pb-14">
-      <div className="mb-8">
-        <h2 className="text-4xl font-semibold tracking-[-0.045em]">Make ARAVA yours.</h2>
-        <p className="mt-2.5 text-base text-muted-foreground">
-          Personalize the workspace and review your local application details.
-        </p>
-      </div>
+      <PageHeader description={t('settings.pageDescription')} title={t('settings.pageTitle')} />
 
       <div className="space-y-5">
         <Card>
           <CardHeader>
-            <CardTitle>Appearance</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Choose how ARAVA looks across the application.
-            </p>
+            <CardTitle>{t('settings.appearance')}</CardTitle>
+            <p className="text-sm text-muted-foreground">{t('settings.appearanceDescription')}</p>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-3 gap-3">
@@ -134,19 +159,17 @@ export function SettingsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Workspace</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Set the display name for this CRM database.
-            </p>
+            <CardTitle>{t('settings.workspace')}</CardTitle>
+            <p className="text-sm text-muted-foreground">{t('settings.workspaceDescription')}</p>
           </CardHeader>
           <CardContent>
             <form className="flex items-end gap-3" onSubmit={submit}>
               <div className="min-w-0 flex-1 space-y-2.5">
-                <Label htmlFor="workspaceName">Workspace name</Label>
+                <Label htmlFor="workspaceName">{t('settings.workspaceName')}</Label>
                 <Input
                   disabled={!canManageWorkspace || workspaceQuery.isLoading}
                   id="workspaceName"
-                  placeholder="ARAVA Workspace"
+                  placeholder={t('settings.workspacePlaceholder')}
                   {...register('workspaceName')}
                 />
                 {errors.workspaceName ? (
@@ -160,7 +183,7 @@ export function SettingsPage() {
                 type="submit"
               >
                 <Save className="size-4" />
-                {saveWorkspace.isPending ? 'Saving…' : 'Save changes'}
+                {saveWorkspace.isPending ? t('common.saving') : t('settings.saveChanges')}
               </Button>
             </form>
           </CardContent>
@@ -168,31 +191,31 @@ export function SettingsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Application data</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Technical information for diagnostics and support.
-            </p>
+            <CardTitle>{t('settings.appData')}</CardTitle>
+            <p className="text-sm text-muted-foreground">{t('settings.appDataDescription')}</p>
           </CardHeader>
           <CardContent>
             <dl className="divide-y divide-border rounded-2xl border border-border bg-background px-5">
               <div className="flex items-center justify-between gap-8 py-4">
                 <dt className="flex items-center gap-3 text-sm font-medium">
-                  <Database className="size-4 text-muted-foreground" /> Database
+                  <Database className="size-4 text-muted-foreground" /> {t('settings.database')}
                 </dt>
                 <dd className="max-w-xl truncate font-mono text-xs text-muted-foreground">
-                  {systemQuery.data?.databasePath ?? 'Loading…'}
+                  {systemQuery.data?.databasePath ?? t('common.loading')}
                 </dd>
               </div>
               <div className="flex items-center justify-between py-4">
-                <dt className="text-sm font-medium">Version</dt>
+                <dt className="text-sm font-medium">{t('settings.version')}</dt>
                 <dd className="text-sm text-muted-foreground">
                   {systemQuery.data?.appVersion ?? '—'}
                 </dd>
               </div>
               <div className="flex items-center justify-between py-4">
-                <dt className="text-sm font-medium">Platform</dt>
+                <dt className="text-sm font-medium">{t('settings.platform')}</dt>
                 <dd className="text-sm capitalize text-muted-foreground">
-                  {systemQuery.data?.platform ?? '—'}
+                  {systemQuery.data?.platform
+                    ? (platformNames[systemQuery.data.platform] ?? systemQuery.data.platform)
+                    : '—'}
                 </dd>
               </div>
             </dl>

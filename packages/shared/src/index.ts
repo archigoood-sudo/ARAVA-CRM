@@ -1,4 +1,5 @@
 export * from './channels';
+export * from './i18n';
 export { settingKeySchema, settingUpdateSchema } from './ipc';
 export {
   branchInputSchema,

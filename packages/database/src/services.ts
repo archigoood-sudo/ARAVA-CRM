@@ -16,6 +16,7 @@ import type {
   UserSummary,
   UserUpdateInput,
 } from '@arava/shared';
+import { t } from '@arava/shared';
 import { Prisma, type Branch, type Student, type StudentContact, type User } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
@@ -157,7 +158,7 @@ export class ApplicationService {
       !user.isActive ||
       !(await verifyPassword(credentials.password, user.passwordHash))
     ) {
-      throw new DomainError('AUTHENTICATION', 'Invalid email or password');
+      throw new DomainError('AUTHENTICATION', t('domain.authentication.invalidCredentials'));
     }
 
     const token = createSessionToken();
@@ -183,7 +184,7 @@ export class ApplicationService {
     const actor = await this.authenticate(token, true);
     const user = await this.database.user.findUniqueOrThrow({ where: { id: actor.id } });
     if (!(await verifyPassword(input.currentPassword, user.passwordHash))) {
-      throw new DomainError('AUTHENTICATION', 'Current password is incorrect');
+      throw new DomainError('AUTHENTICATION', t('domain.authentication.passwordIncorrect'));
     }
     const passwordHash = await hashPassword(input.newPassword);
     const updated = await this.database.user.update({
@@ -203,11 +204,11 @@ export class ApplicationService {
     });
     if (!session || session.expiresAt.getTime() <= Date.now() || !session.user.isActive) {
       if (session) await this.database.session.delete({ where: { id: session.id } });
-      throw new DomainError('AUTHENTICATION', 'Your session has expired. Sign in again.');
+      throw new DomainError('AUTHENTICATION', t('domain.authentication.sessionExpired'));
     }
 
     if (session.user.mustChangePassword && !allowPasswordChange) {
-      throw new DomainError('AUTHORIZATION', 'Change the temporary password before continuing');
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.passwordChange'));
     }
     if (Date.now() - session.lastUsedAt.getTime() > 5 * 60 * 1000) {
       await this.database.session.update({
@@ -232,7 +233,7 @@ export class ApplicationService {
     const actor = await this.authenticate(token);
     assertPermission(actor, 'users:manage');
     if (actor.role === 'ADMIN' && input.role === 'OWNER') {
-      throw new DomainError('AUTHORIZATION', 'Only an owner can create another owner');
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.ownerCreate'));
     }
     await this.validateBranchAssignments(input.branchIds);
     try {
@@ -250,7 +251,7 @@ export class ApplicationService {
       return userSummary(created);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new DomainError('CONFLICT', 'A user with this email already exists');
+        throw new DomainError('CONFLICT', t('domain.conflict.userEmail'));
       }
       throw error;
     }
@@ -260,16 +261,16 @@ export class ApplicationService {
     const actor = await this.authenticate(token);
     assertPermission(actor, 'users:manage');
     const target = await this.database.user.findUnique({ where: { id } });
-    if (!target) throw new DomainError('NOT_FOUND', 'User not found');
+    if (!target) throw new DomainError('NOT_FOUND', t('domain.notFound.user'));
     if (actor.role === 'ADMIN' && (target.role === 'OWNER' || input.role === 'OWNER')) {
-      throw new DomainError('AUTHORIZATION', 'Only an owner can manage owner accounts');
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.ownerManage'));
     }
     if (actor.id === id && (!input.isActive || input.role !== actor.role)) {
-      throw new DomainError('VALIDATION', 'You cannot disable or change your own role');
+      throw new DomainError('VALIDATION', t('domain.validation.ownAccount'));
     }
     if (target.role === 'OWNER' && (input.role !== 'OWNER' || !input.isActive)) {
       const owners = await this.database.user.count({ where: { isActive: true, role: 'OWNER' } });
-      if (owners <= 1) throw new DomainError('VALIDATION', 'At least one active owner is required');
+      if (owners <= 1) throw new DomainError('VALIDATION', t('domain.validation.lastOwner'));
     }
     await this.validateBranchAssignments(input.branchIds);
     const updated = await this.database.$transaction(async (transaction) => {
@@ -398,7 +399,7 @@ export class ApplicationService {
       },
       where: { id },
     });
-    if (!student) throw new DomainError('NOT_FOUND', 'Student not found');
+    if (!student) throw new DomainError('NOT_FOUND', t('domain.notFound.student'));
     assertBranchAccess(actor, student.branchId);
     return { ...studentSummary(student), contacts: student.contacts.map(contactSummary) };
   }
@@ -477,7 +478,7 @@ export class ApplicationService {
       include: { student: { select: { branchId: true } } },
       where: { id },
     });
-    if (!current) throw new DomainError('NOT_FOUND', 'Contact not found');
+    if (!current) throw new DomainError('NOT_FOUND', t('domain.notFound.contact'));
     assertBranchAccess(actor, current.student.branchId);
     const contact = await this.database.$transaction(async (transaction) => {
       if (input.isPrimary) {
@@ -498,38 +499,39 @@ export class ApplicationService {
       include: { student: { select: { branchId: true } } },
       where: { id },
     });
-    if (!contact) throw new DomainError('NOT_FOUND', 'Contact not found');
+    if (!contact) throw new DomainError('NOT_FOUND', t('domain.notFound.contact'));
     assertBranchAccess(actor, contact.student.branchId);
     await this.database.studentContact.delete({ where: { id } });
   }
 
   private async validateBranchAssignments(branchIds: string[]): Promise<void> {
     if (new Set(branchIds).size !== branchIds.length) {
-      throw new DomainError('VALIDATION', 'Branch assignments must be unique');
+      throw new DomainError('VALIDATION', t('domain.validation.assignmentsUnique'));
     }
     const count = await this.database.branch.count({
       where: { id: { in: branchIds }, isActive: true },
     });
     if (count !== branchIds.length) {
-      throw new DomainError('VALIDATION', 'One or more branch assignments are invalid');
+      throw new DomainError('VALIDATION', t('domain.validation.assignmentsInvalid'));
     }
   }
 
   private async requireBranch(id: string): Promise<Branch> {
     const branch = await this.database.branch.findUnique({ where: { id } });
-    if (!branch) throw new DomainError('NOT_FOUND', 'Branch not found');
+    if (!branch) throw new DomainError('NOT_FOUND', t('domain.notFound.branch'));
     return branch;
   }
 
   private async requireActiveBranch(id: string): Promise<Branch> {
     const branch = await this.requireBranch(id);
-    if (!branch.isActive) throw new DomainError('VALIDATION', 'The selected branch is archived');
+    if (!branch.isActive)
+      throw new DomainError('VALIDATION', t('domain.validation.branchArchived'));
     return branch;
   }
 
   private async requireStudent(id: string): Promise<Student> {
     const student = await this.database.student.findUnique({ where: { id } });
-    if (!student) throw new DomainError('NOT_FOUND', 'Student not found');
+    if (!student) throw new DomainError('NOT_FOUND', t('domain.notFound.student'));
     return student;
   }
 }

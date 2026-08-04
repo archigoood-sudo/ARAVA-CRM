@@ -11,7 +11,7 @@ const requestedTarget = process.argv[2] ?? 'native';
 
 const nativeEngineNames = {
   darwin: 'libquery_engine-darwin.dylib.node',
-  linux: 'libquery_engine-linux',
+  linux: 'libquery_engine-',
   win32: 'query_engine-windows.dll.node',
 };
 

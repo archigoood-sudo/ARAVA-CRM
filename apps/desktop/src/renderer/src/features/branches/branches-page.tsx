@@ -1,4 +1,4 @@
-import type { BranchInput, BranchSummary } from '@arava/shared';
+import { t, type BranchInput, type BranchSummary } from '@arava/shared';
 import {
   Badge,
   Button,
@@ -6,6 +6,7 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
+  PageHeader,
   Table,
   TableBody,
   TableCell,
@@ -59,53 +60,55 @@ export function BranchesPage() {
     try {
       await save.mutateAsync(input);
     } catch (error) {
-      setMutationError(getErrorMessage(error, 'The branch could not be saved.'));
+      setMutationError(getErrorMessage(error, t('branch.errorSave')));
     }
   };
 
   return (
     <main className="mx-auto w-full max-w-[1400px] p-9 pb-14">
-      <div className="mb-8 flex items-end justify-between">
-        <div>
-          <h2 className="text-4xl font-semibold tracking-[-0.045em]">Your studio network.</h2>
-          <p className="mt-2.5 text-base text-muted-foreground">
-            Keep locations organized and control branch-level access.
-          </p>
-        </div>
-        {canManage ? (
-          <Button onClick={openCreate}>
-            <Plus className="size-4" />
-            Create branch
-          </Button>
-        ) : null}
-      </div>
+      <PageHeader
+        action={
+          canManage ? (
+            <Button onClick={openCreate}>
+              <Plus className="size-4" />
+              {t('branch.action.create')}
+            </Button>
+          ) : undefined
+        }
+        description={t('branch.pageDescription')}
+        title={t('branch.pageTitle')}
+      />
 
       <Card className="overflow-hidden">
-        {query.isLoading ? <LoadingState label="Loading branches…" /> : null}
+        {query.isLoading ? <LoadingState label={t('branch.loading')} /> : null}
         {query.isError ? (
           <ErrorState
-            message="Branches could not be loaded."
+            message={t('branch.errorLoad')}
             onRetry={() => void query.refetch()}
+            retryLabel={t('common.retry')}
+            title={t('common.errorTitle')}
           />
         ) : null}
         {query.data?.length === 0 ? (
           <EmptyState
             action={
-              canManage ? <Button onClick={openCreate}>Create first branch</Button> : undefined
+              canManage ? (
+                <Button onClick={openCreate}>{t('branch.action.createFirst')}</Button>
+              ) : undefined
             }
-            description="Create a studio branch before adding students or assigning staff."
+            description={t('branch.emptyDescription')}
             icon={Building2}
-            title="No branches yet"
+            title={t('branch.emptyTitle')}
           />
         ) : null}
         {query.data && query.data.length > 0 ? (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Branch</TableHead>
-                <TableHead>Contact</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{t('nav.branches')}</TableHead>
+                <TableHead>{t('branch.contact')}</TableHead>
+                <TableHead>{t('common.status')}</TableHead>
+                <TableHead className="text-right">{t('common.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -128,14 +131,14 @@ export function BranchesPage() {
                     <Badge
                       className={branch.isActive ? undefined : 'bg-muted text-muted-foreground'}
                     >
-                      {branch.isActive ? 'Active' : 'Archived'}
+                      {branch.isActive ? t('common.active') : t('common.archived')}
                     </Badge>
                   </TableCell>
                   <TableCell>
                     {canManage && branch.isActive ? (
                       <div className="flex justify-end gap-1">
                         <Button
-                          aria-label={`Edit ${branch.name}`}
+                          aria-label={t('branch.action.editLabel', { name: branch.name })}
                           onClick={() => {
                             setEditing(branch);
                             setMutationError(undefined);
@@ -147,7 +150,7 @@ export function BranchesPage() {
                           <Pencil className="size-4" />
                         </Button>
                         <Button
-                          aria-label={`Archive ${branch.name}`}
+                          aria-label={t('branch.action.archiveLabel', { name: branch.name })}
                           disabled={archive.isPending}
                           onClick={() => void archive.mutateAsync(branch.id)}
                           size="icon"

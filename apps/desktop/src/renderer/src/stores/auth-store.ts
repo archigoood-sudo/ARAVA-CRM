@@ -1,4 +1,9 @@
-import type { AuthenticatedUser, LoginCredentials, PasswordChangeInput } from '@arava/shared';
+import {
+  t,
+  type AuthenticatedUser,
+  type LoginCredentials,
+  type PasswordChangeInput,
+} from '@arava/shared';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
@@ -19,7 +24,7 @@ export const useAuthStore = create<AuthState>()(
     (set, get) => ({
       changePassword: async (input) => {
         const token = get().token;
-        if (!token) throw new Error('Authentication is required');
+        if (!token) throw new Error(t('domain.authentication.required'));
         const user = await getDesktopApi().auth.changePassword(token, input);
         set({ user });
       },
@@ -63,6 +68,6 @@ export const useAuthStore = create<AuthState>()(
 
 export function getSessionToken(): string {
   const token = useAuthStore.getState().token;
-  if (!token) throw new Error('Authentication is required');
+  if (!token) throw new Error(t('domain.authentication.required'));
   return token;
 }

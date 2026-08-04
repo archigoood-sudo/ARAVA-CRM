@@ -1,11 +1,13 @@
-import type { UserCreateInput, UserSummary, UserUpdateInput } from '@arava/shared';
+import { t, type UserCreateInput, type UserSummary, type UserUpdateInput } from '@arava/shared';
 import {
   Badge,
+  Avatar,
   Button,
   Card,
   EmptyState,
   ErrorState,
   LoadingState,
+  PageHeader,
   Table,
   TableBody,
   TableCell,
@@ -24,10 +26,10 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { UserDialog } from './user-dialog';
 
 const roleNames = {
-  ADMIN: 'Administrator',
-  BRANCH_MANAGER: 'Branch manager',
-  COACH: 'Coach',
-  OWNER: 'Owner',
+  ADMIN: t('role.ADMIN'),
+  BRANCH_MANAGER: t('role.BRANCH_MANAGER'),
+  COACH: t('role.COACH'),
+  OWNER: t('role.OWNER'),
 } as const;
 
 export function UsersPage() {
@@ -62,7 +64,7 @@ export function UsersPage() {
       await create.mutateAsync(input);
       await finish();
     } catch (caught) {
-      setError(getErrorMessage(caught, 'User could not be created.'));
+      setError(getErrorMessage(caught, t('user.errorCreate')));
     }
   };
   const updateUser = async (input: UserUpdateInput) => {
@@ -72,52 +74,55 @@ export function UsersPage() {
       await update.mutateAsync({ id: editing.id, input });
       await finish();
     } catch (caught) {
-      setError(getErrorMessage(caught, 'User could not be updated.'));
+      setError(getErrorMessage(caught, t('user.errorUpdate')));
     }
   };
   if (!actor || (actor.role !== 'OWNER' && actor.role !== 'ADMIN')) return null;
 
   return (
     <main className="mx-auto w-full max-w-[1400px] p-9 pb-14">
-      <div className="mb-8 flex items-end justify-between">
-        <div>
-          <h2 className="text-4xl font-semibold tracking-[-0.045em]">People and access.</h2>
-          <p className="mt-2.5 text-base text-muted-foreground">
-            Local accounts, roles, and branch assignments in one secure place.
-          </p>
-        </div>
-        <Button
-          onClick={() => {
-            setEditing(null);
-            setError(undefined);
-            setOpen(true);
-          }}
-        >
-          <Plus className="size-4" />
-          Add user
-        </Button>
-      </div>
+      <PageHeader
+        action={
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setError(undefined);
+              setOpen(true);
+            }}
+          >
+            <Plus className="size-4" />
+            {t('user.action.add')}
+          </Button>
+        }
+        description={t('user.pageDescription')}
+        title={t('user.pageTitle')}
+      />
       <Card className="overflow-hidden">
-        {users.isLoading ? <LoadingState label="Loading users…" /> : null}
+        {users.isLoading ? <LoadingState label={t('user.loading')} /> : null}
         {users.isError ? (
-          <ErrorState message="Users could not be loaded." onRetry={() => void users.refetch()} />
+          <ErrorState
+            message={t('user.errorLoad')}
+            onRetry={() => void users.refetch()}
+            retryLabel={t('common.retry')}
+            title={t('common.errorTitle')}
+          />
         ) : null}
         {users.data?.length === 0 ? (
           <EmptyState
-            description="Add staff accounts and grant only the access they need."
+            description={t('user.emptyDescription')}
             icon={Users}
-            title="No users"
+            title={t('user.emptyTitle')}
           />
         ) : null}
         {users.data && users.data.length > 0 ? (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>User</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Branches</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Action</TableHead>
+                <TableHead>{t('nav.users')}</TableHead>
+                <TableHead>{t('user.role')}</TableHead>
+                <TableHead>{t('user.branches')}</TableHead>
+                <TableHead>{t('user.status')}</TableHead>
+                <TableHead className="text-right">{t('common.action')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -127,9 +132,7 @@ export function UsersPage() {
                   <TableRow key={user.id}>
                     <TableCell>
                       <div className="flex items-center gap-3">
-                        <span className="flex size-9 items-center justify-center rounded-xl bg-neutral-900 text-xs font-bold text-white dark:bg-accent dark:text-neutral-950">
-                          {user.fullName.charAt(0)}
-                        </span>
+                        <Avatar name={user.fullName} size="small" />
                         <div>
                           <p className="font-semibold">{user.fullName}</p>
                           <p className="mt-0.5 text-xs text-muted-foreground">{user.email}</p>
@@ -144,19 +147,19 @@ export function UsersPage() {
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {user.branchIds.length > 0
-                        ? `${String(user.branchIds.length)} assigned`
-                        : 'All branches'}
+                        ? t('user.totalAssignedBranches', { count: user.branchIds.length })
+                        : t('user.allBranches')}
                     </TableCell>
                     <TableCell>
                       <Badge
                         className={user.isActive ? undefined : 'bg-muted text-muted-foreground'}
                       >
-                        {user.isActive ? 'Enabled' : 'Disabled'}
+                        {user.isActive ? t('user.status.enabled') : t('user.status.disabled')}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
                       <Button
-                        aria-label={`Edit ${user.fullName}`}
+                        aria-label={t('user.action.editLabel', { name: user.fullName })}
                         disabled={protectedOwner}
                         onClick={() => {
                           setEditing(user);

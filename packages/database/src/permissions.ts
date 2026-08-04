@@ -1,4 +1,4 @@
-import type { AuthenticatedUser, UserRole } from '@arava/shared';
+import { t, type AuthenticatedUser, type UserRole } from '@arava/shared';
 
 import { DomainError } from './security';
 
@@ -21,7 +21,7 @@ const allowedRoles: Record<DomainAction, readonly UserRole[]> = {
 
 export function assertPermission(user: AuthenticatedUser, action: DomainAction): void {
   if (!allowedRoles[action].includes(user.role)) {
-    throw new DomainError('AUTHORIZATION', 'You do not have permission to perform this action');
+    throw new DomainError('AUTHORIZATION', t('domain.authorization.permissionDenied'));
   }
 }
 
@@ -31,7 +31,7 @@ export function canAccessBranch(user: AuthenticatedUser, branchId: string): bool
 
 export function assertBranchAccess(user: AuthenticatedUser, branchId: string): void {
   if (!canAccessBranch(user, branchId)) {
-    throw new DomainError('AUTHORIZATION', 'You do not have access to this branch');
+    throw new DomainError('AUTHORIZATION', t('domain.authorization.branchDenied'));
   }
 }
 

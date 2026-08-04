@@ -1,4 +1,5 @@
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { t } from '@arava/shared';
 const KEY_LENGTH = 64;
 const COST = 65_536;
 const BLOCK_SIZE = 8;
@@ -78,7 +79,7 @@ export function normalizePhone(phone: string): string {
   const trimmed = phone.trim();
   const digits = trimmed.replaceAll(/\D/gu, '');
   if (digits.length < 5 || digits.length > 18) {
-    throw new DomainError('VALIDATION', 'Enter a valid phone number');
+    throw new DomainError('VALIDATION', t('domain.validation.phone'));
   }
   return `+${digits}`;
 }

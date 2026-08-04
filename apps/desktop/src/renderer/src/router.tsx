@@ -1,6 +1,7 @@
 import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { LoginPage } from './features/auth/login-page';
+import { AboutPage } from './features/about/about-page';
 import { ChangePasswordPage } from './features/auth/change-password-page';
 import { BranchesPage } from './features/branches/branches-page';
 import { DashboardPage } from './features/dashboard/dashboard-page';
@@ -38,6 +39,7 @@ export const router = createHashRouter([
           { element: <StudentProfilePage />, path: '/students/:studentId' },
           { element: <UsersPage />, path: '/users' },
           { element: <SettingsPage />, path: '/settings' },
+          { element: <AboutPage />, path: '/about' },
         ],
       },
     ],

@@ -1,4 +1,5 @@
 import {
+  BadgeInfo,
   Building2,
   ChevronRight,
   LayoutDashboard,
@@ -9,6 +10,7 @@ import {
 import { NavLink } from 'react-router-dom';
 
 import { cn } from '@arava/ui';
+import { t } from '@arava/shared';
 
 import { useAuthStore } from '../stores/auth-store';
 import { BrandMark } from './brand-mark';
@@ -16,19 +18,19 @@ import { BrandMark } from './brand-mark';
 export function Sidebar() {
   const user = useAuthStore((state) => state.user);
   const navigation = [
-    { icon: LayoutDashboard, label: 'Dashboard', to: '/dashboard' },
-    { icon: UsersRound, label: 'Students', to: '/students' },
-    { icon: Building2, label: 'Branches', to: '/branches' },
+    { icon: LayoutDashboard, label: t('nav.dashboard'), to: '/dashboard' },
+    { icon: UsersRound, label: t('nav.students'), to: '/students' },
+    { icon: Building2, label: t('nav.branches'), to: '/branches' },
     ...(user?.role === 'OWNER' || user?.role === 'ADMIN'
-      ? [{ icon: ShieldCheck, label: 'Users & access', to: '/users' }]
+      ? [{ icon: ShieldCheck, label: t('nav.users'), to: '/users' }]
       : []),
   ];
   return (
     <aside className="app-drag-region flex min-h-0 flex-col bg-sidebar px-4 pb-5 pt-9 text-white">
       <BrandMark className="px-3" />
-      <nav aria-label="Main navigation" className="app-no-drag mt-12 space-y-1">
+      <nav aria-label={t('nav.workspace')} className="app-no-drag mt-12 space-y-1">
         <p className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-600">
-          Workspace
+          {t('nav.workspace')}
         </p>
         {navigation.map(({ icon: Icon, label, to }) => (
           <NavLink
@@ -56,10 +58,8 @@ export function Sidebar() {
           <span className="flex size-8 items-center justify-center rounded-lg bg-accent/15 text-accent">
             <ShieldCheck className="size-4" />
           </span>
-          <p className="mt-4 text-sm font-semibold">Local and private</p>
-          <p className="mt-1 text-xs leading-5 text-neutral-500">
-            Data and access controls stay on this device.
-          </p>
+          <p className="mt-4 text-sm font-semibold">{t('privacy.title')}</p>
+          <p className="mt-1 text-xs leading-5 text-neutral-500">{t('privacy.description')}</p>
         </div>
         <NavLink
           className={({ isActive }) =>
@@ -71,7 +71,20 @@ export function Sidebar() {
           to="/settings"
         >
           <Settings className="size-[18px]" />
-          <span>Settings</span>
+          <span>{t('nav.settings')}</span>
+          <ChevronRight className="ml-auto size-4" />
+        </NavLink>
+        <NavLink
+          className={({ isActive }) =>
+            cn(
+              'app-no-drag mt-1 flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium text-neutral-400 transition hover:bg-white/[0.05] hover:text-white',
+              isActive && 'bg-white/[0.08] text-white',
+            )
+          }
+          to="/about"
+        >
+          <BadgeInfo className="size-[18px]" />
+          <span>{t('nav.about')}</span>
           <ChevronRight className="ml-auto size-4" />
         </NavLink>
       </div>

@@ -52,9 +52,13 @@ export async function initializeDatabase(database: DatabaseClient): Promise<void
   }
 
   await database.appSetting.upsert({
-    create: { key: 'general.workspaceName', value: 'ARAVA Workspace' },
+    create: { key: 'general.workspaceName', value: 'Рабочее пространство ARAVA' },
     update: {},
     where: { key: 'general.workspaceName' },
+  });
+  await database.appSetting.updateMany({
+    data: { value: 'Рабочее пространство ARAVA' },
+    where: { key: 'general.workspaceName', value: 'ARAVA Workspace' },
   });
 
   if ((await database.user.count()) === 0) {
@@ -65,24 +69,35 @@ export async function initializeDatabase(database: DatabaseClient): Promise<void
     await database.user.create({
       data: {
         email,
-        fullName: 'ARAVA Owner',
+        fullName: 'Владелец ARAVA',
         mustChangePassword: true,
         passwordHash: await hashPassword(password),
         role: 'OWNER',
       },
     });
   }
+  await database.user.updateMany({
+    data: { fullName: 'Владелец ARAVA' },
+    where: { email: INITIAL_OWNER_EMAIL, fullName: 'ARAVA Owner' },
+  });
 
   await database.session.deleteMany({ where: { expiresAt: { lte: new Date() } } });
 
   if ((await database.activityEvent.count()) === 0) {
     await database.activityEvent.create({
       data: {
-        detail: 'Your secure local workspace is ready for branches, students, and families.',
-        title: 'ARAVA CRM initialized',
+        detail: 'Локальное рабочее пространство готово для филиалов, учеников и их семей.',
+        title: 'ARAVA CRM готова к работе',
       },
     });
   }
+  await database.activityEvent.updateMany({
+    data: {
+      detail: 'Локальное рабочее пространство готово для филиалов, учеников и их семей.',
+      title: 'ARAVA CRM готова к работе',
+    },
+    where: { title: 'ARAVA CRM initialized' },
+  });
 }
 
 export async function closeDatabase(database: DatabaseClient): Promise<void> {

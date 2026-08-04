@@ -1,17 +1,21 @@
 import {
   STUDENT_STATUSES,
+  formatDate,
+  t,
   type StudentInput,
   type StudentListQuery,
   type StudentStatus,
 } from '@arava/shared';
 import {
   Badge,
+  Avatar,
   Button,
   Card,
   EmptyState,
   ErrorState,
   Input,
   LoadingState,
+  PageHeader,
   Select,
   Table,
   TableBody,
@@ -40,11 +44,11 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { StudentDialog } from './student-dialog';
 
 const statusLabels: Record<StudentStatus, string> = {
-  ACTIVE: 'Active',
-  ARCHIVED: 'Archived',
-  FROZEN: 'Frozen',
-  LEFT: 'Left',
-  TRIAL: 'Trial',
+  ACTIVE: t('status.ACTIVE'),
+  ARCHIVED: t('status.ARCHIVED'),
+  FROZEN: t('status.FROZEN'),
+  LEFT: t('status.LEFT'),
+  TRIAL: t('status.TRIAL'),
 };
 const statusStyles: Record<StudentStatus, string> = {
   ACTIVE: '',
@@ -100,7 +104,7 @@ export function StudentsPage() {
       await create.mutateAsync(input);
       setDialogOpen(false);
     } catch (caught) {
-      setError(getErrorMessage(caught, 'Student could not be created.'));
+      setError(getErrorMessage(caught, t('student.errorCreate')));
     }
   };
   const updateFilter = (callback: () => void) => {
@@ -110,46 +114,42 @@ export function StudentsPage() {
 
   return (
     <main className="mx-auto w-full max-w-[1500px] p-9 pb-14">
-      <div className="mb-8 flex items-end justify-between">
-        <div>
-          <h2 className="text-4xl font-semibold tracking-[-0.045em]">
-            Every student, clearly known.
-          </h2>
-          <p className="mt-2.5 text-base text-muted-foreground">
-            Search, filter, and manage the studio community across branches.
-          </p>
-        </div>
-        {canManage ? (
-          <Button
-            disabled={(branches.data?.length ?? 0) === 0}
-            onClick={() => {
-              setError(undefined);
-              setDialogOpen(true);
-            }}
-          >
-            <Plus className="size-4" />
-            Add student
-          </Button>
-        ) : null}
-      </div>
+      <PageHeader
+        action={
+          canManage ? (
+            <Button
+              disabled={(branches.data?.length ?? 0) === 0}
+              onClick={() => {
+                setError(undefined);
+                setDialogOpen(true);
+              }}
+            >
+              <Plus className="size-4" />
+              {t('student.action.add')}
+            </Button>
+          ) : undefined
+        }
+        description={t('student.pageDescription')}
+        title={t('student.pageTitle')}
+      />
       <Card className="overflow-hidden">
         <div className="grid grid-cols-[minmax(260px,1fr)_220px_180px_180px_44px] gap-3 border-b border-border p-4">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3.5 top-3.5 size-4 text-muted-foreground" />
             <Input
-              aria-label="Search students"
+              aria-label={t('student.searchAria')}
               className="pl-10"
               onChange={(event) => updateFilter(() => setSearch(event.target.value))}
-              placeholder="Search name or phone"
+              placeholder={t('student.searchPlaceholder')}
               value={search}
             />
           </div>
           <Select
-            aria-label="Filter by branch"
+            aria-label={t('student.filter.branch')}
             onChange={(event) => updateFilter(() => setBranchId(event.target.value))}
             value={branchId}
           >
-            <option value="">All branches</option>
+            <option value="">{t('student.filter.allBranches')}</option>
             {branches.data?.map((branch) => (
               <option key={branch.id} value={branch.id}>
                 {branch.name}
@@ -157,13 +157,13 @@ export function StudentsPage() {
             ))}
           </Select>
           <Select
-            aria-label="Filter by status"
+            aria-label={t('student.filter.status')}
             onChange={(event) =>
               updateFilter(() => setStatus(event.target.value as StudentStatus | ''))
             }
             value={status}
           >
-            <option value="">Current statuses</option>
+            <option value="">{t('student.filter.allStatuses')}</option>
             {STUDENT_STATUSES.map((value) => (
               <option key={value} value={value}>
                 {statusLabels[value]}
@@ -171,20 +171,20 @@ export function StudentsPage() {
             ))}
           </Select>
           <Select
-            aria-label="Sort students"
+            aria-label={t('student.sort')}
             onChange={(event) => {
               setSortBy(event.target.value as StudentListQuery['sortBy']);
               setPage(1);
             }}
             value={sortBy}
           >
-            <option value="name">Name</option>
-            <option value="createdAt">Date added</option>
-            <option value="birthDate">Birth date</option>
-            <option value="status">Status</option>
+            <option value="name">{t('student.sort.name')}</option>
+            <option value="createdAt">{t('student.sort.createdAt')}</option>
+            <option value="birthDate">{t('student.sort.birthDate')}</option>
+            <option value="status">{t('student.sort.status')}</option>
           </Select>
           <Button
-            aria-label="Reverse sort direction"
+            aria-label={t('student.sort.direction')}
             onClick={() => setSortDirection((value) => (value === 'asc' ? 'desc' : 'asc'))}
             size="icon"
             variant="outline"
@@ -192,27 +192,29 @@ export function StudentsPage() {
             <ArrowDownUp className="size-4" />
           </Button>
         </div>
-        {students.isLoading ? <LoadingState label="Loading students…" /> : null}
+        {students.isLoading ? <LoadingState label={t('student.loading')} /> : null}
         {students.isError ? (
           <ErrorState
-            message="Students could not be loaded."
+            message={t('student.errorLoad')}
             onRetry={() => void students.refetch()}
+            retryLabel={t('common.retry')}
+            title={t('common.errorTitle')}
           />
         ) : null}
         {students.data?.items.length === 0 ? (
           <EmptyState
             action={
               canManage && !search && !status ? (
-                <Button onClick={() => setDialogOpen(true)}>Add first student</Button>
+                <Button onClick={() => setDialogOpen(true)}>{t('student.action.addFirst')}</Button>
               ) : undefined
             }
             description={
               search || status
-                ? 'Try adjusting the search or filters.'
-                : 'Add your first student to begin building the studio directory.'
+                ? t('student.emptyFilteredDescription')
+                : t('student.emptyDescription')
             }
             icon={UsersRound}
-            title={search || status ? 'No matching students' : 'No students yet'}
+            title={search || status ? t('student.emptyFilteredTitle') : t('student.emptyTitle')}
           />
         ) : null}
         {students.data && students.data.items.length > 0 ? (
@@ -220,27 +222,34 @@ export function StudentsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Student</TableHead>
-                  <TableHead>Branch</TableHead>
-                  <TableHead>Phone</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Added</TableHead>
-                  {canManage ? <TableHead className="text-right">Action</TableHead> : null}
+                  <TableHead>{t('student.pageTitle')}</TableHead>
+                  <TableHead>{t('student.branch')}</TableHead>
+                  <TableHead>{t('student.phone')}</TableHead>
+                  <TableHead>{t('common.status')}</TableHead>
+                  <TableHead>{t('student.added')}</TableHead>
+                  {canManage ? (
+                    <TableHead className="text-right">{t('common.action')}</TableHead>
+                  ) : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {students.data.items.map((student) => (
                   <TableRow key={student.id}>
-                    <TableCell>
-                      <Link
-                        className="font-semibold transition hover:text-accent-foreground dark:hover:text-accent"
-                        to={`/students/${student.id}`}
-                      >
-                        {student.lastName} {student.firstName} {student.middleName ?? ''}
-                      </Link>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {student.email ?? 'No email'}
-                      </p>
+                    <TableCell className="py-4">
+                      <div className="flex items-center gap-3">
+                        <Avatar name={`${student.lastName} ${student.firstName}`} />
+                        <div className="min-w-0">
+                          <Link
+                            className="font-semibold transition hover:text-accent-foreground dark:hover:text-accent"
+                            to={`/students/${student.id}`}
+                          >
+                            {student.lastName} {student.firstName} {student.middleName ?? ''}
+                          </Link>
+                          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                            {student.email ?? t('common.notProvided')}
+                          </p>
+                        </div>
+                      </div>
                     </TableCell>
                     <TableCell>{student.branchName}</TableCell>
                     <TableCell className="text-muted-foreground">{student.phone ?? '—'}</TableCell>
@@ -250,16 +259,18 @@ export function StudentsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {new Intl.DateTimeFormat('en', {
+                      {formatDate(student.createdAt, {
                         day: 'numeric',
                         month: 'short',
                         year: 'numeric',
-                      }).format(new Date(student.createdAt))}
+                      })}
                     </TableCell>
                     {canManage ? (
                       <TableCell className="text-right">
                         <Button
-                          aria-label={`Archive ${student.firstName} ${student.lastName}`}
+                          aria-label={t('student.action.archiveLabel', {
+                            name: `${student.firstName} ${student.lastName}`,
+                          })}
                           disabled={archive.isPending || student.status === 'ARCHIVED'}
                           onClick={() => void archive.mutateAsync(student.id)}
                           size="icon"
@@ -275,8 +286,11 @@ export function StudentsPage() {
             </Table>
             <div className="flex items-center justify-between border-t border-border px-4 py-3">
               <p className="text-sm text-muted-foreground">
-                {students.data.total} students · Page {students.data.page} of{' '}
-                {students.data.totalPages}
+                {t('student.total', { count: students.data.total })} ·{' '}
+                {t('common.page', {
+                  page: students.data.page,
+                  pages: students.data.totalPages,
+                })}
               </p>
               <div className="flex gap-2">
                 <Button
@@ -286,7 +300,7 @@ export function StudentsPage() {
                   variant="outline"
                 >
                   <ChevronLeft className="size-4" />
-                  Previous
+                  {t('common.previous')}
                 </Button>
                 <Button
                   disabled={page >= students.data.totalPages}
@@ -294,7 +308,7 @@ export function StudentsPage() {
                   size="small"
                   variant="outline"
                 >
-                  Next
+                  {t('common.next')}
                   <ChevronRight className="size-4" />
                 </Button>
               </div>

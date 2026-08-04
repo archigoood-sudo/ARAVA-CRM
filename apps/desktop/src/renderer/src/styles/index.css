@@ -6,9 +6,9 @@
   :root {
     --background: 247 248 250;
     --border: 226 228 232;
-    --foreground: 24 24 27;
+    --foreground: 28 28 30;
     --muted: 239 240 243;
-    --muted-foreground: 105 108 116;
+    --muted-foreground: 110 110 115;
     --surface: 255 255 255;
   }
 
@@ -32,6 +32,17 @@
 
   body {
     @apply m-0 min-h-screen overflow-hidden bg-background font-sans text-foreground antialiased;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 
   button,

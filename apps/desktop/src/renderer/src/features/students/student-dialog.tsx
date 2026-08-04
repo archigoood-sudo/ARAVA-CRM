@@ -3,6 +3,7 @@ import {
   GENDERS,
   STUDENT_STATUSES,
   studentInputSchema,
+  t,
   type BranchSummary,
   type Gender,
   type StudentInput,
@@ -10,17 +11,21 @@ import {
   type StudentStatus,
 } from '@arava/shared';
 import { Button, Dialog, Input, Label, Select, Textarea } from '@arava/ui';
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 
 const statusLabels: Record<StudentStatus, string> = {
-  ACTIVE: 'Active',
-  ARCHIVED: 'Archived',
-  FROZEN: 'Frozen',
-  LEFT: 'Left',
-  TRIAL: 'Trial',
+  ACTIVE: t('status.ACTIVE'),
+  ARCHIVED: t('status.ARCHIVED'),
+  FROZEN: t('status.FROZEN'),
+  LEFT: t('status.LEFT'),
+  TRIAL: t('status.TRIAL'),
 };
-const genderLabels: Record<Gender, string> = { FEMALE: 'Female', MALE: 'Male', OTHER: 'Other' };
+const genderLabels: Record<Gender, string> = {
+  FEMALE: t('gender.FEMALE'),
+  MALE: t('gender.MALE'),
+  OTHER: t('gender.OTHER'),
+};
 
 export function StudentDialog({
   branches,
@@ -48,7 +53,7 @@ export function StudentDialog({
   });
   const wasOpen = useRef(false);
   const defaultBranchId = branches[0]?.id ?? '';
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (open && !wasOpen.current) {
       reset(
         student
@@ -72,38 +77,39 @@ export function StudentDialog({
 
   return (
     <Dialog
-      description="Core student details are stored locally in this workspace."
+      closeLabel={t('common.closeDialog')}
+      description={t('student.dialogDescription')}
       onClose={onClose}
       open={open}
-      title={student ? 'Edit student' : 'Create student'}
+      title={student ? t('student.editTitle') : t('student.createTitle')}
       wide
     >
       <form className="space-y-5" onSubmit={handleSubmit(onSubmit)}>
         <div className="grid grid-cols-3 gap-4">
-          <Field error={errors.lastName?.message} label="Last name">
-            <Input aria-label="Last name" {...register('lastName')} />
+          <Field error={errors.lastName?.message} label={t('student.lastName')}>
+            <Input aria-label={t('student.lastName')} {...register('lastName')} />
           </Field>
-          <Field error={errors.firstName?.message} label="First name">
-            <Input aria-label="First name" {...register('firstName')} />
+          <Field error={errors.firstName?.message} label={t('student.firstName')}>
+            <Input aria-label={t('student.firstName')} {...register('firstName')} />
           </Field>
-          <Field error={errors.middleName?.message} label="Middle name">
-            <Input aria-label="Middle name" {...register('middleName')} />
+          <Field error={errors.middleName?.message} label={t('student.middleName')}>
+            <Input aria-label={t('student.middleName')} {...register('middleName')} />
           </Field>
         </div>
         <div className="grid grid-cols-3 gap-4">
-          <Field error={errors.birthDate?.message} label="Birth date">
+          <Field error={errors.birthDate?.message} label={t('student.birthDate')}>
             <Input
-              aria-label="Birth date"
+              aria-label={t('student.birthDate')}
               type="date"
               {...register('birthDate', { setValueAs: (value: string) => value || undefined })}
             />
           </Field>
-          <Field error={errors.gender?.message} label="Gender">
+          <Field error={errors.gender?.message} label={t('student.gender')}>
             <Select
-              aria-label="Gender"
+              aria-label={t('student.gender')}
               {...register('gender', { setValueAs: (value: string) => value || undefined })}
             >
-              <option value="">Not specified</option>
+              <option value="">{t('common.notSpecified')}</option>
               {GENDERS.map((gender) => (
                 <option key={gender} value={gender}>
                   {genderLabels[gender]}
@@ -111,8 +117,8 @@ export function StudentDialog({
               ))}
             </Select>
           </Field>
-          <Field error={errors.status?.message} label="Status">
-            <Select aria-label="Status" {...register('status')}>
+          <Field error={errors.status?.message} label={t('common.status')}>
+            <Select aria-label={t('common.status')} {...register('status')}>
               {STUDENT_STATUSES.filter(
                 (status) => status !== 'ARCHIVED' || student?.status === 'ARCHIVED',
               ).map((status) => (
@@ -124,8 +130,8 @@ export function StudentDialog({
           </Field>
         </div>
         <div className="grid grid-cols-3 gap-4">
-          <Field error={errors.branchId?.message} label="Branch">
-            <Select aria-label="Branch" {...register('branchId')}>
+          <Field error={errors.branchId?.message} label={t('student.branch')}>
+            <Select aria-label={t('student.branch')} {...register('branchId')}>
               {branches.map((branch) => (
                 <option key={branch.id} value={branch.id}>
                   {branch.name}
@@ -133,27 +139,31 @@ export function StudentDialog({
               ))}
             </Select>
           </Field>
-          <Field error={errors.phone?.message} label="Phone">
+          <Field error={errors.phone?.message} label={t('student.phone')}>
             <Input
-              aria-label="Student phone"
+              aria-label={t('student.phone')}
               placeholder="+7 999 123-45-67"
               {...register('phone')}
             />
           </Field>
-          <Field error={errors.email?.message} label="Email">
-            <Input aria-label="Student email" type="email" {...register('email')} />
+          <Field error={errors.email?.message} label={t('student.email')}>
+            <Input aria-label={t('student.email')} type="email" {...register('email')} />
           </Field>
         </div>
-        <Field error={errors.notes?.message} label="Notes">
-          <Textarea aria-label="Student notes" {...register('notes')} />
+        <Field error={errors.notes?.message} label={t('student.notes')}>
+          <Textarea aria-label={t('student.notes')} {...register('notes')} />
         </Field>
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
         <div className="flex justify-end gap-3">
           <Button onClick={onClose} variant="outline">
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button disabled={isSubmitting || branches.length === 0} type="submit">
-            {isSubmitting ? 'Saving…' : student ? 'Save student' : 'Create student'}
+            {isSubmitting
+              ? t('common.saving')
+              : student
+                ? t('student.save')
+                : t('student.action.add')}
           </Button>
         </div>
       </form>

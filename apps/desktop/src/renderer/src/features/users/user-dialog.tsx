@@ -1,5 +1,6 @@
 import {
   USER_ROLES,
+  t,
   userCreateSchema,
   userUpdateSchema,
   type BranchSummary,
@@ -9,14 +10,14 @@ import {
   type UserUpdateInput,
 } from '@arava/shared';
 import { Button, Checkbox, Dialog, Input, Label, Select } from '@arava/ui';
-import { useEffect } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 
 const roleLabels: Record<UserRole, string> = {
-  ADMIN: 'Administrator',
-  BRANCH_MANAGER: 'Branch manager',
-  COACH: 'Coach',
-  OWNER: 'Owner',
+  ADMIN: t('role.ADMIN'),
+  BRANCH_MANAGER: t('role.BRANCH_MANAGER'),
+  COACH: t('role.COACH'),
+  OWNER: t('role.OWNER'),
 };
 
 interface UserFormValues {
@@ -65,29 +66,33 @@ export function UserDialog({
       role: 'COACH',
     },
   });
+  const wasOpen = useRef(false);
   const selectedRole = watch('role');
   const scopedRole = selectedRole === 'BRANCH_MANAGER' || selectedRole === 'COACH';
 
-  useEffect(() => {
-    reset(
-      user
-        ? {
-            branchIds: user.branchIds,
-            email: user.email,
-            fullName: user.fullName,
-            isActive: user.isActive,
-            password: '',
-            role: user.role,
-          }
-        : {
-            branchIds: [],
-            email: '',
-            fullName: '',
-            isActive: true,
-            password: '',
-            role: 'COACH',
-          },
-    );
+  useLayoutEffect(() => {
+    if (open && !wasOpen.current) {
+      reset(
+        user
+          ? {
+              branchIds: user.branchIds,
+              email: user.email,
+              fullName: user.fullName,
+              isActive: user.isActive,
+              password: '',
+              role: user.role,
+            }
+          : {
+              branchIds: [],
+              email: '',
+              fullName: '',
+              isActive: true,
+              password: '',
+              role: 'COACH',
+            },
+      );
+    }
+    wasOpen.current = open;
   }, [open, reset, user]);
 
   const submit = handleSubmit(async (values) => {
@@ -100,7 +105,7 @@ export function UserDialog({
         role: values.role,
       });
       if (!result.success) {
-        setError('root', { message: result.error.issues[0]?.message ?? 'Check the form values.' });
+        setError('root', { message: result.error.issues[0]?.message ?? t('user.errorForm') });
         return;
       }
       await onUpdate(result.data);
@@ -113,7 +118,7 @@ export function UserDialog({
         role: values.role,
       });
       if (!result.success) {
-        setError('root', { message: result.error.issues[0]?.message ?? 'Check the form values.' });
+        setError('root', { message: result.error.issues[0]?.message ?? t('user.errorForm') });
         return;
       }
       await onCreate(result.data);
@@ -123,22 +128,23 @@ export function UserDialog({
   const roleOptions = USER_ROLES.filter((role) => actorRole === 'OWNER' || role !== 'OWNER');
   return (
     <Dialog
-      description="Assign the minimum access needed for this team member."
+      closeLabel={t('common.closeDialog')}
+      description={t('user.dialogDescription')}
       onClose={onClose}
       open={open}
-      title={user ? 'Edit user access' : 'Create local user'}
+      title={user ? t('user.editTitle') : t('user.createTitle')}
     >
       <form className="space-y-4" onSubmit={submit}>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="user-name">Full name</Label>
+            <Label htmlFor="user-name">{t('user.fullName')}</Label>
             <Input id="user-name" {...register('fullName', { required: true })} />
             {errors.fullName ? (
-              <p className="text-sm text-red-600">Full name is required.</p>
+              <p className="text-sm text-red-600">{t('user.fullNameRequired')}</p>
             ) : null}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="user-role">Role</Label>
+            <Label htmlFor="user-role">{t('user.role')}</Label>
             <Select id="user-role" {...register('role')}>
               {roleOptions.map((role) => (
                 <option key={role} value={role}>
@@ -149,7 +155,7 @@ export function UserDialog({
           </div>
         </div>
         <div className="space-y-2">
-          <Label htmlFor="user-email">Email</Label>
+          <Label htmlFor="user-email">{t('user.email')}</Label>
           <Input
             disabled={Boolean(user)}
             id="user-email"
@@ -159,20 +165,18 @@ export function UserDialog({
         </div>
         {!user ? (
           <div className="space-y-2">
-            <Label htmlFor="user-password">Temporary password</Label>
+            <Label htmlFor="user-password">{t('user.temporaryPassword')}</Label>
             <Input
               id="user-password"
               type="password"
               {...register('password', { required: true })}
             />
-            <p className="text-xs text-muted-foreground">
-              Use 12+ characters with uppercase, lowercase, number, and symbol.
-            </p>
+            <p className="text-xs text-muted-foreground">{t('user.temporaryPasswordHint')}</p>
           </div>
         ) : null}
         {scopedRole ? (
           <fieldset className="space-y-2 rounded-2xl border border-border p-4">
-            <legend className="px-1 text-sm font-semibold">Assigned branches</legend>
+            <legend className="px-1 text-sm font-semibold">{t('user.assignedBranches')}</legend>
             <Controller
               control={control}
               name="branchIds"
@@ -203,17 +207,17 @@ export function UserDialog({
         ) : null}
         {user ? (
           <label className="flex items-center gap-2 text-sm font-medium">
-            <Checkbox {...register('isActive')} /> Account enabled
+            <Checkbox {...register('isActive')} /> {t('user.accountEnabled')}
           </label>
         ) : null}
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
         {errors.root ? <p className="text-sm text-red-600">{errors.root.message}</p> : null}
         <div className="flex justify-end gap-3 pt-2">
           <Button onClick={onClose} variant="outline">
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button disabled={isSubmitting} type="submit">
-            {isSubmitting ? 'Saving…' : user ? 'Save access' : 'Create user'}
+            {isSubmitting ? t('common.saving') : user ? t('user.saveAccess') : t('user.action.add')}
           </Button>
         </div>
       </form>

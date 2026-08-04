@@ -2,14 +2,16 @@ import { Bell, ChevronsUpDown, LogOut, PanelLeftClose, Search } from 'lucide-rea
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { Sidebar } from '../components/sidebar';
+import { t } from '@arava/shared';
 import { useAuthStore } from '../stores/auth-store';
 
 const pageTitles: Record<string, { eyebrow: string; title: string }> = {
-  '/dashboard': { eyebrow: 'Overview', title: 'Dashboard' },
-  '/branches': { eyebrow: 'Organization', title: 'Branches' },
-  '/students': { eyebrow: 'Community', title: 'Students' },
-  '/users': { eyebrow: 'Security', title: 'Users & access' },
-  '/settings': { eyebrow: 'Workspace', title: 'Settings' },
+  '/about': { eyebrow: t('page.about.eyebrow'), title: t('nav.about') },
+  '/dashboard': { eyebrow: t('page.dashboard.eyebrow'), title: t('nav.dashboard') },
+  '/branches': { eyebrow: t('page.branches.eyebrow'), title: t('nav.branches') },
+  '/students': { eyebrow: t('page.students.eyebrow'), title: t('nav.students') },
+  '/users': { eyebrow: t('page.users.eyebrow'), title: t('nav.users') },
+  '/settings': { eyebrow: t('page.settings.eyebrow'), title: t('nav.settings') },
 };
 
 export function AppLayout() {
@@ -18,7 +20,7 @@ export function AppLayout() {
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
   const page = location.pathname.startsWith('/students/')
-    ? { eyebrow: 'Student record', title: 'Profile' }
+    ? { eyebrow: t('page.profile.eyebrow'), title: t('page.profile.title') }
     : (pageTitles[location.pathname] ?? pageTitles['/dashboard']);
 
   const handleLogout = async () => {
@@ -33,7 +35,7 @@ export function AppLayout() {
         <header className="app-drag-region flex h-[88px] shrink-0 items-center justify-between border-b border-border bg-background/90 px-9 backdrop-blur-xl">
           <div className="flex items-center gap-4">
             <button
-              aria-label="Sidebar is fixed in this layout"
+              aria-label={t('layout.fixedSidebar')}
               className="app-no-drag flex size-9 cursor-default items-center justify-center rounded-lg text-muted-foreground"
               type="button"
             >
@@ -50,23 +52,23 @@ export function AppLayout() {
           <div className="app-no-drag flex items-center gap-2.5">
             <div className="mr-2 flex h-10 w-60 items-center gap-2.5 rounded-xl border border-border bg-surface px-3 text-sm text-muted-foreground">
               <Search className="size-4" />
-              <span>Search workspace</span>
+              <span>{t('layout.search')}</span>
               <kbd className="ml-auto rounded-md border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium">
                 ⌘K
               </kbd>
             </div>
             <button
-              aria-label="Notifications"
+              aria-label={t('layout.notifications')}
               className="flex size-10 items-center justify-center rounded-xl border border-border bg-surface text-muted-foreground transition hover:text-foreground"
               type="button"
             >
               <Bell className="size-[18px]" />
             </button>
             <button
-              aria-label="Sign out"
+              aria-label={t('layout.signOut')}
               className="group ml-1 flex items-center gap-2.5 rounded-xl p-1.5 pr-2 transition hover:bg-muted"
               onClick={handleLogout}
-              title="Sign out"
+              title={t('layout.signOut')}
               type="button"
             >
               <span className="flex size-8 items-center justify-center rounded-lg bg-neutral-900 text-xs font-bold text-white dark:bg-accent dark:text-neutral-950">

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { t } from '@arava/shared';
 
 import { hashPassword, normalizePhone, verifyPassword } from './security';
 
@@ -15,6 +16,6 @@ describe('local credential security', () => {
 
   it('normalizes phone numbers to a stable international representation', () => {
     expect(normalizePhone('+7 (999) 123-45-67')).toBe('+79991234567');
-    expect(() => normalizePhone('123')).toThrow('valid phone');
+    expect(() => normalizePhone('123')).toThrow(t('domain.validation.phone'));
   });
 });

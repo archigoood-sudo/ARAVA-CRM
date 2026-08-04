@@ -1,4 +1,4 @@
-import type { AuthenticatedUser, UserRole } from '@arava/shared';
+import { t, type AuthenticatedUser, type UserRole } from '@arava/shared';
 import { describe, expect, it } from 'vitest';
 
 import { assertPermission, canAccessBranch, type DomainAction } from './permissions';
@@ -35,7 +35,10 @@ describe('permission matrix', () => {
       for (const action of actions) {
         if (expected[role].includes(action))
           expect(() => assertPermission(user(role), action)).not.toThrow();
-        else expect(() => assertPermission(user(role), action)).toThrow('permission');
+        else
+          expect(() => assertPermission(user(role), action)).toThrow(
+            t('domain.authorization.permissionDenied'),
+          );
       }
     });
   }

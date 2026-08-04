@@ -1,6 +1,6 @@
 appId: com.arava.crm
 productName: ARAVA CRM
-copyright: Copyright © 2026 ARAVA
+copyright: © 2026 ARAVA. Все права защищены.
 asar: true
 npmRebuild: false
 asarUnpack:
@@ -16,6 +16,9 @@ files:
     to: node_modules/.prisma/client
     filter:
       - '**/*'
+extraResources:
+  - from: build/icon.png
+    to: icon.png
 win:
   executableName: ARAVA CRM
   icon: build/icon.ico
@@ -33,3 +36,6 @@ nsis:
   createDesktopShortcut: always
   createStartMenuShortcut: true
   shortcutName: ARAVA CRM
+  displayLanguageSelector: false
+  installerLanguages:
+    - ru_RU

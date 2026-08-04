@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { Button } from './button';
 
-export function LoadingState({ label = 'Loading…' }: { label?: string }) {
+export function LoadingState({ label }: { label: string }) {
   return (
     <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
       <span className="size-7 animate-spin rounded-full border-2 border-border border-t-accent" />
@@ -12,14 +12,24 @@ export function LoadingState({ label = 'Loading…' }: { label?: string }) {
   );
 }
 
-export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function ErrorState({
+  message,
+  onRetry,
+  retryLabel,
+  title,
+}: {
+  message: string;
+  onRetry?: () => void;
+  retryLabel: string;
+  title: string;
+}) {
   return (
     <div className="flex min-h-56 flex-col items-center justify-center gap-4 px-6 text-center">
       <div>
-        <p className="font-semibold">Something went wrong</p>
+        <p className="font-semibold">{title}</p>
         <p className="mt-1 text-sm text-muted-foreground">{message}</p>
       </div>
-      {onRetry ? <Button onClick={onRetry}>Try again</Button> : null}
+      {onRetry ? <Button onClick={onRetry}>{retryLabel}</Button> : null}
     </div>
   );
 }

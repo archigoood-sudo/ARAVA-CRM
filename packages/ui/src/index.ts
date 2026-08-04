@@ -1,12 +1,17 @@
 export { Badge, type BadgeProps } from './badge';
+export { Avatar, type AvatarProps } from './avatar';
 export { Button, type ButtonProps } from './button';
 export { Card, CardContent, CardDescription, CardHeader, CardTitle } from './card';
 export { Checkbox, type CheckboxProps } from './checkbox';
 export { EmptyState, ErrorState, LoadingState } from './data-state';
 export { Dialog, type DialogProps } from './dialog';
+export { aravaDesignTokens } from './design-tokens';
 export { Input, type InputProps } from './input';
 export { Label, type LabelProps } from './label';
+export { PageHeader } from './page-header';
 export { Select, type SelectProps } from './select';
+export { SplashScreen } from './splash-screen';
+export { StatCard } from './stat-card';
 export { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './table';
 export { Textarea, type TextareaProps } from './textarea';
 export { cn } from './utils';

@@ -4,6 +4,7 @@ import { useEffect, type PropsWithChildren, type ReactNode } from 'react';
 import { cn } from './utils';
 
 export interface DialogProps extends PropsWithChildren {
+  closeLabel: string;
   description?: string;
   footer?: ReactNode;
   onClose: () => void;
@@ -12,7 +13,16 @@ export interface DialogProps extends PropsWithChildren {
   wide?: boolean;
 }
 
-export function Dialog({ children, description, footer, onClose, open, title, wide }: DialogProps) {
+export function Dialog({
+  children,
+  closeLabel,
+  description,
+  footer,
+  onClose,
+  open,
+  title,
+  wide,
+}: DialogProps) {
   useEffect(() => {
     if (!open) return undefined;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -26,18 +36,18 @@ export function Dialog({ children, description, footer, onClose, open, title, wi
   return (
     <div
       aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/45 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-neutral-950/45 p-6 backdrop-blur-sm"
       role="dialog"
     >
       <button
-        aria-label="Close dialog"
+        aria-label={closeLabel}
         className="absolute inset-0"
         onClick={onClose}
         type="button"
       />
       <section
         className={cn(
-          'relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-3xl border border-border bg-surface shadow-2xl',
+          'relative z-10 max-h-[90vh] w-full animate-soft-rise overflow-y-auto rounded-3xl border border-border bg-surface shadow-elevated',
           wide ? 'max-w-3xl' : 'max-w-xl',
         )}
       >
@@ -49,7 +59,7 @@ export function Dialog({ children, description, footer, onClose, open, title, wi
             ) : null}
           </div>
           <button
-            aria-label="Close"
+            aria-label={closeLabel}
             className="flex size-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted hover:text-foreground"
             onClick={onClose}
             type="button"

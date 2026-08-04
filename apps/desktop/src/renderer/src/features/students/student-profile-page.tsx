@@ -1,5 +1,14 @@
-import type { StudentContactInput, StudentContactSummary, StudentInput } from '@arava/shared';
 import {
+  formatDate,
+  t,
+  type Gender,
+  type StudentContactInput,
+  type StudentContactSummary,
+  type StudentInput,
+  type StudentStatus,
+} from '@arava/shared';
+import {
+  Avatar,
   Badge,
   Button,
   Card,
@@ -9,15 +18,20 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Crown, Mail, Pencil, Phone, Plus, Trash2, UserRound } from 'lucide-react';
+import {
+  ArrowLeft,
+  Crown,
+  Mail,
+  MapPin,
+  MessageCircle,
+  Pencil,
+  Phone,
+  Plus,
+  Trash2,
+  UserRound,
+} from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
@@ -27,6 +41,20 @@ import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { ContactDialog } from './contact-dialog';
 import { StudentDialog } from './student-dialog';
+
+const statusStyles: Record<StudentStatus, string> = {
+  ACTIVE: '',
+  ARCHIVED: 'bg-muted text-muted-foreground',
+  FROZEN: 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300',
+  LEFT: 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300',
+  TRIAL: 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300',
+};
+
+const genderLabels: Record<Gender, string> = {
+  FEMALE: t('gender.FEMALE'),
+  MALE: t('gender.MALE'),
+  OTHER: t('gender.OTHER'),
+};
 
 export function StudentProfilePage() {
   const { studentId = '' } = useParams();
@@ -39,9 +67,9 @@ export function StudentProfilePage() {
   const [editingContact, setEditingContact] = useState<StudentContactSummary | null>(null);
   const [error, setError] = useState<string>();
   const student = useQuery({
+    enabled: Boolean(studentId),
     queryFn: () => getDesktopApi().students.get(getSessionToken(), studentId),
     queryKey: queryKeys.student(studentId),
-    enabled: Boolean(studentId),
   });
   const branches = useQuery({
     queryFn: () => getDesktopApi().branches.list(getSessionToken()),
@@ -70,7 +98,7 @@ export function StudentProfilePage() {
       await refresh();
       setStudentDialog(false);
     } catch (caught) {
-      setError(getErrorMessage(caught, 'Student could not be updated.'));
+      setError(getErrorMessage(caught, t('student.errorUpdate')));
     }
   };
   const saveContact = async (input: StudentContactInput) => {
@@ -81,7 +109,7 @@ export function StudentProfilePage() {
       await refresh();
       setContactDialog(false);
     } catch (caught) {
-      setError(getErrorMessage(caught, 'Contact could not be saved.'));
+      setError(getErrorMessage(caught, t('contact.errorSave')));
     }
   };
   const remove = async (id: string) => {
@@ -89,71 +117,90 @@ export function StudentProfilePage() {
     await refresh();
   };
 
-  if (student.isLoading) return <LoadingState label="Loading student profile…" />;
+  if (student.isLoading) return <LoadingState label={t('student.loadingProfile')} />;
   if (student.isError || !student.data)
     return (
       <ErrorState
-        message="The student profile could not be loaded."
+        message={t('student.errorProfile')}
         onRetry={() => void student.refetch()}
+        retryLabel={t('common.retry')}
+        title={t('common.errorTitle')}
       />
     );
+
   const detail = student.data;
   const fullName = `${detail.lastName} ${detail.firstName}${detail.middleName ? ` ${detail.middleName}` : ''}`;
   return (
-    <main className="mx-auto w-full max-w-[1300px] p-9 pb-14">
+    <main className="mx-auto w-full max-w-[1320px] animate-fade-in p-9 pb-14">
       <Link
         className="mb-6 inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground transition hover:text-foreground"
         to="/students"
       >
         <ArrowLeft className="size-4" />
-        Back to students
+        {t('student.back')}
       </Link>
-      <div className="mb-8 flex items-end justify-between">
-        <div className="flex items-center gap-4">
-          <span className="flex size-14 items-center justify-center rounded-2xl bg-neutral-900 text-xl font-semibold text-white dark:bg-accent dark:text-neutral-950">
-            {detail.firstName.charAt(0)}
-            {detail.lastName.charAt(0)}
-          </span>
-          <div>
-            <div className="flex items-center gap-3">
-              <h2 className="text-4xl font-semibold tracking-[-0.045em]">{fullName}</h2>
-              <Badge>{detail.status}</Badge>
+
+      <Card className="mb-5 overflow-hidden">
+        <div className="relative flex items-center gap-5 bg-sidebar px-7 py-8 text-white">
+          <span className="absolute right-0 top-0 h-full w-48 bg-[radial-gradient(circle_at_top_right,rgba(156,255,46,0.22),transparent_66%)]" />
+          <Avatar className="ring-4 ring-white/10" name={fullName} size="large" />
+          <div className="relative min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="truncate text-4xl font-semibold tracking-[-0.045em]">{fullName}</h2>
+              <Badge className={statusStyles[detail.status]}>{t(`status.${detail.status}`)}</Badge>
             </div>
-            <p className="mt-1.5 text-sm text-muted-foreground">{detail.branchName}</p>
+            <p className="mt-2 flex items-center gap-2 text-sm text-neutral-400">
+              <MapPin className="size-4 text-accent" /> {detail.branchName}
+            </p>
           </div>
+          {canManage ? (
+            <Button
+              className="relative border-white/15 bg-white/10 text-white hover:bg-white/15"
+              onClick={() => {
+                setError(undefined);
+                setStudentDialog(true);
+              }}
+              variant="outline"
+            >
+              <Pencil className="size-4" />
+              {t('student.action.edit')}
+            </Button>
+          ) : null}
         </div>
-        {canManage ? (
-          <Button
-            onClick={() => {
-              setError(undefined);
-              setStudentDialog(true);
-            }}
-            variant="outline"
-          >
-            <Pencil className="size-4" />
-            Edit student
-          </Button>
-        ) : null}
-      </div>
-      <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-5">
+      </Card>
+
+      <div className="grid grid-cols-[340px_minmax(0,1fr)] gap-5">
         <Card>
           <CardHeader>
-            <CardTitle>Profile details</CardTitle>
+            <CardTitle>{t('student.profileDetails')}</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <Detail label="Phone" value={detail.phone ?? 'Not provided'} />
-            <Detail label="Email" value={detail.email ?? 'Not provided'} />
-            <Detail label="Birth date" value={detail.birthDate ?? 'Not provided'} />
-            <Detail label="Gender" value={detail.gender ?? 'Not specified'} />
-            <Detail label="Notes" value={detail.notes ?? 'No notes'} />
+          <CardContent>
+            <dl className="space-y-0">
+              <Detail label={t('student.phone')} value={detail.phone ?? t('common.notProvided')} />
+              <Detail label={t('student.email')} value={detail.email ?? t('common.notProvided')} />
+              <Detail
+                label={t('student.birthDate')}
+                value={
+                  detail.birthDate
+                    ? formatDate(`${detail.birthDate}T00:00:00`)
+                    : t('common.notProvided')
+                }
+              />
+              <Detail
+                label={t('student.gender')}
+                value={detail.gender ? genderLabels[detail.gender] : t('common.notSpecified')}
+              />
+              <Detail label={t('student.notes')} value={detail.notes ?? t('common.noNotes')} />
+            </dl>
           </CardContent>
         </Card>
-        <Card className="overflow-hidden">
+
+        <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <div>
-              <CardTitle>Parents and contacts</CardTitle>
+              <CardTitle>{t('student.contacts')}</CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                Family and emergency contact information.
+                {t('student.contactDescription')}
               </p>
             </div>
             {canManage ? (
@@ -166,61 +213,47 @@ export function StudentProfilePage() {
                 size="small"
               >
                 <Plus className="size-4" />
-                Add contact
+                {t('contact.add')}
               </Button>
             ) : null}
           </CardHeader>
-          {detail.contacts.length === 0 ? (
-            <EmptyState
-              action={
-                canManage ? (
-                  <Button onClick={() => setContactDialog(true)}>Add first contact</Button>
-                ) : undefined
-              }
-              description="Add a parent, guardian, or emergency contact for this student."
-              icon={UserRound}
-              title="No contacts yet"
-            />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Contact</TableHead>
-                  <TableHead>Relationship</TableHead>
-                  <TableHead>Reach them</TableHead>
-                  {canManage ? <TableHead className="text-right">Actions</TableHead> : null}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+          <CardContent>
+            {detail.contacts.length === 0 ? (
+              <EmptyState
+                action={
+                  canManage ? (
+                    <Button onClick={() => setContactDialog(true)}>{t('contact.addFirst')}</Button>
+                  ) : undefined
+                }
+                description={t('contact.emptyDescription')}
+                icon={UserRound}
+                title={t('contact.emptyTitle')}
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
                 {detail.contacts.map((contact) => (
-                  <TableRow key={contact.id}>
-                    <TableCell>
-                      <p className="flex items-center gap-2 font-semibold">
-                        {contact.fullName}
-                        {contact.isPrimary ? <Crown className="size-3.5 text-amber-500" /> : null}
-                      </p>
-                      {contact.isPrimary ? (
-                        <p className="mt-1 text-xs text-muted-foreground">Primary contact</p>
-                      ) : null}
-                    </TableCell>
-                    <TableCell>{contact.relationship}</TableCell>
-                    <TableCell>
-                      <p className="flex items-center gap-1.5">
-                        <Phone className="size-3.5 text-muted-foreground" />
-                        {contact.phone}
-                      </p>
-                      {contact.email ? (
-                        <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <Mail className="size-3" />
-                          {contact.email}
+                  <article
+                    className="group rounded-2xl border border-border bg-background p-4 transition hover:-translate-y-0.5 hover:bg-surface hover:shadow-card"
+                    key={contact.id}
+                  >
+                    <div className="flex items-start gap-3">
+                      <Avatar name={contact.fullName} size="small" />
+                      <div className="min-w-0 flex-1">
+                        <p className="flex items-center gap-2 truncate text-sm font-semibold">
+                          {contact.fullName}
+                          {contact.isPrimary ? (
+                            <Crown className="size-3.5 shrink-0 text-amber-500" />
+                          ) : null}
                         </p>
-                      ) : null}
-                    </TableCell>
-                    {canManage ? (
-                      <TableCell>
-                        <div className="flex justify-end">
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {contact.relationship}
+                          {contact.isPrimary ? ` · ${t('contact.primary')}` : ''}
+                        </p>
+                      </div>
+                      {canManage ? (
+                        <div className="flex opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                           <Button
-                            aria-label={`Edit ${contact.fullName}`}
+                            aria-label={t('contact.editLabel', { name: contact.fullName })}
                             onClick={() => {
                               setEditingContact(contact);
                               setError(undefined);
@@ -232,7 +265,7 @@ export function StudentProfilePage() {
                             <Pencil className="size-4" />
                           </Button>
                           <Button
-                            aria-label={`Remove ${contact.fullName}`}
+                            aria-label={t('contact.removeLabel', { name: contact.fullName })}
                             disabled={removeContact.isPending}
                             onClick={() => void remove(contact.id)}
                             size="icon"
@@ -241,15 +274,31 @@ export function StudentProfilePage() {
                             <Trash2 className="size-4" />
                           </Button>
                         </div>
-                      </TableCell>
-                    ) : null}
-                  </TableRow>
+                      ) : null}
+                    </div>
+                    <div className="mt-4 space-y-2 border-t border-border pt-3 text-xs">
+                      <p className="flex items-center gap-2">
+                        <Phone className="size-3.5 text-muted-foreground" /> {contact.phone}
+                      </p>
+                      {contact.email ? (
+                        <p className="flex items-center gap-2 text-muted-foreground">
+                          <Mail className="size-3.5" /> {contact.email}
+                        </p>
+                      ) : null}
+                      {contact.telegram ? (
+                        <p className="flex items-center gap-2 text-muted-foreground">
+                          <MessageCircle className="size-3.5" /> {contact.telegram}
+                        </p>
+                      ) : null}
+                    </div>
+                  </article>
                 ))}
-              </TableBody>
-            </Table>
-          )}
+              </div>
+            )}
+          </CardContent>
         </Card>
       </div>
+
       <StudentDialog
         branches={branches.data ?? []}
         error={error}
@@ -271,11 +320,11 @@ export function StudentProfilePage() {
 
 function Detail({ label, value }: { label: string; value: string }) {
   return (
-    <div className="border-b border-border pb-4 last:border-0 last:pb-0">
+    <div className="border-b border-border py-4 first:pt-0 last:border-0 last:pb-0">
       <dt className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
         {label}
       </dt>
-      <dd className="mt-1.5 text-sm leading-6">{value}</dd>
+      <dd className="mt-1.5 break-words text-sm leading-6">{value}</dd>
     </div>
   );
 }
