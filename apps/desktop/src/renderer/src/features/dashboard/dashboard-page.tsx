@@ -68,8 +68,21 @@ export function DashboardPage() {
   const statMetadata = [
     { icon: UsersRound, key: 'students', label: t('dashboard.stat.students') },
     { icon: Building2, key: 'branches', label: t('dashboard.stat.activeBranches') },
-    { icon: UserRoundCheck, key: 'trialStudents', label: t('dashboard.stat.trialStudents') },
     { icon: ShieldCheck, key: 'users', label: t('dashboard.stat.activeUsers') },
+    { icon: UsersRound, key: 'activeGroups', label: t('dashboard.stat.activeGroups') },
+    {
+      icon: UsersRound,
+      key: 'groupsWithPlaces',
+      label: t('dashboard.stat.groupsWithPlaces'),
+    },
+    { icon: CalendarDays, key: 'lessonsToday', label: t('dashboard.stat.lessonsToday') },
+    { icon: UserRoundCheck, key: 'expectedToday', label: t('dashboard.stat.expectedToday') },
+    { icon: ShieldCheck, key: 'attendanceMarked', label: t('dashboard.stat.attendance') },
+    {
+      icon: UserRoundCheck,
+      key: 'attendanceUnmarked',
+      label: t('dashboard.stat.attendanceUnmarked'),
+    },
   ] as const;
 
   return (
@@ -104,7 +117,7 @@ export function DashboardPage() {
           />
         </Card>
       ) : (
-        <section aria-label={t('nav.dashboard')} className="grid grid-cols-4 gap-4">
+        <section aria-label={t('nav.dashboard')} className="grid grid-cols-3 gap-4">
           {statMetadata.map(({ icon, key, label }) => (
             <StatCard
               icon={icon}
@@ -173,6 +186,16 @@ export function DashboardPage() {
                 label={t('dashboard.action.students')}
                 onClick={() => navigate('/students')}
               />
+              <QuickAction
+                icon={UserRoundCheck}
+                label={t('dashboard.action.attendance')}
+                onClick={() => navigate('/schedule')}
+              />
+              <QuickAction
+                icon={CalendarDays}
+                label={t('nav.schedule')}
+                onClick={() => navigate('/schedule')}
+              />
               {canManageBranches ? (
                 <QuickAction
                   icon={Building2}
@@ -187,16 +210,6 @@ export function DashboardPage() {
               <CardTitle>{t('dashboard.upcoming')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Upcoming
-                description={t('dashboard.upcoming.scheduleDescription')}
-                icon={CalendarDays}
-                label={t('dashboard.upcoming.schedule')}
-              />
-              <Upcoming
-                description={t('dashboard.upcoming.attendanceDescription')}
-                icon={UserRoundCheck}
-                label={t('dashboard.upcoming.attendance')}
-              />
               <Upcoming
                 description={t('dashboard.upcoming.subscriptionDescription')}
                 icon={CreditCard}

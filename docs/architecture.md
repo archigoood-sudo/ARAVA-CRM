@@ -28,6 +28,10 @@ The renderer uses hash routing because it is reliable under Electron's `file://`
 
 Every protected IPC call carries an opaque session token. The main-process application service resolves the current local user, rejects expired or disabled sessions, applies the role matrix, and enforces assigned-branch scope before querying or mutating data. Renderer guards and hidden actions are usability controls only; they are not security boundaries.
 
+Sprint 2 studio operations are isolated in `StudioService`. It owns dance groups, enrolment history, recurring schedule templates, generated lessons, attendance, capacity enforcement, conflict detection, and audit writes. Owners and administrators have global studio access; branch managers are constrained to their assigned branches; coaches can only read assigned groups and students and mark attendance for assigned lessons. All of these rules run behind the IPC boundary.
+
+Enrolments and lessons are historical records. Removing a participant sets a departure date and status, while group removal archives the group. A unique group/start-time key makes lesson generation idempotent. Attendance uses a lesson/student composite key so immediate saves are atomic upserts rather than duplicate records.
+
 ## Configuration and observability
 
 Runtime configuration is parsed at startup. `electron-log` writes `arava-crm.log` beneath Electron's standard logs directory and mirrors development messages to the console. Secrets must never be logged or stored in renderer persistence.

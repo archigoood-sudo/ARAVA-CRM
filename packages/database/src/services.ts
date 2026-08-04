@@ -365,6 +365,17 @@ export class ApplicationService {
           ? { branchId: { in: branchIds } }
           : {}),
       ...(query.status ? { status: query.status } : { archivedAt: null }),
+      ...(actor.role === 'COACH'
+        ? {
+            enrollments: {
+              some: {
+                group: { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] },
+                leftAt: null,
+                status: { in: ['ACTIVE', 'TRIAL', 'FROZEN'] },
+              },
+            },
+          }
+        : {}),
     };
     const orderBy: Prisma.StudentOrderByWithRelationInput[] =
       query.sortBy === 'name'
@@ -394,14 +405,60 @@ export class ApplicationService {
     assertPermission(actor, 'students:read');
     const student = await this.database.student.findUnique({
       include: {
+        attendance: {
+          include: { lesson: { include: { group: { select: { name: true } } } } },
+          orderBy: { markedAt: 'desc' },
+          take: 30,
+        },
         branch: true,
         contacts: { orderBy: [{ isPrimary: 'desc' }, { fullName: 'asc' }] },
+        enrollments: {
+          include: {
+            group: { select: { assistantCoachId: true, coachId: true, name: true } },
+          },
+          orderBy: { joinedAt: 'desc' },
+        },
       },
       where: { id },
     });
     if (!student) throw new DomainError('NOT_FOUND', t('domain.notFound.student'));
     assertBranchAccess(actor, student.branchId);
-    return { ...studentSummary(student), contacts: student.contacts.map(contactSummary) };
+    if (
+      actor.role === 'COACH' &&
+      !student.enrollments.some(
+        ({ group, leftAt, status }) =>
+          !leftAt &&
+          status !== 'LEFT' &&
+          (group.coachId === actor.id || group.assistantCoachId === actor.id),
+      )
+    )
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.groupCoach'));
+    return {
+      ...studentSummary(student),
+      attendancePercentage: student.attendance.length
+        ? Math.round(
+            (student.attendance.filter(({ status }) => status === 'PRESENT' || status === 'LATE')
+              .length /
+              student.attendance.length) *
+              100,
+          )
+        : 0,
+      attendanceHistory: student.attendance.map(({ lesson, markedAt, status }) => ({
+        groupName: lesson.group.name,
+        lessonId: lesson.id,
+        markedAt: markedAt.toISOString(),
+        startsAt: lesson.startsAt.toISOString(),
+        status,
+      })),
+      contacts: student.contacts.map(contactSummary),
+      groups: student.enrollments.map(({ group, groupId, joinedAt, leftAt, status }) => ({
+        groupId,
+        groupName: group.name,
+        joinedAt: joinedAt.toISOString().slice(0, 10),
+        leftAt: leftAt?.toISOString().slice(0, 10),
+        status,
+      })),
+    };
   }
 
   async createStudent(token: string, input: StudentInput): Promise<StudentSummary> {

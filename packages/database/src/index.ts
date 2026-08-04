@@ -105,6 +105,16 @@ export async function closeDatabase(database: DatabaseClient): Promise<void> {
 }
 
 export { ApplicationService, isBranchVisibleToUser } from './services';
+export { StudioService } from './studio-service';
+export {
+  combineLocalDateAndTime,
+  dateRangesOverlap,
+  endOfLocalDay,
+  isoWeekday,
+  scheduleWindowsOverlap,
+  startOfLocalDay,
+  timeRangesOverlap,
+} from './schedule';
 export {
   accessibleBranchIds,
   assertBranchAccess,

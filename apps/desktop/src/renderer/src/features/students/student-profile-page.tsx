@@ -22,6 +22,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  CalendarDays,
   Crown,
   Mail,
   MapPin,
@@ -31,6 +32,7 @@ import {
   Plus,
   Trash2,
   UserRound,
+  UsersRound,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -294,6 +296,78 @@ export function StudentProfilePage() {
                   </article>
                 ))}
               </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 gap-5">
+        <Card>
+          <CardHeader>
+            <CardTitle>{t('student.groups')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {detail.groups.length ? (
+              detail.groups.map((membership) => (
+                <Link
+                  className="flex items-center gap-3 rounded-2xl border border-border bg-background p-4 transition hover:bg-muted/50"
+                  key={`${membership.groupId}-${membership.joinedAt}`}
+                  to={`/groups/${membership.groupId}`}
+                >
+                  <span className="flex size-10 items-center justify-center rounded-xl bg-accent-soft">
+                    <UsersRound className="size-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">
+                      {membership.groupName}
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {formatDate(membership.joinedAt)}
+                    </span>
+                  </span>
+                  <Badge>{t(`enrollment.status.${membership.status}`)}</Badge>
+                </Link>
+              ))
+            ) : (
+              <EmptyState
+                description={t('group.emptyDescription')}
+                icon={UsersRound}
+                title={t('student.groups')}
+              />
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>{t('attendance.history')}</CardTitle>
+            <span className="text-2xl font-semibold">{detail.attendancePercentage}%</span>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {detail.attendanceHistory.length ? (
+              detail.attendanceHistory.map((entry) => (
+                <Link
+                  className="flex items-center gap-3 rounded-2xl border border-border bg-background p-4 transition hover:bg-muted/50"
+                  key={`${entry.lessonId}-${entry.markedAt}`}
+                  to={`/lessons/${entry.lessonId}`}
+                >
+                  <span className="flex size-10 items-center justify-center rounded-xl bg-muted">
+                    <CalendarDays className="size-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">{entry.groupName}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {formatDate(entry.startsAt, { dateStyle: 'medium', timeStyle: 'short' })}
+                    </span>
+                  </span>
+                  <Badge>{t(`attendance.status.${entry.status}`)}</Badge>
+                </Link>
+              ))
+            ) : (
+              <EmptyState
+                description={t('attendance.empty')}
+                icon={CalendarDays}
+                title={t('attendance.history')}
+              />
             )}
           </CardContent>
         </Card>

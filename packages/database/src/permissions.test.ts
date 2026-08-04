@@ -4,8 +4,14 @@ import { describe, expect, it } from 'vitest';
 import { assertPermission, canAccessBranch, type DomainAction } from './permissions';
 
 const actions: DomainAction[] = [
+  'attendance:manage',
   'branches:manage',
   'contacts:manage',
+  'groups:manage',
+  'groups:read',
+  'lessons:manage',
+  'lessons:read',
+  'schedules:manage',
   'students:manage',
   'students:read',
   'users:manage',
@@ -13,8 +19,18 @@ const actions: DomainAction[] = [
 ];
 const expected: Record<UserRole, DomainAction[]> = {
   ADMIN: actions,
-  BRANCH_MANAGER: ['contacts:manage', 'students:manage', 'students:read'],
-  COACH: ['students:read'],
+  BRANCH_MANAGER: [
+    'attendance:manage',
+    'contacts:manage',
+    'groups:manage',
+    'groups:read',
+    'lessons:manage',
+    'lessons:read',
+    'schedules:manage',
+    'students:manage',
+    'students:read',
+  ],
+  COACH: ['attendance:manage', 'groups:read', 'lessons:read', 'students:read'],
   OWNER: actions,
 };
 

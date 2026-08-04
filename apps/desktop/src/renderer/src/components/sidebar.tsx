@@ -1,9 +1,11 @@
 import {
   BadgeInfo,
   Building2,
+  CalendarDays,
   ChevronRight,
   LayoutDashboard,
   Settings,
+  Shapes,
   ShieldCheck,
   UsersRound,
 } from 'lucide-react';
@@ -20,6 +22,8 @@ export function Sidebar() {
   const navigation = [
     { icon: LayoutDashboard, label: t('nav.dashboard'), to: '/dashboard' },
     { icon: UsersRound, label: t('nav.students'), to: '/students' },
+    { icon: Shapes, label: t('nav.groups'), to: '/groups' },
+    { icon: CalendarDays, label: t('nav.schedule'), to: '/schedule' },
     { icon: Building2, label: t('nav.branches'), to: '/branches' },
     ...(user?.role === 'OWNER' || user?.role === 'ADMIN'
       ? [{ icon: ShieldCheck, label: t('nav.users'), to: '/users' }]

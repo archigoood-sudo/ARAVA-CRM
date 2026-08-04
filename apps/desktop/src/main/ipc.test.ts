@@ -13,7 +13,13 @@ import {
   toSqliteUrl,
   type DatabaseClient,
 } from '@arava/database';
-import { IPC_CHANNELS, t, type AuthSession, type BranchSummary } from '@arava/shared';
+import {
+  IPC_CHANNELS,
+  t,
+  type AuthSession,
+  type BranchSummary,
+  type GroupSummary,
+} from '@arava/shared';
 
 vi.mock('electron', () => ({
   app: { getVersion: () => 'test' },
@@ -89,5 +95,42 @@ describe('Electron IPC boundary', () => {
       false,
     )) as BranchSummary[];
     expect(visible.map(({ id }) => id)).toEqual([branch.id]);
+  });
+
+  it('validates Sprint 2 payloads and keeps group permissions in the service layer', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!Secure2026',
+    });
+    const branch = await service.createBranch(owner.token, {
+      address: 'Главная улица, 1',
+      name: 'Центр',
+      phone: '+79990000000',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() =>
+      handlers[IPC_CHANNELS.groupCreate]?.(owner.token, {
+        branchId: branch.id,
+        capacity: 0,
+        direction: '',
+        name: '',
+        status: 'ACTIVE',
+      }),
+    ).toThrow();
+    const group = (await handlers[IPC_CHANNELS.groupCreate]?.(owner.token, {
+      branchId: branch.id,
+      capacity: 12,
+      direction: 'Балет',
+      name: 'Грация',
+      status: 'ACTIVE',
+    })) as GroupSummary;
+    expect(group).toMatchObject({ branchId: branch.id, name: 'Грация', studentCount: 0 });
+    expect(await handlers[IPC_CHANNELS.groupList]?.(owner.token, { search: 'Грац' })).toMatchObject(
+      [{ id: group.id }],
+    );
   });
 });

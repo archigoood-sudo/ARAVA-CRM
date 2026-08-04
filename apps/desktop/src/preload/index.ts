@@ -30,6 +30,37 @@ const desktopApi: AravaDesktopApi = {
     update: (token, id, input) => invoke(IPC_CHANNELS.contactUpdate, token, id, input),
   },
   dashboard: { stats: (token) => invoke(IPC_CHANNELS.dashboardStats, token) },
+  groups: {
+    addEnrollment: (token, groupId, input) =>
+      invoke(IPC_CHANNELS.enrollmentAdd, token, groupId, input),
+    archive: (token, id) => invoke(IPC_CHANNELS.groupArchive, token, id),
+    create: (token, input) => invoke(IPC_CHANNELS.groupCreate, token, input),
+    get: (token, id) => invoke(IPC_CHANNELS.groupGet, token, id),
+    list: (token, query) => invoke(IPC_CHANNELS.groupList, token, query),
+    removeEnrollment: async (token, groupId, enrollmentId) => {
+      await invoke(IPC_CHANNELS.enrollmentRemove, token, groupId, enrollmentId);
+    },
+    update: (token, id, input) => invoke(IPC_CHANNELS.groupUpdate, token, id, input),
+  },
+  schedules: {
+    create: (token, input) => invoke(IPC_CHANNELS.scheduleCreate, token, input),
+    deactivate: (token, id) => invoke(IPC_CHANNELS.scheduleDeactivate, token, id),
+    list: (token, query) => invoke(IPC_CHANNELS.scheduleList, token, query),
+    update: (token, id, input) => invoke(IPC_CHANNELS.scheduleUpdate, token, id, input),
+  },
+  lessons: {
+    cancel: (token, id, input) => invoke(IPC_CHANNELS.lessonCancel, token, id, input),
+    create: (token, input) => invoke(IPC_CHANNELS.lessonCreate, token, input),
+    generate: (token, input) => invoke(IPC_CHANNELS.lessonGenerate, token, input),
+    get: (token, id) => invoke(IPC_CHANNELS.lessonGet, token, id),
+    list: (token, query) => invoke(IPC_CHANNELS.lessonList, token, query),
+    update: (token, id, input) => invoke(IPC_CHANNELS.lessonUpdate, token, id, input),
+  },
+  attendance: {
+    get: (token, lessonId) => invoke(IPC_CHANNELS.attendanceGet, token, lessonId),
+    save: (token, lessonId, entries) =>
+      invoke(IPC_CHANNELS.attendanceSave, token, lessonId, entries),
+  },
   settings: {
     get: (token, key) => invoke(IPC_CHANNELS.settingsGet, token, key),
     set: async (token, update) => {
@@ -47,6 +78,7 @@ const desktopApi: AravaDesktopApi = {
   users: {
     create: (token, input) => invoke(IPC_CHANNELS.userCreate, token, input),
     list: (token) => invoke(IPC_CHANNELS.userList, token),
+    staffOptions: (token) => invoke(IPC_CHANNELS.userStaffOptions, token),
     update: (token, id, input) => invoke(IPC_CHANNELS.userUpdate, token, id, input),
   },
 };

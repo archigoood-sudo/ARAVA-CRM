@@ -67,8 +67,45 @@ test('вход, создание филиала, ученика и контак�
     await expect(window.getByText('Анна Петрова')).toBeVisible();
     await expect(window.getByText('+79994445566')).toBeVisible();
 
+    await window.getByRole('link', { name: 'Группы' }).click();
+    await window.getByRole('button', { name: 'Создать группу' }).click();
+    const groupDialog = window.getByRole('dialog');
+    await groupDialog.getByLabel('Название группы').fill('Импульс E2E');
+    await groupDialog.getByLabel('Направление').fill('Хип-хоп');
+    await groupDialog.getByLabel('Филиал').selectOption({ label: 'Центральный филиал' });
+    await groupDialog.getByRole('button', { name: 'Сохранить группу' }).click();
+    await expect(window.getByText('Импульс E2E')).toBeVisible();
+    await window.getByRole('button', { name: 'Действия' }).click();
+    await window.getByRole('button', { name: 'Добавить ученика' }).click();
+    const enrollmentDialog = window.getByRole('dialog');
+    await enrollmentDialog.getByLabel('Выберите ученика').selectOption({ label: 'Петрова Мила' });
+    await enrollmentDialog.getByRole('button', { name: 'Добавить в группу' }).click();
+    await expect(window.getByText('Петрова Мила')).toBeVisible();
+
+    await window.getByRole('link', { name: 'Расписание' }).click();
+    await window.getByRole('button', { name: 'Добавить в расписание' }).click();
+    const scheduleDialog = window.getByRole('dialog');
+    await scheduleDialog.locator('select').nth(1).selectOption({ label: 'Импульс E2E' });
+    await scheduleDialog
+      .locator('select')
+      .nth(2)
+      .selectOption(String(new Date().getDay() || 7));
+    await scheduleDialog.locator('input[type="text"]').fill('Зал E2E');
+    await scheduleDialog.getByRole('button', { name: 'Сохранить расписание' }).click();
+    await expect(window.getByText('Импульс E2E')).toBeVisible();
+    await window.getByRole('button', { name: 'Создать занятия' }).click();
+    await expect(window.getByText(/Создано занятий:/u)).toBeVisible();
+    await window.getByRole('button', { name: 'Открыть посещаемость' }).first().click();
+    await expect(
+      window.getByRole('heading', { name: /Посещаемость · Импульс E2E/u }),
+    ).toBeVisible();
+    await window.getByRole('button', { name: 'Отметить всех присутствующими' }).click();
+    await expect(window.getByText('Присутствовал')).toBeVisible();
+
     await window.reload();
-    await expect(window.getByRole('heading', { name: 'Петрова Мила' })).toBeVisible();
+    await expect(
+      window.getByRole('heading', { name: /Посещаемость · Импульс E2E/u }),
+    ).toBeVisible();
     await window.getByRole('button', { name: 'Выйти' }).click();
     await expect(window.getByRole('heading', { name: 'Вход в ARAVA' })).toBeVisible();
     await window.getByLabel('Электронная почта').fill(ownerEmail);

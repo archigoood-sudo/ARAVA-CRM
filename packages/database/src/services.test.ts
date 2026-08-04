@@ -14,6 +14,7 @@ import {
   type DatabaseClient,
 } from './index';
 import { ApplicationService } from './services';
+import { StudioService } from './studio-service';
 
 describe('Sprint 1 application service', () => {
   let directory: string;
@@ -113,7 +114,7 @@ describe('Sprint 1 application service', () => {
       password: 'Manager!Pass2026',
       role: 'BRANCH_MANAGER',
     });
-    await service.createUser(owner.token, {
+    const createdCoach = await service.createUser(owner.token, {
       branchIds: [branchA.id],
       email: 'coach@arava.local',
       fullName: 'Coach',
@@ -150,6 +151,21 @@ describe('Sprint 1 application service', () => {
       lastName: 'Stone',
       phone: '+7 (999) 444-33-22',
       status: 'ACTIVE',
+    });
+    const studio = new StudioService(database, service);
+    const group = await studio.createGroup(owner.token, {
+      branchId: branchA.id,
+      capacity: 20,
+      coachId: createdCoach.id,
+      direction: 'Современный танец',
+      name: 'Тестовая группа',
+      status: 'ACTIVE',
+    });
+    await studio.addEnrollment(owner.token, group.id, {
+      joinedAt: '2026-08-01',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: student.id,
     });
     await expect(service.getStudent(coach.token, student.id)).resolves.toMatchObject({
       id: student.id,

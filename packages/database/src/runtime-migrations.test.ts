@@ -6,6 +6,10 @@ describe('runtime migrations', () => {
   it('keeps stable unique migration identifiers', () => {
     const identifiers = runtimeMigrations.map(({ id }) => id);
     expect(new Set(identifiers).size).toBe(identifiers.length);
-    expect(identifiers).toEqual(['20260803000000_initial', '20260804000000_sprint_1']);
+    expect(identifiers).toEqual([
+      '20260803000000_initial',
+      '20260804000000_sprint_1',
+      '20260805000000_sprint_2',
+    ]);
   });
 });

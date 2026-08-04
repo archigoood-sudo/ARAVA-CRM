@@ -2,10 +2,23 @@ export * from './channels';
 export * from './i18n';
 export { settingKeySchema, settingUpdateSchema } from './ipc';
 export {
+  attendanceEntriesSchema,
+  attendanceEntryInputSchema,
+  attendanceStatusSchema,
   branchInputSchema,
+  enrollmentInputSchema,
+  enrollmentStatusSchema,
   genderSchema,
+  groupInputSchema,
+  groupListQuerySchema,
+  groupStatusSchema,
   identifierSchema,
   loginCredentialsSchema,
+  lessonCancelInputSchema,
+  lessonGenerateInputSchema,
+  lessonInputSchema,
+  lessonListQuerySchema,
+  lessonStatusSchema,
   passwordChangeSchema,
   passwordSchema,
   sessionTokenSchema,
@@ -16,4 +29,6 @@ export {
   userCreateSchema,
   userRoleSchema,
   userUpdateSchema,
+  weeklyScheduleInputSchema,
+  weeklyScheduleQuerySchema,
 } from './validation';

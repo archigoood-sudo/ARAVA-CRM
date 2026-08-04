@@ -8,7 +8,10 @@ describe('Russian localization', () => {
     expect(getLocale()).toBe('ru');
     expect(SUPPORTED_LOCALES).toContain('ru');
     expect(t('nav.dashboard')).toBe('Главная');
-    expect(Object.keys(ru).length).toBeGreaterThan(200);
+    expect(t('nav.groups')).toBe('Группы');
+    expect(t('nav.schedule')).toBe('Расписание');
+    expect(t('attendance.action.allPresent')).toBe('Отметить всех присутствующими');
+    expect(Object.keys(ru).length).toBeGreaterThan(350);
   });
 
   it('interpolates variables and formats dates in Russian', () => {

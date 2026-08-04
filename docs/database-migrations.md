@@ -9,3 +9,5 @@
 `migration-compatibility.test.ts` applies every Prisma SQL migration to one temporary database and every packaged runtime migration to another, then compares tables, columns, foreign keys, and indexes. This test must remain green for every schema change.
 
 Never edit an already released migration. Add a new migration so existing customer databases remain upgradeable.
+
+Sprint 2 is introduced by `20260805000000_sprint_2`. It adds `DanceGroup`, `Enrollment`, `WeeklySchedule`, `Lesson`, `Attendance`, and `AuditLog` without rebuilding or deleting Sprint 1 tables.

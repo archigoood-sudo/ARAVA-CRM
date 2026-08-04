@@ -2,6 +2,15 @@ import { ru, type RussianTranslationKey } from './ru';
 
 export const DEFAULT_LOCALE = 'ru' as const;
 export const SUPPORTED_LOCALES = ['ru'] as const;
+export const WEEKDAY_TRANSLATION_KEYS = [
+  'schedule.day.1',
+  'schedule.day.2',
+  'schedule.day.3',
+  'schedule.day.4',
+  'schedule.day.5',
+  'schedule.day.6',
+  'schedule.day.7',
+] as const;
 
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
 export type TranslationKey = RussianTranslationKey;
@@ -30,6 +39,11 @@ export function translate(key: TranslationKey, variables?: TranslationVariables)
 }
 
 export const t = translate;
+
+export function formatWeekday(weekday: number): string {
+  const key = WEEKDAY_TRANSLATION_KEYS[weekday - 1];
+  return key ? translate(key) : '';
+}
 
 export function formatDate(
   value: Date | number | string,
