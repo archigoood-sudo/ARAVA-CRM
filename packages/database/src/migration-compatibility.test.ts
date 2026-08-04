@@ -35,6 +35,13 @@ interface SqliteIndex {
 interface SqliteIndexColumn {
   name: string;
 }
+interface SqliteIndexStructure {
+  columns: string[];
+  name: string;
+  origin: string;
+  partial: number;
+  unique: number;
+}
 interface SqliteName {
   name: string;
 }
@@ -73,6 +80,19 @@ async function structure(database: DatabaseClient) {
     const indexes = await database.$queryRawUnsafe<SqliteIndex[]>(
       `PRAGMA index_list("${escaped}")`,
     );
+    const indexStructures: SqliteIndexStructure[] = [];
+    for (const index of indexes) {
+      const indexColumns = await database.$queryRawUnsafe<SqliteIndexColumn[]>(
+        `PRAGMA index_info("${index.name.replaceAll('"', '""')}")`,
+      );
+      indexStructures.push({
+        columns: indexColumns.map(({ name: column }) => column),
+        name: index.name,
+        origin: index.origin,
+        partial: Number(index.partial),
+        unique: Number(index.unique),
+      });
+    }
     result[name] = {
       columns: columns.map((column) => ({
         default: column.dflt_value,
@@ -90,19 +110,7 @@ async function structure(database: DatabaseClient) {
           to: key.to,
         }))
         .sort((a, b) => a.from.localeCompare(b.from)),
-      indexes: await Promise.all(
-        indexes.map(async (index) => ({
-          columns: (
-            await database.$queryRawUnsafe<SqliteIndexColumn[]>(
-              `PRAGMA index_info("${index.name.replaceAll('"', '""')}")`,
-            )
-          ).map(({ name: column }) => column),
-          name: index.name,
-          origin: index.origin,
-          partial: Number(index.partial),
-          unique: Number(index.unique),
-        })),
-      ),
+      indexes: indexStructures,
     };
   }
   return result;
