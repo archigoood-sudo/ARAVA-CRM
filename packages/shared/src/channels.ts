@@ -15,6 +15,35 @@ export const LESSON_STATUSES = ['PLANNED', 'COMPLETED', 'CANCELLED'] as const;
 export type LessonStatus = (typeof LESSON_STATUSES)[number];
 export const ATTENDANCE_STATUSES = ['PRESENT', 'ABSENT', 'EXCUSED', 'LATE', 'TRIAL'] as const;
 export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
+export const TARIFF_TYPES = ['LESSON_PACK', 'UNLIMITED', 'SINGLE_LESSON', 'TRIAL'] as const;
+export type TariffType = (typeof TARIFF_TYPES)[number];
+export const SUBSCRIPTION_STATUSES = [
+  'ACTIVE',
+  'PENDING',
+  'EXPIRED',
+  'FROZEN',
+  'CANCELLED',
+  'USED_UP',
+] as const;
+export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
+export const PAYMENT_METHODS = ['CASH', 'CARD', 'TRANSFER', 'ONLINE', 'OTHER'] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+export const PAYMENT_STATUSES = [
+  'COMPLETED',
+  'REFUNDED',
+  'PARTIALLY_REFUNDED',
+  'CANCELLED',
+] as const;
+export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+export const LEDGER_OPERATION_TYPES = [
+  'PURCHASE',
+  'LESSON_WRITE_OFF',
+  'REVERSAL',
+  'MANUAL_ADJUSTMENT',
+  'FREEZE',
+  'UNFREEZE',
+] as const;
+export type LedgerOperationType = (typeof LEDGER_OPERATION_TYPES)[number];
 
 export const IPC_CHANNELS = {
   activityList: 'activity:list',
@@ -49,6 +78,25 @@ export const IPC_CHANNELS = {
   lessonUpdate: 'lesson:update',
   attendanceGet: 'attendance:get',
   attendanceSave: 'attendance:save',
+  tariffArchive: 'tariff:archive',
+  tariffCreate: 'tariff:create',
+  tariffGet: 'tariff:get',
+  tariffList: 'tariff:list',
+  tariffUpdate: 'tariff:update',
+  subscriptionAdjust: 'subscription:adjust',
+  subscriptionCancel: 'subscription:cancel',
+  subscriptionCreate: 'subscription:create',
+  subscriptionFreeze: 'subscription:freeze',
+  subscriptionGet: 'subscription:get',
+  subscriptionListStudent: 'subscription:list-student',
+  subscriptionUnfreeze: 'subscription:unfreeze',
+  paymentCancel: 'payment:cancel',
+  paymentCreate: 'payment:create',
+  paymentGet: 'payment:get',
+  paymentList: 'payment:list',
+  refundCreate: 'refund:create',
+  financeEmployees: 'finance:employees',
+  financeStats: 'finance:stats',
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
   studentArchive: 'student:archive',
@@ -188,6 +236,174 @@ export interface StudentDetail extends StudentSummary {
   attendanceHistory: StudentAttendanceHistory[];
   contacts: StudentContactSummary[];
   groups: StudentGroupMembership[];
+}
+
+export interface TariffInput {
+  branchId?: string | undefined;
+  currency: string;
+  description?: string | undefined;
+  freezeDays?: number | undefined;
+  isActive: boolean;
+  lessonCount?: number | undefined;
+  name: string;
+  price: number;
+  type: TariffType;
+  validityDays?: number | undefined;
+}
+
+export interface TariffListQuery {
+  branchId?: string | undefined;
+  includeArchived?: boolean | undefined;
+  search?: string | undefined;
+  type?: TariffType | undefined;
+}
+
+export interface TariffSummary extends TariffInput {
+  archivedAt?: string | undefined;
+  branchName?: string | undefined;
+  createdAt: string;
+  id: string;
+  updatedAt: string;
+}
+
+export interface InitialPaymentInput {
+  amount: number;
+  comment?: string | undefined;
+  paidAt: string;
+  paymentMethod: PaymentMethod;
+}
+
+export interface SubscriptionCreateInput {
+  initialPayment?: InitialPaymentInput | undefined;
+  notes?: string | undefined;
+  salePrice: number;
+  startsAt: string;
+  studentId: string;
+  tariffId: string;
+}
+
+export interface SubscriptionFreezeInput {
+  days: number;
+}
+
+export interface SubscriptionAdjustmentInput {
+  comment: string;
+  lessonDelta: number;
+}
+
+export interface SubscriptionSummary {
+  branchId: string;
+  branchName: string;
+  createdAt: string;
+  currency: string;
+  debt: number;
+  expiresAt?: string | undefined;
+  freezeEndsAt?: string | undefined;
+  freezeStartedAt?: string | undefined;
+  frozenDaysUsed: number;
+  id: string;
+  lessonLimit?: number | undefined;
+  lessonsUsed: number;
+  lowBalance: boolean;
+  notes?: string | undefined;
+  paidAmount: number;
+  purchasedAt: string;
+  remainingLessons?: number | undefined;
+  salePrice: number;
+  startsAt: string;
+  status: SubscriptionStatus;
+  studentId: string;
+  studentName: string;
+  tariffId: string;
+  tariffName: string;
+  tariffType: TariffType;
+  updatedAt: string;
+  expiringSoon: boolean;
+}
+
+export interface LedgerEntrySummary {
+  amountDelta?: number | undefined;
+  attendanceId?: string | undefined;
+  comment?: string | undefined;
+  createdAt: string;
+  createdByName?: string | undefined;
+  id: string;
+  lessonDelta: number;
+  lessonId?: string | undefined;
+  reversesLedgerId?: string | undefined;
+  type: LedgerOperationType;
+}
+
+export interface SubscriptionDetail extends SubscriptionSummary {
+  ledger: LedgerEntrySummary[];
+  payments: PaymentSummary[];
+}
+
+export interface StudentFinanceSummary {
+  activeSubscriptions: number;
+  expiringSoon: number;
+  lowBalance: number;
+  subscriptions: SubscriptionSummary[];
+  totalDebt: number;
+}
+
+export interface PaymentInput {
+  amount: number;
+  branchId: string;
+  comment?: string | undefined;
+  externalReference?: string | undefined;
+  paidAt: string;
+  paymentMethod: PaymentMethod;
+  studentId: string;
+  subscriptionId?: string | undefined;
+}
+
+export interface PaymentListQuery {
+  branchId?: string | undefined;
+  createdByUserId?: string | undefined;
+  dateFrom: string;
+  dateTo: string;
+  paymentMethod?: PaymentMethod | undefined;
+  search?: string | undefined;
+  status?: PaymentStatus | undefined;
+}
+
+export interface RefundInput {
+  amount: number;
+  reason: string;
+  refundedAt: string;
+}
+
+export interface RefundSummary extends RefundInput {
+  createdAt: string;
+  createdByName: string;
+  id: string;
+  paymentId: string;
+}
+
+export interface PaymentSummary extends PaymentInput {
+  branchName: string;
+  createdAt: string;
+  createdByName: string;
+  id: string;
+  netAmount: number;
+  refundedAmount: number;
+  status: PaymentStatus;
+  studentName: string;
+  studentPhone?: string | undefined;
+  subscriptionName?: string | undefined;
+  updatedAt: string;
+}
+
+export interface PaymentDetail extends PaymentSummary {
+  refunds: RefundSummary[];
+}
+
+export interface FinanceStats {
+  methodBreakdown: { amount: number; method: PaymentMethod }[];
+  outstandingDebt: number;
+  revenueThisMonth: number;
+  revenueToday: number;
 }
 
 export interface StaffOption {
@@ -377,9 +593,14 @@ export interface DashboardStats {
   expectedToday: number;
   groupsWithPlaces: number;
   lessonsToday: number;
+  lowLessonBalance: number;
+  outstandingDebt: number;
+  revenueThisMonth: number;
+  revenueToday: number;
   students: number;
   trialStudents: number;
   users: number;
+  subscriptionsExpiringSoon: number;
 }
 
 export interface ActivitySummary {
@@ -472,6 +693,43 @@ export interface AravaDesktopApi {
       lessonId: string,
       entries: AttendanceEntryInput[],
     ) => Promise<AttendanceLessonDetail>;
+  };
+  tariffs: {
+    archive: (token: string, id: string) => Promise<TariffSummary>;
+    create: (token: string, input: TariffInput) => Promise<TariffSummary>;
+    get: (token: string, id: string) => Promise<TariffSummary>;
+    list: (token: string, query: TariffListQuery) => Promise<TariffSummary[]>;
+    update: (token: string, id: string, input: TariffInput) => Promise<TariffSummary>;
+  };
+  subscriptions: {
+    adjust: (
+      token: string,
+      id: string,
+      input: SubscriptionAdjustmentInput,
+    ) => Promise<SubscriptionDetail>;
+    cancel: (token: string, id: string) => Promise<SubscriptionDetail>;
+    create: (token: string, input: SubscriptionCreateInput) => Promise<SubscriptionDetail>;
+    freeze: (
+      token: string,
+      id: string,
+      input: SubscriptionFreezeInput,
+    ) => Promise<SubscriptionDetail>;
+    get: (token: string, id: string) => Promise<SubscriptionDetail>;
+    listStudent: (token: string, studentId: string) => Promise<StudentFinanceSummary>;
+    unfreeze: (token: string, id: string) => Promise<SubscriptionDetail>;
+  };
+  payments: {
+    cancel: (token: string, id: string) => Promise<PaymentDetail>;
+    create: (token: string, input: PaymentInput) => Promise<PaymentDetail>;
+    get: (token: string, id: string) => Promise<PaymentDetail>;
+    list: (token: string, query: PaymentListQuery) => Promise<PaymentSummary[]>;
+  };
+  refunds: {
+    create: (token: string, paymentId: string, input: RefundInput) => Promise<PaymentDetail>;
+  };
+  finance: {
+    employees: (token: string) => Promise<StaffOption[]>;
+    stats: (token: string, branchId?: string) => Promise<FinanceStats>;
   };
   settings: {
     get: (token: string, key: SettingKey) => Promise<string | null>;

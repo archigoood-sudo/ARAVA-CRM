@@ -10,6 +10,7 @@ describe('runtime migrations', () => {
       '20260803000000_initial',
       '20260804000000_sprint_1',
       '20260805000000_sprint_2',
+      '20260806000000_sprint_3',
     ]);
   });
 });

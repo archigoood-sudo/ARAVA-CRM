@@ -9,6 +9,7 @@ import {
   CardTitle,
   ErrorState,
   LoadingState,
+  Money,
   StatCard,
 } from '@arava/ui';
 import { useQuery } from '@tanstack/react-query';
@@ -17,6 +18,7 @@ import {
   Building2,
   CalendarDays,
   CreditCard,
+  Landmark,
   Plus,
   ShieldCheck,
   UserRoundCheck,
@@ -65,6 +67,7 @@ export function DashboardPage() {
   const now = new Date();
   const canManageStudents = user?.role !== 'COACH';
   const canManageBranches = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const canAccessFinance = user?.role !== 'COACH';
   const statMetadata = [
     { icon: UsersRound, key: 'students', label: t('dashboard.stat.students') },
     { icon: Building2, key: 'branches', label: t('dashboard.stat.activeBranches') },
@@ -83,6 +86,11 @@ export function DashboardPage() {
       key: 'attendanceUnmarked',
       label: t('dashboard.stat.attendanceUnmarked'),
     },
+  ] as const;
+  const financeMetadata = [
+    { icon: Landmark, key: 'revenueToday', label: t('dashboard.stat.revenueToday') },
+    { icon: Landmark, key: 'revenueThisMonth', label: t('dashboard.stat.revenueMonth') },
+    { icon: CreditCard, key: 'outstandingDebt', label: t('dashboard.stat.outstandingDebt') },
   ] as const;
 
   return (
@@ -127,6 +135,29 @@ export function DashboardPage() {
               value={stats.data?.[key] ?? 0}
             />
           ))}
+          {canAccessFinance
+            ? financeMetadata.map(({ icon, key, label }) => (
+                <StatCard
+                  icon={icon}
+                  key={key}
+                  label={label}
+                  loading={stats.isLoading}
+                  value={<Money amount={stats.data?.[key] ?? 0} />}
+                />
+              ))
+            : null}
+          <StatCard
+            icon={CreditCard}
+            label={t('dashboard.stat.subscriptionsExpiring')}
+            loading={stats.isLoading}
+            value={stats.data?.subscriptionsExpiringSoon ?? 0}
+          />
+          <StatCard
+            icon={CreditCard}
+            label={t('dashboard.stat.lowBalance')}
+            loading={stats.isLoading}
+            value={stats.data?.lowLessonBalance ?? 0}
+          />
         </section>
       )}
 
@@ -203,18 +234,20 @@ export function DashboardPage() {
                   onClick={() => navigate('/branches')}
                 />
               ) : null}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('dashboard.upcoming')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Upcoming
-                description={t('dashboard.upcoming.subscriptionDescription')}
-                icon={CreditCard}
-                label={t('dashboard.upcoming.subscription')}
-              />
+              {canAccessFinance ? (
+                <>
+                  <QuickAction
+                    icon={CreditCard}
+                    label={t('nav.tariffs')}
+                    onClick={() => navigate('/tariffs')}
+                  />
+                  <QuickAction
+                    icon={Landmark}
+                    label={t('nav.finance')}
+                    onClick={() => navigate('/finance')}
+                  />
+                </>
+              ) : null}
             </CardContent>
           </Card>
         </div>
@@ -244,28 +277,5 @@ function QuickAction({
       {label}
       <ArrowRight className="ml-auto size-4 text-muted-foreground" />
     </button>
-  );
-}
-
-function Upcoming({
-  description,
-  icon: Icon,
-  label,
-}: {
-  description: string;
-  icon: typeof CalendarDays;
-  label: string;
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-        <Icon className="size-4" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-medium">{label}</span>
-        <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{description}</span>
-      </span>
-      <span className="ml-auto size-1.5 rounded-full bg-accent" />
-    </div>
   );
 }

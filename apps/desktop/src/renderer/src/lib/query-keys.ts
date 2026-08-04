@@ -1,7 +1,9 @@
 import type {
   GroupListQuery,
   LessonListQuery,
+  PaymentListQuery,
   StudentListQuery,
+  TariffListQuery,
   WeeklyScheduleQuery,
 } from '@arava/shared';
 
@@ -14,11 +16,16 @@ export const queryKeys = {
   attendance: (lessonId: string) => ['attendance', lessonId] as const,
   lesson: (id: string) => ['lessons', 'detail', id] as const,
   lessons: (query: LessonListQuery) => ['lessons', 'list', query] as const,
+  financeStats: (branchId?: string) => ['finance', 'stats', { branchId }] as const,
+  payments: (query: PaymentListQuery) => ['payments', 'list', query] as const,
   schedules: (query: WeeklyScheduleQuery) => ['schedules', 'list', query] as const,
   setting: (key: string) => ['settings', key] as const,
   student: (id: string) => ['students', 'detail', id] as const,
+  studentFinance: (id: string) => ['students', 'finance', id] as const,
   students: (query: StudentListQuery) => ['students', 'list', query] as const,
   system: ['system', 'information'] as const,
+  tariff: (id: string) => ['tariffs', 'detail', id] as const,
+  tariffs: (query: TariffListQuery) => ['tariffs', 'list', query] as const,
   staffOptions: ['users', 'staff-options'] as const,
   users: ['users'] as const,
 };

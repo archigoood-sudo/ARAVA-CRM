@@ -11,3 +11,5 @@
 Never edit an already released migration. Add a new migration so existing customer databases remain upgradeable.
 
 Sprint 2 is introduced by `20260805000000_sprint_2`. It adds `DanceGroup`, `Enrollment`, `WeeklySchedule`, `Lesson`, `Attendance`, and `AuditLog` without rebuilding or deleting Sprint 1 tables.
+
+Sprint 3 is introduced by `20260806000000_sprint_3`. It adds `Tariff`, `Subscription`, `Payment`, `Refund`, and the append-only `SubscriptionLedger`, including all foreign keys and lookup indexes required by the finance and automatic write-off services.

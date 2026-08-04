@@ -11,7 +11,11 @@ describe('Russian localization', () => {
     expect(t('nav.groups')).toBe('Группы');
     expect(t('nav.schedule')).toBe('Расписание');
     expect(t('attendance.action.allPresent')).toBe('Отметить всех присутствующими');
-    expect(Object.keys(ru).length).toBeGreaterThan(350);
+    expect(t('nav.tariffs')).toBe('Тарифы');
+    expect(t('nav.finance')).toBe('Финансы');
+    expect(t('subscription.action.issue')).toBe('Выдать абонемент');
+    expect(t('refund.action')).toBe('Оформить возврат');
+    expect(Object.keys(ru).length).toBeGreaterThan(500);
   });
 
   it('interpolates variables and formats dates in Russian', () => {

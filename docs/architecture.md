@@ -16,7 +16,11 @@ SQLite is stored in Electron's per-user data directory. Prisma provides the type
 
 Packaged desktop software cannot assume that a Prisma CLI exists on an end user's machine, so startup also runs ordered, idempotently recorded SQL migrations through the Prisma connection. Every runtime migration has a stable identifier stored in `_AppMigration`. New schema changes must add both a Prisma migration and its equivalent runtime migration in the same change set.
 
-Currency values are stored as integer minor units when monetary records are introduced. The current opportunity `value` column is an integer and must be interpreted consistently at the product boundary before customer data is enabled.
+Currency values are stored as integer minor units. For RUB, `100` represents one ruble. Conversion to and from user-facing decimal values happens only at validated IPC and UI boundaries.
+
+Sprint 3 financial operations are isolated in `FinanceService`. Payments and refunds are immutable business records: corrections use explicit cancellation or append-only refund rows. Subscription usage is represented by `SubscriptionLedger`; `lessonsUsed` is a transactionally maintained projection for fast reads. Attendance write-offs, corrections, lesson-cancellation reversals, freezes, and manual adjustments update the projection and append the corresponding ledger and audit entries in the same SQLite transaction.
+
+The attendance composite key is serialized into ledger `attendanceId` as `lessonId:studentId`. A write-off is applied at most once while it remains active. Corrections append a linked reversal before a replacement write-off is considered. Paid subscriptions are selected by the nearest expiry date, with non-expiring unlimited subscriptions ordered last.
 
 ## Renderer
 
@@ -29,6 +33,8 @@ The renderer uses hash routing because it is reliable under Electron's `file://`
 Every protected IPC call carries an opaque session token. The main-process application service resolves the current local user, rejects expired or disabled sessions, applies the role matrix, and enforces assigned-branch scope before querying or mutating data. Renderer guards and hidden actions are usability controls only; they are not security boundaries.
 
 Sprint 2 studio operations are isolated in `StudioService`. It owns dance groups, enrolment history, recurring schedule templates, generated lessons, attendance, capacity enforcement, conflict detection, and audit writes. Owners and administrators have global studio access; branch managers are constrained to their assigned branches; coaches can only read assigned groups and students and mark attendance for assigned lessons. All of these rules run behind the IPC boundary.
+
+Tariffs, subscriptions, payments, refunds, and finance metrics follow the same main-process authorization boundary. Branch managers can sell and receive payments only inside assigned branches, while refunds and unrestricted balance adjustments remain owner/administrator operations. Coaches receive only read-only subscription status for students in their assigned groups.
 
 Enrolments and lessons are historical records. Removing a participant sets a departure date and status, while group removal archives the group. A unique group/start-time key makes lesson generation idempotent. Attendance uses a lesson/student composite key so immediate saves are atomic upserts rather than duplicate records.
 

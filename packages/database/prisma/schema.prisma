@@ -57,24 +57,68 @@ enum AttendanceStatus {
   TRIAL
 }
 
+enum TariffType {
+  LESSON_PACK
+  UNLIMITED
+  SINGLE_LESSON
+  TRIAL
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PENDING
+  EXPIRED
+  FROZEN
+  CANCELLED
+  USED_UP
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  ONLINE
+  OTHER
+}
+
+enum PaymentStatus {
+  COMPLETED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELLED
+}
+
+enum LedgerOperationType {
+  PURCHASE
+  LESSON_WRITE_OFF
+  REVERSAL
+  MANUAL_ADJUSTMENT
+  FREEZE
+  UNFREEZE
+}
+
 model User {
-  id                 String       @id @default(cuid())
-  email              String       @unique
-  fullName           String
-  passwordHash       String
-  role               UserRole
-  isActive           Boolean      @default(true)
-  mustChangePassword Boolean      @default(false)
-  branchAssignments  UserBranch[]
-  sessions           Session[]
-  coachedGroups      DanceGroup[]      @relation("GroupCoach")
-  assistedGroups     DanceGroup[]      @relation("GroupAssistant")
-  scheduleTemplates  WeeklySchedule[]  @relation("ScheduleCoach")
-  lessons            Lesson[]          @relation("LessonCoach")
-  attendanceMarks    Attendance[]
-  auditLogs          AuditLog[]
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  id                   String               @id @default(cuid())
+  email                String               @unique
+  fullName             String
+  passwordHash         String
+  role                 UserRole
+  isActive             Boolean              @default(true)
+  mustChangePassword   Boolean              @default(false)
+  branchAssignments    UserBranch[]
+  sessions             Session[]
+  coachedGroups        DanceGroup[]         @relation("GroupCoach")
+  assistedGroups       DanceGroup[]         @relation("GroupAssistant")
+  scheduleTemplates    WeeklySchedule[]     @relation("ScheduleCoach")
+  lessons              Lesson[]             @relation("LessonCoach")
+  attendanceMarks      Attendance[]
+  auditLogs            AuditLog[]
+  createdSubscriptions Subscription[]       @relation("SubscriptionCreator")
+  createdPayments      Payment[]            @relation("PaymentCreator")
+  createdRefunds       Refund[]             @relation("RefundCreator")
+  ledgerEntries        SubscriptionLedger[] @relation("LedgerCreator")
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
 
   @@index([role, isActive])
 }
@@ -93,19 +137,22 @@ model Session {
 }
 
 model Branch {
-  id          String       @id @default(cuid())
-  name        String
-  address     String
-  phone       String
-  description String?
-  isActive    Boolean      @default(true)
-  users       UserBranch[]
-  students    Student[]
-  groups      DanceGroup[]
-  schedules   WeeklySchedule[]
-  lessons     Lesson[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id            String           @id @default(cuid())
+  name          String
+  address       String
+  phone         String
+  description   String?
+  isActive      Boolean          @default(true)
+  users         UserBranch[]
+  students      Student[]
+  groups        DanceGroup[]
+  schedules     WeeklySchedule[]
+  lessons       Lesson[]
+  tariffs       Tariff[]
+  subscriptions Subscription[]
+  payments      Payment[]
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   @@index([name])
   @@index([isActive])
@@ -122,24 +169,27 @@ model UserBranch {
 }
 
 model Student {
-  id          String          @id @default(cuid())
-  firstName   String
-  lastName    String
-  middleName  String?
-  birthDate   DateTime?
-  gender      Gender?
-  phone       String?
-  email       String?
-  status      StudentStatus   @default(ACTIVE)
-  branchId    String
-  branch      Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  notes       String?
-  contacts    StudentContact[]
-  enrollments Enrollment[]
-  attendance  Attendance[]
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  archivedAt  DateTime?
+  id            String               @id @default(cuid())
+  firstName     String
+  lastName      String
+  middleName    String?
+  birthDate     DateTime?
+  gender        Gender?
+  phone         String?
+  email         String?
+  status        StudentStatus        @default(ACTIVE)
+  branchId      String
+  branch        Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  notes         String?
+  contacts      StudentContact[]
+  enrollments   Enrollment[]
+  attendance    Attendance[]
+  subscriptions Subscription[]
+  payments      Payment[]
+  ledgerEntries SubscriptionLedger[]
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  archivedAt    DateTime?
 
   @@index([branchId, status])
   @@index([lastName, firstName])
@@ -222,24 +272,25 @@ model WeeklySchedule {
 }
 
 model Lesson {
-  id                 String          @id @default(cuid())
+  id                 String               @id @default(cuid())
   groupId            String
-  group              DanceGroup      @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  group              DanceGroup           @relation(fields: [groupId], references: [id], onDelete: Restrict)
   branchId           String
-  branch             Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branch             Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
   coachId            String?
-  coach              User?           @relation("LessonCoach", fields: [coachId], references: [id], onDelete: SetNull)
+  coach              User?                @relation("LessonCoach", fields: [coachId], references: [id], onDelete: SetNull)
   scheduleTemplateId String?
-  scheduleTemplate   WeeklySchedule? @relation(fields: [scheduleTemplateId], references: [id], onDelete: SetNull)
+  scheduleTemplate   WeeklySchedule?      @relation(fields: [scheduleTemplateId], references: [id], onDelete: SetNull)
   startsAt           DateTime
   endsAt             DateTime
   room               String?
-  status             LessonStatus    @default(PLANNED)
+  status             LessonStatus         @default(PLANNED)
   cancellationReason String?
   notes              String?
   attendance         Attendance[]
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+  ledgerEntries      SubscriptionLedger[]
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
 
   @@unique([groupId, startsAt])
   @@index([branchId, startsAt])
@@ -249,15 +300,15 @@ model Lesson {
 }
 
 model Attendance {
-  lessonId      String
-  lesson        Lesson           @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  studentId     String
-  student       Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  status        AttendanceStatus
+  lessonId       String
+  lesson         Lesson           @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  studentId      String
+  student        Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  status         AttendanceStatus
   markedByUserId String
-  markedByUser  User             @relation(fields: [markedByUserId], references: [id], onDelete: Restrict)
-  markedAt      DateTime
-  comment       String?
+  markedByUser   User             @relation(fields: [markedByUserId], references: [id], onDelete: Restrict)
+  markedAt       DateTime
+  comment        String?
 
   @@id([lessonId, studentId])
   @@index([studentId, markedAt])
@@ -278,6 +329,134 @@ model AuditLog {
   @@index([actorUserId, createdAt])
   @@index([entityType, entityId, createdAt])
   @@index([action, createdAt])
+}
+
+model Tariff {
+  id            String         @id @default(cuid())
+  name          String
+  branchId      String?
+  branch        Branch?        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  type          TariffType
+  lessonCount   Int?
+  validityDays  Int?
+  price         Int
+  currency      String         @default("RUB")
+  freezeDays    Int?
+  isActive      Boolean        @default(true)
+  description   String?
+  subscriptions Subscription[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  archivedAt    DateTime?
+
+  @@index([branchId, isActive])
+  @@index([type, isActive])
+  @@index([name])
+  @@index([archivedAt])
+}
+
+model Subscription {
+  id              String               @id @default(cuid())
+  studentId       String
+  student         Student              @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  tariffId        String
+  tariff          Tariff               @relation(fields: [tariffId], references: [id], onDelete: Restrict)
+  branchId        String
+  branch          Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  purchasedAt     DateTime
+  startsAt        DateTime
+  expiresAt       DateTime?
+  lessonLimit     Int?
+  lessonsUsed     Int                  @default(0)
+  status          SubscriptionStatus   @default(PENDING)
+  freezeStartedAt DateTime?
+  freezeEndsAt    DateTime?
+  frozenDaysUsed  Int                  @default(0)
+  salePrice       Int
+  notes           String?
+  createdByUserId String
+  createdByUser   User                 @relation("SubscriptionCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  payments        Payment[]
+  ledgerEntries   SubscriptionLedger[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([studentId, status])
+  @@index([branchId, status])
+  @@index([tariffId])
+  @@index([startsAt, expiresAt])
+  @@index([createdByUserId])
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  studentId         String
+  student           Student       @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  subscriptionId    String?
+  subscription      Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  branchId          String
+  branch            Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  amount            Int
+  paymentMethod     PaymentMethod
+  status            PaymentStatus @default(COMPLETED)
+  paidAt            DateTime
+  comment           String?
+  externalReference String?
+  createdByUserId   String
+  createdByUser     User          @relation("PaymentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  refunds           Refund[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([studentId, paidAt])
+  @@index([subscriptionId])
+  @@index([branchId, paidAt])
+  @@index([paymentMethod, paidAt])
+  @@index([status, paidAt])
+  @@index([createdByUserId, paidAt])
+  @@index([externalReference])
+}
+
+model Refund {
+  id              String   @id @default(cuid())
+  paymentId       String
+  payment         Payment  @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  amount          Int
+  reason          String
+  refundedAt      DateTime
+  createdByUserId String
+  createdByUser   User     @relation("RefundCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt       DateTime @default(now())
+
+  @@index([paymentId, refundedAt])
+  @@index([createdByUserId, refundedAt])
+}
+
+model SubscriptionLedger {
+  id               String               @id @default(cuid())
+  subscriptionId   String
+  subscription     Subscription         @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  studentId        String
+  student          Student              @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  lessonId         String?
+  lesson           Lesson?              @relation(fields: [lessonId], references: [id], onDelete: Restrict)
+  attendanceId     String?
+  type             LedgerOperationType
+  lessonDelta      Int                  @default(0)
+  amountDelta      Int?
+  comment          String?
+  createdByUserId  String?
+  createdByUser    User?                @relation("LedgerCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  reversesLedgerId String?              @unique
+  reversesLedger   SubscriptionLedger?  @relation("LedgerReversal", fields: [reversesLedgerId], references: [id], onDelete: Restrict)
+  reversals        SubscriptionLedger[] @relation("LedgerReversal")
+  createdAt        DateTime             @default(now())
+
+  @@index([subscriptionId, createdAt])
+  @@index([studentId, createdAt])
+  @@index([lessonId])
+  @@index([attendanceId, type])
+  @@index([createdByUserId])
 }
 
 model StudentContact {

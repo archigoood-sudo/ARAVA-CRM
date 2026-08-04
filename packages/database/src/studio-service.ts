@@ -41,6 +41,11 @@ import {
 } from './schedule';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
+import {
+  applyAttendanceWriteOff,
+  reverseAttendanceWriteOffs,
+  reverseLessonWriteOffs,
+} from './subscription-ledger';
 
 const CURRENT_ENROLLMENTS: PrismaEnrollmentStatus[] = ['ACTIVE', 'TRIAL', 'FROZEN'];
 const EXPECTED_ENROLLMENTS: PrismaEnrollmentStatus[] = ['ACTIVE', 'TRIAL'];
@@ -590,6 +595,7 @@ export class StudioService {
     const current = await this.requireLesson(id);
     assertBranchAccess(actor, current.branchId);
     const lesson = await this.database.$transaction(async (transaction) => {
+      const reversedWriteOffs = await reverseLessonWriteOffs(transaction, id, actor.id);
       const cancelled = await transaction.lesson.update({
         data: { cancellationReason: input.cancellationReason.trim(), status: 'CANCELLED' },
         include: lessonInclude,
@@ -597,6 +603,7 @@ export class StudioService {
       });
       await this.audit(transaction, actor.id, 'LESSON_CANCELLED', 'Lesson', id, {
         reason: input.cancellationReason,
+        reversedWriteOffs,
       });
       return cancelled;
     });
@@ -663,6 +670,8 @@ export class StudioService {
     assertPermission(actor, 'lessons:read');
     const lesson = await this.requireLesson(lessonId);
     this.assertLessonRead(actor, lesson);
+    if (lesson.status === 'CANCELLED')
+      throw new DomainError('VALIDATION', t('domain.validation.attendanceCancelled'));
     const [enrollments, marks] = await Promise.all([
       this.database.enrollment.findMany({
         include: { student: { select: { firstName: true, lastName: true, middleName: true } } },
@@ -715,6 +724,13 @@ export class StudioService {
         });
         if (previous && previous.status !== entry.status && actor.role === 'COACH')
           throw new DomainError('AUTHORIZATION', t('domain.authorization.attendanceCorrection'));
+        if (previous && previous.status !== entry.status)
+          await reverseAttendanceWriteOffs(
+            transaction,
+            `${lessonId}:${entry.studentId}`,
+            actor.id,
+            t('ledger.comment.attendanceCorrection'),
+          );
         await transaction.attendance.upsert({
           create: {
             comment: optionalValue(entry.comment),
@@ -732,6 +748,15 @@ export class StudioService {
           },
           where: { lessonId_studentId: { lessonId, studentId: entry.studentId } },
         });
+        if (previous?.status !== entry.status)
+          await applyAttendanceWriteOff(transaction, {
+            actorUserId: actor.id,
+            attendanceStatus: entry.status,
+            branchId: lesson.branchId,
+            lessonId,
+            lessonStartsAt: lesson.startsAt,
+            studentId: entry.studentId,
+          });
         if (previous && previous.status !== entry.status)
           await this.audit(
             transaction,

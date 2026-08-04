@@ -6,6 +6,7 @@ import { ChangePasswordPage } from './features/auth/change-password-page';
 import { BranchesPage } from './features/branches/branches-page';
 import { DashboardPage } from './features/dashboard/dashboard-page';
 import { AttendancePage } from './features/attendance/attendance-page';
+import { FinancePage } from './features/finance/finance-page';
 import { GroupProfilePage } from './features/groups/group-profile-page';
 import { GroupsPage } from './features/groups/groups-page';
 import { LessonDetailsPage } from './features/schedule/lesson-details-page';
@@ -13,6 +14,7 @@ import { SchedulePage } from './features/schedule/schedule-page';
 import { SettingsPage } from './features/settings/settings-page';
 import { StudentProfilePage } from './features/students/student-profile-page';
 import { StudentsPage } from './features/students/students-page';
+import { TariffsPage } from './features/tariffs/tariffs-page';
 import { UsersPage } from './features/users/users-page';
 import { AppLayout } from './layouts/app-layout';
 import {
@@ -47,6 +49,8 @@ export const router = createHashRouter([
           { element: <AttendancePage />, path: '/attendance/:lessonId' },
           { element: <StudentsPage />, path: '/students' },
           { element: <StudentProfilePage />, path: '/students/:studentId' },
+          { element: <TariffsPage />, path: '/tariffs' },
+          { element: <FinancePage />, path: '/finance' },
           { element: <UsersPage />, path: '/users' },
           { element: <SettingsPage />, path: '/settings' },
           { element: <AboutPage />, path: '/about' },

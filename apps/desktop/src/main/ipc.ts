@@ -1,5 +1,6 @@
 import {
   ApplicationService,
+  FinanceService,
   StudioService,
   accessibleBranchIds,
   assertPermission,
@@ -19,12 +20,20 @@ import {
   lessonInputSchema,
   lessonListQuerySchema,
   passwordChangeSchema,
+  paymentInputSchema,
+  paymentListQuerySchema,
+  refundInputSchema,
   sessionTokenSchema,
   settingKeySchema,
   settingUpdateSchema,
   studentContactInputSchema,
   studentInputSchema,
   studentListQuerySchema,
+  subscriptionAdjustmentInputSchema,
+  subscriptionCreateInputSchema,
+  subscriptionFreezeInputSchema,
+  tariffInputSchema,
+  tariffListQuerySchema,
   userCreateSchema,
   userUpdateSchema,
   weeklyScheduleInputSchema,
@@ -46,6 +55,7 @@ export function createIpcHandlers(
   databasePath: string,
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
+  const finance = new FinanceService(database, service);
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
@@ -172,6 +182,99 @@ export function createIpcHandlers(
         attendanceEntriesSchema.parse(unsafeEntries),
       ),
 
+    [IPC_CHANNELS.tariffList]: (unsafeToken, unsafeQuery) =>
+      finance.listTariffs(
+        sessionTokenSchema.parse(unsafeToken),
+        tariffListQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.tariffGet]: (unsafeToken, unsafeId) =>
+      finance.getTariff(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.tariffCreate]: (unsafeToken, unsafeInput) =>
+      finance.createTariff(
+        sessionTokenSchema.parse(unsafeToken),
+        tariffInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.tariffUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
+      finance.updateTariff(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        tariffInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.tariffArchive]: (unsafeToken, unsafeId) =>
+      finance.archiveTariff(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+
+    [IPC_CHANNELS.subscriptionCreate]: (unsafeToken, unsafeInput) =>
+      finance.createSubscription(
+        sessionTokenSchema.parse(unsafeToken),
+        subscriptionCreateInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.subscriptionListStudent]: (unsafeToken, unsafeStudentId) =>
+      finance.listStudentSubscriptions(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+      ),
+    [IPC_CHANNELS.subscriptionGet]: (unsafeToken, unsafeId) =>
+      finance.getSubscription(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.subscriptionFreeze]: (unsafeToken, unsafeId, unsafeInput) =>
+      finance.freezeSubscription(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        subscriptionFreezeInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.subscriptionUnfreeze]: (unsafeToken, unsafeId) =>
+      finance.unfreezeSubscription(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.subscriptionAdjust]: (unsafeToken, unsafeId, unsafeInput) =>
+      finance.adjustSubscription(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        subscriptionAdjustmentInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.subscriptionCancel]: (unsafeToken, unsafeId) =>
+      finance.cancelSubscription(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+
+    [IPC_CHANNELS.paymentCreate]: (unsafeToken, unsafeInput) =>
+      finance.createPayment(
+        sessionTokenSchema.parse(unsafeToken),
+        paymentInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.paymentList]: (unsafeToken, unsafeQuery) =>
+      finance.listPayments(
+        sessionTokenSchema.parse(unsafeToken),
+        paymentListQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.paymentGet]: (unsafeToken, unsafeId) =>
+      finance.getPayment(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.paymentCancel]: (unsafeToken, unsafeId) =>
+      finance.cancelPayment(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.refundCreate]: (unsafeToken, unsafePaymentId, unsafeInput) =>
+      finance.createRefund(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafePaymentId),
+        refundInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.financeEmployees]: (unsafeToken) =>
+      finance.listFinanceEmployees(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.financeStats]: (unsafeToken, unsafeBranchId) =>
+      finance.financeStats(
+        sessionTokenSchema.parse(unsafeToken),
+        unsafeBranchId === undefined ? undefined : identifierSchema.parse(unsafeBranchId),
+      ),
+
     [IPC_CHANNELS.branchList]: (unsafeToken, unsafeIncludeArchived) =>
       service.listBranches(sessionTokenSchema.parse(unsafeToken), unsafeIncludeArchived === true),
     [IPC_CHANNELS.branchCreate]: (unsafeToken, unsafeInput) =>
@@ -258,7 +361,16 @@ export function createIpcHandlers(
         actor.role === 'COACH'
           ? { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] }
           : {};
-      const [branches, students, trialStudents, users, groups, lessons] = await Promise.all([
+      const [
+        branches,
+        students,
+        trialStudents,
+        users,
+        groups,
+        lessons,
+        subscriptions,
+        financeSummary,
+      ] = await Promise.all([
         database.branch.count({
           where: { ...(branchIds ? { id: { in: branchIds } } : {}), isActive: true },
         }),
@@ -324,6 +436,17 @@ export function createIpcHandlers(
               : {}),
           },
         }),
+        database.subscription.findMany({
+          select: { expiresAt: true, lessonLimit: true, lessonsUsed: true },
+          where: {
+            ...(branchIds ? { branchId: { in: branchIds } } : {}),
+            ...(actor.role === 'COACH' ? { student: studentScope } : {}),
+            status: { in: ['ACTIVE', 'FROZEN'] },
+          },
+        }),
+        actor.role === 'COACH'
+          ? Promise.resolve({ outstandingDebt: 0, revenueThisMonth: 0, revenueToday: 0 })
+          : finance.financeStats(sessionTokenSchema.parse(unsafeToken)),
       ]);
       const expectedToday = lessons.reduce(
         (total, lesson) => total + lesson.group._count.enrollments,
@@ -333,6 +456,8 @@ export function createIpcHandlers(
         (total, lesson) => total + lesson._count.attendance,
         0,
       );
+      const now = new Date();
+      const expiringBoundary = new Date(now.getTime() + 5 * 86_400_000);
       return {
         activeGroups: groups.length,
         attendanceMarked,
@@ -342,7 +467,17 @@ export function createIpcHandlers(
         groupsWithPlaces: groups.filter((group) => group._count.enrollments < group.capacity)
           .length,
         lessonsToday: lessons.length,
+        lowLessonBalance: subscriptions.filter(
+          ({ lessonLimit, lessonsUsed }) =>
+            lessonLimit !== null && Math.max(0, lessonLimit - lessonsUsed) <= 2,
+        ).length,
+        outstandingDebt: financeSummary.outstandingDebt,
+        revenueThisMonth: financeSummary.revenueThisMonth,
+        revenueToday: financeSummary.revenueToday,
         students,
+        subscriptionsExpiringSoon: subscriptions.filter(
+          ({ expiresAt }) => expiresAt && expiresAt >= now && expiresAt <= expiringBoundary,
+        ).length,
         trialStudents,
         users,
       };

@@ -1,4 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 import { Card, CardContent } from './card';
 import { cn } from './utils';
@@ -14,7 +15,7 @@ export function StatCard({
   icon: LucideIcon;
   label: string;
   loading?: boolean;
-  value: number;
+  value: ReactNode;
 }) {
   return (
     <Card className={cn('group min-w-0 overflow-hidden', className)}>
@@ -23,7 +24,7 @@ export function StatCard({
           <Icon className="size-[19px]" />
         </span>
         <p className="mt-7 text-3xl font-semibold tracking-[-0.04em]">
-          {loading ? '—' : value.toLocaleString('ru-RU')}
+          {loading ? '—' : typeof value === 'number' ? value.toLocaleString('ru-RU') : value}
         </p>
         <p className="mt-1.5 text-sm text-muted-foreground">{label}</p>
       </CardContent>

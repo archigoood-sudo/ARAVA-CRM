@@ -8,6 +8,7 @@ const securePassword = 'Owner!Secure2026';
 test('вход, создание филиала, ученика и контакта родителя, восстановление и выход', async ({
   request: _request,
 }, testInfo) => {
+  test.setTimeout(120_000);
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const userDataArgument = `--user-data-dir=${testInfo.outputPath('user-data')}`;
   const application = executablePath
@@ -67,6 +68,34 @@ test('вход, создание филиала, ученика и контак�
     await expect(window.getByText('Анна Петрова')).toBeVisible();
     await expect(window.getByText('+79994445566')).toBeVisible();
 
+    await window.getByRole('link', { name: 'Тарифы' }).click();
+    await window.getByRole('button', { name: 'Создать тариф' }).click();
+    const tariffDialog = window.getByRole('dialog');
+    await tariffDialog.getByLabel('Название').fill('Абонемент E2E');
+    await tariffDialog.getByLabel('Доступность').selectOption({ label: 'Центральный филиал' });
+    await tariffDialog.getByLabel('Стоимость, ₽').fill('4000');
+    await tariffDialog.getByLabel('Количество занятий').fill('4');
+    await tariffDialog.getByLabel('Доступно дней заморозки').fill('7');
+    await tariffDialog.getByRole('button', { name: 'Сохранить тариф' }).click();
+    await expect(window.getByText('Абонемент E2E')).toBeVisible();
+
+    await window.getByRole('link', { name: 'Ученики' }).click();
+    await window.getByRole('link', { name: /Петрова Мила/u }).click();
+    await window.getByRole('button', { name: 'Выдать абонемент' }).click();
+    const subscriptionDialog = window.getByRole('dialog');
+    await subscriptionDialog.getByLabel('Тариф').selectOption({ index: 1 });
+    await subscriptionDialog.getByLabel('Первый платёж').isChecked();
+    await subscriptionDialog.getByLabel('Сумма, ₽').fill('1000');
+    await subscriptionDialog.getByRole('button', { name: 'Выдать абонемент' }).click();
+    await expect(window.getByRole('button', { name: /Абонемент E2E/u })).toBeVisible();
+
+    await window.getByRole('button', { name: 'Принять платёж' }).click();
+    const paymentDialog = window.getByRole('dialog');
+    await paymentDialog.getByLabel('Абонемент').selectOption({ label: 'Абонемент E2E' });
+    await paymentDialog.getByLabel('Сумма, ₽').fill('3000');
+    await paymentDialog.getByRole('button', { name: 'Сохранить платёж' }).click();
+    await expect(paymentDialog).not.toBeVisible();
+
     await window.getByRole('link', { name: 'Группы' }).click();
     await window.getByRole('button', { name: 'Создать группу' }).click();
     const groupDialog = window.getByRole('dialog');
@@ -74,7 +103,7 @@ test('вход, создание филиала, ученика и контак�
     await groupDialog.getByLabel('Направление').fill('Хип-хоп');
     await groupDialog.getByLabel('Филиал').selectOption({ label: 'Центральный филиал' });
     await groupDialog.getByRole('button', { name: 'Сохранить группу' }).click();
-    await expect(window.getByText('Импульс E2E')).toBeVisible();
+    await expect(window.getByText('Импульс E2E').first()).toBeVisible();
     await window.getByRole('button', { name: 'Действия' }).click();
     await window.getByRole('button', { name: 'Добавить ученика' }).click();
     const enrollmentDialog = window.getByRole('dialog');
@@ -92,7 +121,7 @@ test('вход, создание филиала, ученика и контак�
       .selectOption(String(new Date().getDay() || 7));
     await scheduleDialog.locator('input[type="text"]').fill('Зал E2E');
     await scheduleDialog.getByRole('button', { name: 'Сохранить расписание' }).click();
-    await expect(window.getByText('Импульс E2E')).toBeVisible();
+    await expect(window.getByText('Импульс E2E').first()).toBeVisible();
     await window.getByRole('button', { name: 'Создать занятия' }).click();
     await expect(window.getByText(/Создано занятий:/u)).toBeVisible();
     await window.getByRole('button', { name: 'Открыть посещаемость' }).first().click();
@@ -100,12 +129,42 @@ test('вход, создание филиала, ученика и контак�
       window.getByRole('heading', { name: /Посещаемость · Импульс E2E/u }),
     ).toBeVisible();
     await window.getByRole('button', { name: 'Отметить всех присутствующими' }).click();
-    await expect(window.getByText('Присутствовал')).toBeVisible();
+    await expect(window.getByText('Присутствовал').first()).toBeVisible();
+
+    await window.getByRole('link', { name: 'Ученики' }).click();
+    await window.getByRole('link', { name: /Петрова Мила/u }).click();
+    await window.getByRole('button', { name: /Абонемент E2E/u }).click();
+    await expect(window.getByText('Использовано 1 из 4')).toBeVisible();
+    await window.getByRole('button', { name: 'Закрыть окно' }).last().click();
+
+    await window.getByRole('link', { name: 'Расписание' }).click();
+    await window.getByRole('button', { name: 'Открыть посещаемость' }).first().click();
+    await window.getByRole('button', { name: 'Петрова Мила: Уважительная причина' }).click();
+    await expect(window.getByText('Уважительная причина').first()).toBeVisible();
+    await window.getByRole('link', { name: 'Ученики' }).click();
+    await window.getByRole('link', { name: /Петрова Мила/u }).click();
+    await window.getByRole('button', { name: /Абонемент E2E/u }).click();
+    await expect(window.getByText('Использовано 0 из 4')).toBeVisible();
+    await window.getByRole('button', { name: 'Заморозить' }).click();
+    const freezeDialog = window.getByRole('dialog');
+    await freezeDialog.getByLabel('Количество дней').fill('3');
+    await freezeDialog.getByRole('button', { name: 'Заморозить' }).click();
+    await expect(window.getByText('Заморожен').first()).toBeVisible();
+
+    await window.getByRole('link', { name: 'Финансы' }).click();
+    const fullPaymentRow = window.getByRole('row').filter({ hasText: /3[\s\u00a0]000/u });
+    await fullPaymentRow.click();
+    await window.getByRole('button', { name: 'Оформить возврат' }).click();
+    const refundDialog = window.getByRole('dialog').last();
+    await refundDialog.getByLabel('Сумма возврата, ₽').fill('3000');
+    await refundDialog.getByLabel('Причина возврата').fill('Возврат по заявлению родителя');
+    await refundDialog.getByRole('button', { name: 'Оформить возврат' }).click();
+    await expect(
+      window.getByRole('dialog').first().getByText('Возвращён', { exact: true }),
+    ).toBeVisible();
 
     await window.reload();
-    await expect(
-      window.getByRole('heading', { name: /Посещаемость · Импульс E2E/u }),
-    ).toBeVisible();
+    await expect(window.getByRole('heading', { name: 'Финансы' })).toBeVisible();
     await window.getByRole('button', { name: 'Выйти' }).click();
     await expect(window.getByRole('heading', { name: 'Вход в ARAVA' })).toBeVisible();
     await window.getByLabel('Электронная почта').fill(ownerEmail);

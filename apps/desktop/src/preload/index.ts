@@ -61,6 +61,36 @@ const desktopApi: AravaDesktopApi = {
     save: (token, lessonId, entries) =>
       invoke(IPC_CHANNELS.attendanceSave, token, lessonId, entries),
   },
+  tariffs: {
+    archive: (token, id) => invoke(IPC_CHANNELS.tariffArchive, token, id),
+    create: (token, input) => invoke(IPC_CHANNELS.tariffCreate, token, input),
+    get: (token, id) => invoke(IPC_CHANNELS.tariffGet, token, id),
+    list: (token, query) => invoke(IPC_CHANNELS.tariffList, token, query),
+    update: (token, id, input) => invoke(IPC_CHANNELS.tariffUpdate, token, id, input),
+  },
+  subscriptions: {
+    adjust: (token, id, input) => invoke(IPC_CHANNELS.subscriptionAdjust, token, id, input),
+    cancel: (token, id) => invoke(IPC_CHANNELS.subscriptionCancel, token, id),
+    create: (token, input) => invoke(IPC_CHANNELS.subscriptionCreate, token, input),
+    freeze: (token, id, input) => invoke(IPC_CHANNELS.subscriptionFreeze, token, id, input),
+    get: (token, id) => invoke(IPC_CHANNELS.subscriptionGet, token, id),
+    listStudent: (token, studentId) =>
+      invoke(IPC_CHANNELS.subscriptionListStudent, token, studentId),
+    unfreeze: (token, id) => invoke(IPC_CHANNELS.subscriptionUnfreeze, token, id),
+  },
+  payments: {
+    cancel: (token, id) => invoke(IPC_CHANNELS.paymentCancel, token, id),
+    create: (token, input) => invoke(IPC_CHANNELS.paymentCreate, token, input),
+    get: (token, id) => invoke(IPC_CHANNELS.paymentGet, token, id),
+    list: (token, query) => invoke(IPC_CHANNELS.paymentList, token, query),
+  },
+  refunds: {
+    create: (token, paymentId, input) => invoke(IPC_CHANNELS.refundCreate, token, paymentId, input),
+  },
+  finance: {
+    employees: (token) => invoke(IPC_CHANNELS.financeEmployees, token),
+    stats: (token, branchId) => invoke(IPC_CHANNELS.financeStats, token, branchId),
+  },
   settings: {
     get: (token, key) => invoke(IPC_CHANNELS.settingsGet, token, key),
     set: async (token, update) => {

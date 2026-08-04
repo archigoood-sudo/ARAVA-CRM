@@ -43,6 +43,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { ContactDialog } from './contact-dialog';
 import { StudentDialog } from './student-dialog';
+import { StudentFinance } from '../subscriptions/student-finance';
 
 const statusStyles: Record<StudentStatus, string> = {
   ACTIVE: '',
@@ -372,6 +373,8 @@ export function StudentProfilePage() {
           </CardContent>
         </Card>
       </div>
+
+      <StudentFinance branches={branches.data ?? []} student={detail} />
 
       <StudentDialog
         branches={branches.data ?? []}

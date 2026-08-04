@@ -11,6 +11,15 @@ export type DomainAction =
   | 'lessons:manage'
   | 'lessons:read'
   | 'schedules:manage'
+  | 'tariffs:manage'
+  | 'tariffs:read'
+  | 'subscriptions:manage'
+  | 'subscriptions:read'
+  | 'subscriptions:adjust'
+  | 'payments:manage'
+  | 'payments:read'
+  | 'refunds:manage'
+  | 'finance:read'
   | 'students:manage'
   | 'students:read'
   | 'users:manage'
@@ -25,6 +34,15 @@ const allowedRoles: Record<DomainAction, readonly UserRole[]> = {
   'lessons:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
   'lessons:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
   'schedules:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
+  'tariffs:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
+  'tariffs:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
+  'subscriptions:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
+  'subscriptions:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
+  'subscriptions:adjust': ['OWNER', 'ADMIN'],
+  'payments:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
+  'payments:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
+  'refunds:manage': ['OWNER', 'ADMIN'],
+  'finance:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
   'students:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
   'students:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
   'users:manage': ['OWNER', 'ADMIN'],

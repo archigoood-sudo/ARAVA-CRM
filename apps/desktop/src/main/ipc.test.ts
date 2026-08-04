@@ -19,6 +19,8 @@ import {
   type AuthSession,
   type BranchSummary,
   type GroupSummary,
+  type SubscriptionDetail,
+  type TariffSummary,
 } from '@arava/shared';
 
 vi.mock('electron', () => ({
@@ -132,5 +134,66 @@ describe('Electron IPC boundary', () => {
     expect(await handlers[IPC_CHANNELS.groupList]?.(owner.token, { search: 'Грац' })).toMatchObject(
       [{ id: group.id }],
     );
+  });
+
+  it('validates Sprint 3 payloads and exposes finance only through authorized services', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!Secure2026',
+    });
+    const branch = await service.createBranch(owner.token, {
+      address: 'ул. Платёжная, 1',
+      name: 'Центр',
+      phone: '+79990000000',
+    });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Мила',
+      lastName: 'Петрова',
+      status: 'ACTIVE',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() =>
+      handlers[IPC_CHANNELS.tariffCreate]?.(owner.token, {
+        branchId: branch.id,
+        currency: 'RUB',
+        isActive: true,
+        name: 'Некорректный пакет',
+        price: 10_000,
+        type: 'LESSON_PACK',
+      }),
+    ).toThrow();
+    const tariff = (await handlers[IPC_CHANNELS.tariffCreate]?.(owner.token, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 4,
+      name: 'Четыре занятия',
+      price: 40_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    })) as TariffSummary;
+    const subscription = (await handlers[IPC_CHANNELS.subscriptionCreate]?.(owner.token, {
+      initialPayment: {
+        amount: 20_000,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CARD',
+      },
+      salePrice: 40_000,
+      startsAt: new Date().toISOString().slice(0, 10),
+      studentId: student.id,
+      tariffId: tariff.id,
+    })) as SubscriptionDetail;
+    expect(subscription).toMatchObject({ debt: 20_000, lessonLimit: 4, paidAmount: 20_000 });
+    expect(
+      await handlers[IPC_CHANNELS.paymentList]?.(owner.token, {
+        dateFrom: new Date(Date.now() - 86_400_000).toISOString(),
+        dateTo: new Date(Date.now() + 86_400_000).toISOString(),
+      }),
+    ).toHaveLength(1);
   });
 });

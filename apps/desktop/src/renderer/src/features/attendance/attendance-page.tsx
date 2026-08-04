@@ -45,7 +45,14 @@ export function AttendancePage() {
   const save = useMutation({
     mutationFn: (entries: AttendanceEntryInput[]) =>
       getDesktopApi().attendance.save(getSessionToken(), lessonId, entries),
-    onSuccess: (data) => client.setQueryData(queryKeys.attendance(lessonId), data),
+    onSuccess: async (data) => {
+      client.setQueryData(queryKeys.attendance(lessonId), data);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['subscriptions'] }),
+        client.invalidateQueries({ queryKey: ['students', 'finance'] }),
+        client.invalidateQueries({ queryKey: ['dashboard'] }),
+      ]);
+    },
   });
   if (attendance.isLoading) return <LoadingState label={t('attendance.loading')} />;
   if (!attendance.data || attendance.isError)

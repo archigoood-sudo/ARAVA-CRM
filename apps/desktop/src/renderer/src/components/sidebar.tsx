@@ -4,9 +4,11 @@ import {
   CalendarDays,
   ChevronRight,
   LayoutDashboard,
+  Landmark,
   Settings,
   Shapes,
   ShieldCheck,
+  Tags,
   UsersRound,
 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
@@ -24,6 +26,10 @@ export function Sidebar() {
     { icon: UsersRound, label: t('nav.students'), to: '/students' },
     { icon: Shapes, label: t('nav.groups'), to: '/groups' },
     { icon: CalendarDays, label: t('nav.schedule'), to: '/schedule' },
+    { icon: Tags, label: t('nav.tariffs'), to: '/tariffs' },
+    ...(user?.role !== 'COACH'
+      ? [{ icon: Landmark, label: t('nav.finance'), to: '/finance' }]
+      : []),
     { icon: Building2, label: t('nav.branches'), to: '/branches' },
     ...(user?.role === 'OWNER' || user?.role === 'ADMIN'
       ? [{ icon: ShieldCheck, label: t('nav.users'), to: '/users' }]

@@ -49,7 +49,14 @@ export function LessonDetailsPage() {
     mutationFn: (input: LessonCancelInput) =>
       getDesktopApi().lessons.cancel(getSessionToken(), lessonId, input),
   });
-  const refresh = () => client.invalidateQueries({ queryKey: queryKeys.lesson(lessonId) });
+  const refresh = async () => {
+    await Promise.all([
+      client.invalidateQueries({ queryKey: queryKeys.lesson(lessonId) }),
+      client.invalidateQueries({ queryKey: ['subscriptions'] }),
+      client.invalidateQueries({ queryKey: ['students', 'finance'] }),
+      client.invalidateQueries({ queryKey: ['dashboard'] }),
+    ]);
+  };
   if (lesson.isLoading) return <LoadingState label={t('common.loading')} />;
   if (!lesson.data || lesson.isError)
     return (

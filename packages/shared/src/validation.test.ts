@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { loginCredentialsSchema, weeklyScheduleInputSchema } from './validation';
+import { loginCredentialsSchema, tariffInputSchema, weeklyScheduleInputSchema } from './validation';
 
 describe('loginCredentialsSchema', () => {
   it('normalizes and validates valid credentials', () => {
@@ -30,5 +30,34 @@ describe('weeklyScheduleInputSchema', () => {
         weekday: 2,
       }).validTo,
     ).toBeUndefined();
+  });
+});
+
+describe('tariffInputSchema', () => {
+  const base = {
+    currency: 'RUB',
+    isActive: true,
+    name: 'Основной тариф',
+    price: 12_000,
+  } as const;
+
+  it('requires a lesson count for a lesson pack', () => {
+    expect(tariffInputSchema.safeParse({ ...base, type: 'LESSON_PACK' }).success).toBe(false);
+    expect(
+      tariffInputSchema.safeParse({ ...base, lessonCount: 8, type: 'LESSON_PACK' }).success,
+    ).toBe(true);
+  });
+
+  it('enforces one visit for single and trial tariffs and none for unlimited', () => {
+    expect(
+      tariffInputSchema.safeParse({ ...base, lessonCount: 2, type: 'SINGLE_LESSON' }).success,
+    ).toBe(false);
+    expect(tariffInputSchema.safeParse({ ...base, lessonCount: 1, type: 'TRIAL' }).success).toBe(
+      true,
+    );
+    expect(
+      tariffInputSchema.safeParse({ ...base, lessonCount: 1, type: 'UNLIMITED' }).success,
+    ).toBe(false);
+    expect(tariffInputSchema.safeParse({ ...base, type: 'UNLIMITED' }).success).toBe(true);
   });
 });

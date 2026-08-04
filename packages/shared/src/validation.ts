@@ -6,7 +6,10 @@ import {
   GENDERS,
   GROUP_STATUSES,
   LESSON_STATUSES,
+  PAYMENT_METHODS,
+  PAYMENT_STATUSES,
   STUDENT_STATUSES,
+  TARIFF_TYPES,
   USER_ROLES,
   type BranchInput,
   type AttendanceEntryInput,
@@ -19,9 +22,17 @@ import {
   type LessonListQuery,
   type LoginCredentials,
   type PasswordChangeInput,
+  type PaymentInput,
+  type PaymentListQuery,
+  type RefundInput,
   type StudentContactInput,
   type StudentInput,
   type StudentListQuery,
+  type SubscriptionAdjustmentInput,
+  type SubscriptionCreateInput,
+  type SubscriptionFreezeInput,
+  type TariffInput,
+  type TariffListQuery,
   type UserCreateInput,
   type UserUpdateInput,
   type WeeklyScheduleInput,
@@ -68,6 +79,9 @@ export const groupStatusSchema = z.enum(GROUP_STATUSES);
 export const enrollmentStatusSchema = z.enum(ENROLLMENT_STATUSES);
 export const lessonStatusSchema = z.enum(LESSON_STATUSES);
 export const attendanceStatusSchema = z.enum(ATTENDANCE_STATUSES);
+export const tariffTypeSchema = z.enum(TARIFF_TYPES);
+export const paymentMethodSchema = z.enum(PAYMENT_METHODS);
+export const paymentStatusSchema = z.enum(PAYMENT_STATUSES);
 
 export const userCreateSchema: z.ZodType<UserCreateInput> = z.object({
   branchIds: z.array(z.string().min(1)).max(100),
@@ -269,6 +283,123 @@ export const attendanceEntryInputSchema: z.ZodType<AttendanceEntryInput> = z.obj
 });
 
 export const attendanceEntriesSchema = z.array(attendanceEntryInputSchema).max(1000);
+
+const moneyAmount = z.number().int().min(0, t('validation.money')).max(1_000_000_000);
+const positiveMoneyAmount = z
+  .number()
+  .int()
+  .min(1, t('validation.moneyPositive'))
+  .max(1_000_000_000);
+
+export const tariffInputSchema: z.ZodType<TariffInput> = z
+  .object({
+    branchId: optionalIdentifier,
+    currency: z.literal('RUB'),
+    description: optionalText(2000),
+    freezeDays: z.number().int().min(0).max(365).optional(),
+    isActive: z.boolean(),
+    lessonCount: z.number().int().min(1).max(1000).optional(),
+    name: z.string().trim().min(2, t('validation.required')).max(120),
+    price: moneyAmount,
+    type: tariffTypeSchema,
+    validityDays: z.number().int().min(1).max(3650).optional(),
+  })
+  .superRefine((input, context) => {
+    if (input.type === 'LESSON_PACK' && !input.lessonCount)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: t('validation.tariff.lessonPackCount'),
+        path: ['lessonCount'],
+      });
+    if (input.type === 'UNLIMITED' && input.lessonCount !== undefined)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: t('validation.tariff.unlimitedCount'),
+        path: ['lessonCount'],
+      });
+    if ((input.type === 'SINGLE_LESSON' || input.type === 'TRIAL') && input.lessonCount !== 1)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: t('validation.tariff.singleCount'),
+        path: ['lessonCount'],
+      });
+  });
+
+export const tariffListQuerySchema: z.ZodType<TariffListQuery> = z.object({
+  branchId: optionalIdentifier,
+  includeArchived: z.boolean().optional(),
+  search: optionalText(120),
+  type: tariffTypeSchema.optional(),
+});
+
+export const initialPaymentInputSchema = z.object({
+  amount: positiveMoneyAmount,
+  comment: optionalText(1000),
+  paidAt: isoDateTime,
+  paymentMethod: paymentMethodSchema,
+});
+
+export const subscriptionCreateInputSchema: z.ZodType<SubscriptionCreateInput> = z
+  .object({
+    initialPayment: initialPaymentInputSchema.optional(),
+    notes: optionalText(2000),
+    salePrice: moneyAmount,
+    startsAt: isoDate,
+    studentId: z.string().min(1).max(100),
+    tariffId: z.string().min(1).max(100),
+  })
+  .refine((input) => !input.initialPayment || input.initialPayment.amount <= input.salePrice, {
+    message: t('validation.payment.exceedsSale'),
+    path: ['initialPayment', 'amount'],
+  });
+
+export const subscriptionFreezeInputSchema: z.ZodType<SubscriptionFreezeInput> = z.object({
+  days: z.number().int().min(1, t('validation.freezeDays')).max(365),
+});
+
+export const subscriptionAdjustmentInputSchema: z.ZodType<SubscriptionAdjustmentInput> = z.object({
+  comment: z.string().trim().min(3, t('validation.adjustmentReason')).max(1000),
+  lessonDelta: z
+    .number()
+    .int()
+    .min(-1000)
+    .max(1000)
+    .refine((value) => value !== 0, {
+      message: t('validation.adjustmentDelta'),
+    }),
+});
+
+export const paymentInputSchema: z.ZodType<PaymentInput> = z.object({
+  amount: positiveMoneyAmount,
+  branchId: z.string().min(1).max(100),
+  comment: optionalText(1000),
+  externalReference: optionalText(200),
+  paidAt: isoDateTime,
+  paymentMethod: paymentMethodSchema,
+  studentId: z.string().min(1).max(100),
+  subscriptionId: optionalIdentifier,
+});
+
+export const paymentListQuerySchema: z.ZodType<PaymentListQuery> = z
+  .object({
+    branchId: optionalIdentifier,
+    createdByUserId: optionalIdentifier,
+    dateFrom: isoDateTime,
+    dateTo: isoDateTime,
+    paymentMethod: paymentMethodSchema.optional(),
+    search: optionalText(120),
+    status: paymentStatusSchema.optional(),
+  })
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
+
+export const refundInputSchema: z.ZodType<RefundInput> = z.object({
+  amount: positiveMoneyAmount,
+  reason: z.string().trim().min(3, t('validation.refundReason')).max(1000),
+  refundedAt: isoDateTime,
+});
 
 export const identifierSchema = z.string().min(1).max(100);
 export const sessionTokenSchema = z.string().min(32).max(256);
