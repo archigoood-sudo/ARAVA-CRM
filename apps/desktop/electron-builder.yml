@@ -27,6 +27,8 @@ win:
       arch:
         - x64
   verifyUpdateCodeSignature: false
+linux:
+  executableName: arava-crm
 nsis:
   artifactName: ARAVA-CRM-Setup-${version}-${arch}.${ext}
   oneClick: false
