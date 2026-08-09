@@ -12,6 +12,9 @@ import { assertPermission, canAccessBranch, type DomainAction } from './permissi
 const actions: DomainAction[] = [
   'attendance:manage',
   'branches:manage',
+  'cards:manage',
+  'cards:read',
+  'cards:scan',
   'contacts:manage',
   'finance:read',
   'groups:manage',
@@ -38,6 +41,7 @@ const expected: Record<UserRole, DomainAction[]> = {
   ),
   COACH: [
     'attendance:manage',
+    'cards:scan',
     'groups:read',
     'lessons:read',
     'students:read',

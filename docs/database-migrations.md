@@ -15,3 +15,5 @@ Sprint 2 is introduced by `20260805000000_sprint_2`. It adds `DanceGroup`, `Enro
 Sprint 3 is introduced by `20260806000000_sprint_3`. It adds `Tariff`, `Subscription`, `Payment`, `Refund`, and the append-only `SubscriptionLedger`, including all foreign keys and lookup indexes required by the finance and automatic write-off services.
 
 Sprint 4.1B is introduced by `20260809010000_sprint_4_1b`. It adds `Room`, `RoomRental`, `RoomClosure`, `CalendarException`, and `TrainerSubstitution`, plus nullable `roomId` references on `WeeklySchedule` and `Lesson`. Existing lessons without a room remain unchanged and readable as «Зал не указан». The migration only adds tables, columns, and indexes; it never recreates or clears the customer database.
+
+Sprint 4.1C is introduced by `20260809020000_sprint_4_1c`. It adds `MembershipCard`, immutable `CardEvent` history, and privacy-scoped `CardScanEvent` records. Barcodes remain unique text values so leading zeroes are preserved. The migration upgrades existing installations in place without rebuilding customer tables.

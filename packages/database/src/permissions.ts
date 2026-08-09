@@ -10,6 +10,9 @@ import { DomainError } from './security';
 
 export type DomainAction =
   | 'branches:manage'
+  | 'cards:manage'
+  | 'cards:read'
+  | 'cards:scan'
   | 'contacts:manage'
   | 'attendance:manage'
   | 'groups:manage'
@@ -48,6 +51,9 @@ export type DomainAction =
 const allowedRoles: Record<DomainAction, readonly UserRole[]> = {
   'attendance:manage': ['OWNER', 'ADMIN', 'COACH'],
   'branches:manage': ['OWNER', 'ADMIN'],
+  'cards:manage': ['OWNER', 'ADMIN'],
+  'cards:read': ['OWNER', 'ADMIN'],
+  'cards:scan': ['OWNER', 'ADMIN', 'COACH'],
   'contacts:manage': ['OWNER', 'ADMIN'],
   'groups:manage': ['OWNER', 'ADMIN'],
   'groups:read': ['OWNER', 'ADMIN', 'COACH'],

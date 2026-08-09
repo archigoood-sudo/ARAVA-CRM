@@ -159,64 +159,97 @@ enum CalendarExceptionType {
   CUSTOM
 }
 
+enum MembershipCardStatus {
+  FREE
+  ASSIGNED
+  BLOCKED
+  LOST
+  ARCHIVED
+}
+
+enum CardEventType {
+  REGISTERED
+  ASSIGNED
+  UNASSIGNED
+  BLOCKED
+  MARKED_LOST
+  REACTIVATED
+  REPLACED
+  ARCHIVED
+  SCANNED
+}
+
+enum CardScanResult {
+  OPENED
+  FREE
+  UNKNOWN
+  BLOCKED
+  LOST
+  ARCHIVED
+  ACCESS_DENIED
+}
+
 model User {
-  id                   String               @id @default(cuid())
-  email                String               @unique
-  fullName             String
-  passwordHash         String
-  role                 UserRole
-  isActive             Boolean              @default(true)
-  mustChangePassword   Boolean              @default(false)
-  phone                String?
-  failedLoginAttempts  Int                  @default(0)
-  lockedUntil          DateTime?
-  lastLoginAt          DateTime?
-  passwordChangedAt    DateTime?
-  securityVersion      Int                  @default(1)
-  recoveryCodeHash     String?
-  recoveryCodeCreatedAt DateTime?
-  recoveryFailedAttempts Int                @default(0)
-  recoveryLockedUntil  DateTime?
-  branchAssignments    UserBranch[]
-  sessions             Session[]
-  coachedGroups        DanceGroup[]         @relation("GroupCoach")
-  assistedGroups       DanceGroup[]         @relation("GroupAssistant")
-  scheduleTemplates    WeeklySchedule[]     @relation("ScheduleCoach")
-  lessons              Lesson[]             @relation("LessonCoach")
-  attendanceMarks      Attendance[]
-  auditLogs            AuditLog[]
-  createdSubscriptions Subscription[]       @relation("SubscriptionCreator")
-  createdPayments      Payment[]            @relation("PaymentCreator")
-  createdRefunds       Refund[]             @relation("RefundCreator")
-  ledgerEntries        SubscriptionLedger[] @relation("LedgerCreator")
-  createdExpenses      Expense[]            @relation("ExpenseCreator")
-  confirmedExpenses    Expense[]            @relation("ExpenseConfirmer")
-  cashTransactions     CashTransaction[]
-  payrollRules         PayrollRule[]        @relation("PayrollCoach")
-  createdPayrolls      PayrollPeriod[]      @relation("PayrollCreator")
-  approvedPayrolls     PayrollPeriod[]      @relation("PayrollApprover")
-  payrollAccruals      PayrollAccrual[]     @relation("PayrollAccrualCoach")
-  createdRoomRentals   RoomRental[]         @relation("RoomRentalCreator")
-  createdRoomClosures  RoomClosure[]        @relation("RoomClosureCreator")
-  createdSubstitutions TrainerSubstitution[] @relation("SubstitutionCreator")
-  substitutedLessons   TrainerSubstitution[] @relation("SubstituteTrainer")
-  originalSubstitutions TrainerSubstitution[] @relation("OriginalTrainer")
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
+  id                     String                @id @default(cuid())
+  email                  String                @unique
+  fullName               String
+  passwordHash           String
+  role                   UserRole
+  isActive               Boolean               @default(true)
+  mustChangePassword     Boolean               @default(false)
+  phone                  String?
+  failedLoginAttempts    Int                   @default(0)
+  lockedUntil            DateTime?
+  lastLoginAt            DateTime?
+  passwordChangedAt      DateTime?
+  securityVersion        Int                   @default(1)
+  recoveryCodeHash       String?
+  recoveryCodeCreatedAt  DateTime?
+  recoveryFailedAttempts Int                   @default(0)
+  recoveryLockedUntil    DateTime?
+  branchAssignments      UserBranch[]
+  sessions               Session[]
+  coachedGroups          DanceGroup[]          @relation("GroupCoach")
+  assistedGroups         DanceGroup[]          @relation("GroupAssistant")
+  scheduleTemplates      WeeklySchedule[]      @relation("ScheduleCoach")
+  lessons                Lesson[]              @relation("LessonCoach")
+  attendanceMarks        Attendance[]
+  auditLogs              AuditLog[]
+  createdSubscriptions   Subscription[]        @relation("SubscriptionCreator")
+  createdPayments        Payment[]             @relation("PaymentCreator")
+  createdRefunds         Refund[]              @relation("RefundCreator")
+  ledgerEntries          SubscriptionLedger[]  @relation("LedgerCreator")
+  createdExpenses        Expense[]             @relation("ExpenseCreator")
+  confirmedExpenses      Expense[]             @relation("ExpenseConfirmer")
+  cashTransactions       CashTransaction[]
+  payrollRules           PayrollRule[]         @relation("PayrollCoach")
+  createdPayrolls        PayrollPeriod[]       @relation("PayrollCreator")
+  approvedPayrolls       PayrollPeriod[]       @relation("PayrollApprover")
+  payrollAccruals        PayrollAccrual[]      @relation("PayrollAccrualCoach")
+  createdRoomRentals     RoomRental[]          @relation("RoomRentalCreator")
+  createdRoomClosures    RoomClosure[]         @relation("RoomClosureCreator")
+  createdSubstitutions   TrainerSubstitution[] @relation("SubstitutionCreator")
+  substitutedLessons     TrainerSubstitution[] @relation("SubstituteTrainer")
+  originalSubstitutions  TrainerSubstitution[] @relation("OriginalTrainer")
+  createdMembershipCards MembershipCard[]      @relation("CardCreator")
+  performedCardEvents    CardEvent[]           @relation("CardEventPerformer")
+  cardScans              CardScanEvent[]       @relation("CardScanPerformer")
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
 
   @@index([role, isActive])
   @@index([lockedUntil])
 }
 
 model Session {
-  id         String   @id @default(cuid())
-  tokenHash  String   @unique
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt  DateTime
-  createdAt  DateTime @default(now())
-  lastUsedAt DateTime @default(now())
-  securityVersion Int @default(1)
+  id              String   @id @default(cuid())
+  tokenHash       String   @unique
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  lastUsedAt      DateTime @default(now())
+  securityVersion Int      @default(1)
 
   @@index([userId])
   @@index([userId, securityVersion])
@@ -224,33 +257,33 @@ model Session {
 }
 
 model Branch {
-  id                String            @id @default(cuid())
-  name              String
-  address           String?
-  phone             String?
-  description       String?
-  isActive          Boolean           @default(true)
-  users             UserBranch[]
-  students          Student[]
-  groups            DanceGroup[]
-  schedules         WeeklySchedule[]
-  lessons           Lesson[]
-  tariffs           Tariff[]
-  subscriptions     Subscription[]
-  payments          Payment[]
-  expenseCategories ExpenseCategory[]
-  expenses          Expense[]
-  cashRegisters     CashRegister[]
-  cashTransactions  CashTransaction[]
-  payrollRules      PayrollRule[]
-  payrollPeriods    PayrollPeriod[]
-  payrollAccruals   PayrollAccrual[]
-  rooms             Room[]
-  roomRentals       RoomRental[]
+  id                 String              @id @default(cuid())
+  name               String
+  address            String?
+  phone              String?
+  description        String?
+  isActive           Boolean             @default(true)
+  users              UserBranch[]
+  students           Student[]
+  groups             DanceGroup[]
+  schedules          WeeklySchedule[]
+  lessons            Lesson[]
+  tariffs            Tariff[]
+  subscriptions      Subscription[]
+  payments           Payment[]
+  expenseCategories  ExpenseCategory[]
+  expenses           Expense[]
+  cashRegisters      CashRegister[]
+  cashTransactions   CashTransaction[]
+  payrollRules       PayrollRule[]
+  payrollPeriods     PayrollPeriod[]
+  payrollAccruals    PayrollAccrual[]
+  rooms              Room[]
+  roomRentals        RoomRental[]
   calendarExceptions CalendarException[]
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
-  archivedAt        DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  archivedAt         DateTime?
 
   @@index([name])
   @@index([isActive])
@@ -293,32 +326,98 @@ model UserBranch {
 }
 
 model Student {
-  id            String               @id @default(cuid())
-  firstName     String
-  lastName      String
-  middleName    String?
-  birthDate     DateTime?
-  gender        Gender?
-  phone         String?
-  email         String?
-  status        StudentStatus        @default(ACTIVE)
-  branchId      String
-  branch        Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  notes         String?
-  contacts      StudentContact[]
-  enrollments   Enrollment[]
-  attendance    Attendance[]
-  subscriptions Subscription[]
-  payments      Payment[]
-  ledgerEntries SubscriptionLedger[]
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
-  archivedAt    DateTime?
+  id              String               @id @default(cuid())
+  firstName       String
+  lastName        String
+  middleName      String?
+  birthDate       DateTime?
+  gender          Gender?
+  phone           String?
+  email           String?
+  status          StudentStatus        @default(ACTIVE)
+  branchId        String
+  branch          Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  notes           String?
+  contacts        StudentContact[]
+  enrollments     Enrollment[]
+  attendance      Attendance[]
+  subscriptions   Subscription[]
+  payments        Payment[]
+  ledgerEntries   SubscriptionLedger[]
+  membershipCards MembershipCard[]
+  cardEvents      CardEvent[]
+  cardScans       CardScanEvent[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  archivedAt      DateTime?
 
   @@index([branchId, status])
   @@index([lastName, firstName])
   @@index([phone])
   @@index([archivedAt])
+}
+
+model MembershipCard {
+  id              String               @id @default(cuid())
+  barcode         String               @unique
+  studentId       String?
+  student         Student?             @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  status          MembershipCardStatus @default(FREE)
+  issuedAt        DateTime?
+  unassignedAt    DateTime?
+  blockedAt       DateTime?
+  archivedAt      DateTime?
+  notes           String?
+  createdByUserId String
+  createdByUser   User                 @relation("CardCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  events          CardEvent[]          @relation("CardEventCard")
+  relatedEvents   CardEvent[]          @relation("CardEventRelatedCard")
+  scans           CardScanEvent[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([studentId, status])
+  @@index([status, createdAt])
+  @@index([createdByUserId])
+}
+
+model CardEvent {
+  id                String          @id @default(cuid())
+  cardId            String
+  card              MembershipCard  @relation("CardEventCard", fields: [cardId], references: [id], onDelete: Restrict)
+  studentId         String?
+  student           Student?        @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  eventType         CardEventType
+  performedByUserId String?
+  performedByUser   User?           @relation("CardEventPerformer", fields: [performedByUserId], references: [id], onDelete: SetNull)
+  relatedCardId     String?
+  relatedCard       MembershipCard? @relation("CardEventRelatedCard", fields: [relatedCardId], references: [id], onDelete: Restrict)
+  occurredAt        DateTime        @default(now())
+  comment           String?
+
+  @@index([cardId, occurredAt])
+  @@index([studentId, occurredAt])
+  @@index([performedByUserId, occurredAt])
+  @@index([eventType, occurredAt])
+}
+
+model CardScanEvent {
+  id                String          @id @default(cuid())
+  barcode           String
+  cardId            String?
+  card              MembershipCard? @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  studentId         String?
+  student           Student?        @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  performedByUserId String?
+  performedByUser   User?           @relation("CardScanPerformer", fields: [performedByUserId], references: [id], onDelete: SetNull)
+  result            CardScanResult
+  occurredAt        DateTime        @default(now())
+
+  @@index([barcode, occurredAt])
+  @@index([cardId, occurredAt])
+  @@index([studentId, occurredAt])
+  @@index([performedByUserId, occurredAt])
+  @@index([result, occurredAt])
 }
 
 model DanceGroup {
@@ -373,25 +472,25 @@ model Enrollment {
 }
 
 model WeeklySchedule {
-  id        String     @id @default(cuid())
-  groupId   String
-  group     DanceGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  branchId  String
-  branch    Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  weekday   Int
-  startTime String
-  endTime   String
-  room      String?
-  roomId    String?
+  id         String     @id @default(cuid())
+  groupId    String
+  group      DanceGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  branchId   String
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  weekday    Int
+  startTime  String
+  endTime    String
+  room       String?
+  roomId     String?
   roomEntity Room?      @relation(fields: [roomId], references: [id], onDelete: SetNull)
-  coachId   String?
-  coach     User?      @relation("ScheduleCoach", fields: [coachId], references: [id], onDelete: SetNull)
-  validFrom DateTime
-  validTo   DateTime?
-  isActive  Boolean    @default(true)
-  lessons   Lesson[]
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  coachId    String?
+  coach      User?      @relation("ScheduleCoach", fields: [coachId], references: [id], onDelete: SetNull)
+  validFrom  DateTime
+  validTo    DateTime?
+  isActive   Boolean    @default(true)
+  lessons    Lesson[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
 
   @@index([branchId, weekday, isActive])
   @@index([groupId, isActive])

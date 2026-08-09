@@ -42,6 +42,8 @@ Sprint 4.1B calendar operations are isolated in `CalendarService`. Rooms are bra
 
 Trainer substitution changes the actual lesson coach and appends an audit record while retaining the original coach in `TrainerSubstitution`. Payroll therefore attributes a completed lesson to the trainer who actually taught it, without double-paying the original trainer. Global audit retrieval is capability-protected and remains OWNER-only; ADMIN actions are still recorded.
 
+Sprint 4.1C pre-printed client cards are isolated in `CardService`. Registration, assignment, replacement, status changes, branch isolation, immutable card events, and privacy-scoped scan resolution are enforced behind IPC. A scan may navigate to an accessible student profile, but never creates attendance or changes subscription and financial records. USB/Bluetooth keyboard scanners are detected from fast printable-key sequences followed by Enter; editable controls are excluded, and the minimum barcode length is configurable.
+
 ## Configuration and observability
 
 Runtime configuration is parsed at startup. `electron-log` writes `arava-crm.log` beneath Electron's standard logs directory and mirrors development messages to the console. Secrets must never be logged or stored in renderer persistence.

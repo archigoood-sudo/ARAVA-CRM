@@ -35,7 +35,7 @@ import {
   UsersRound,
 } from 'lucide-react';
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
@@ -44,6 +44,7 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { ContactDialog } from './contact-dialog';
 import { StudentDialog } from './student-dialog';
 import { StudentFinance } from '../subscriptions/student-finance';
+import { StudentCard } from '../cards/student-card';
 
 const statusStyles: Record<StudentStatus, string> = {
   ACTIVE: '',
@@ -61,6 +62,8 @@ const genderLabels: Record<Gender, string> = {
 
 export function StudentProfilePage() {
   const { studentId = '' } = useParams();
+  const [searchParameters] = useSearchParams();
+  const openedByCard = searchParameters.get('openedByCard') === '1';
   const user = useAuthStore((state) => state.user);
   const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
   const queryClient = useQueryClient();
@@ -154,6 +157,11 @@ export function StudentProfilePage() {
             <p className="mt-2 flex items-center gap-2 text-sm text-neutral-400">
               <MapPin className="size-4 text-accent" /> {detail.branchName}
             </p>
+            {openedByCard ? (
+              <p className="mt-3 inline-flex rounded-full bg-accent px-3 py-1 text-xs font-semibold text-neutral-950">
+                Открыто по карте
+              </p>
+            ) : null}
           </div>
           {canManage ? (
             <Button
@@ -193,6 +201,14 @@ export function StudentProfilePage() {
                 value={detail.gender ? genderLabels[detail.gender] : t('common.notSpecified')}
               />
               <Detail label={t('student.notes')} value={detail.notes ?? t('common.noNotes')} />
+              <Detail
+                label="Следующее занятие"
+                value={
+                  detail.nextLesson
+                    ? `${detail.nextLesson.groupName} · ${formatDate(detail.nextLesson.startsAt, { dateStyle: 'medium', timeStyle: 'short' })}`
+                    : 'Пока не запланировано'
+                }
+              />
             </dl>
           </CardContent>
         </Card>
@@ -374,6 +390,7 @@ export function StudentProfilePage() {
       </div>
 
       <StudentFinance branches={branches.data ?? []} student={detail} />
+      <StudentCard studentId={studentId} />
 
       <StudentDialog
         branches={branches.data ?? []}

@@ -11,6 +11,7 @@ import {
   FolderTree,
   DoorOpen,
   HandCoins,
+  IdCard,
   WalletCards,
   Settings,
   Shapes,
@@ -39,6 +40,7 @@ export function Sidebar() {
       to: '/schedule',
     },
     ...(!trainer ? [{ icon: Tags, label: t('nav.tariffs'), to: '/tariffs' }] : []),
+    ...(!trainer ? [{ icon: IdCard, label: 'Карты', to: '/cards' }] : []),
     ...(user?.permissions.canViewPayments
       ? [
           { icon: Landmark, label: t('nav.finance'), to: '/finance' },

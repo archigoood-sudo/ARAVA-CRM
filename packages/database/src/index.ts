@@ -109,6 +109,7 @@ export { StudioService } from './studio-service';
 export { FinanceService } from './finance-service';
 export { ManagementService } from './management-service';
 export { CalendarService } from './calendar-service';
+export { CardService } from './card-service';
 export {
   addDays,
   applyAttendanceWriteOff,

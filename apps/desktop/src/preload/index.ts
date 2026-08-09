@@ -37,6 +37,22 @@ const desktopApi: AravaDesktopApi = {
     list: (token, includeArchived) => invoke(IPC_CHANNELS.branchList, token, includeArchived),
     update: (token, id, input) => invoke(IPC_CHANNELS.branchUpdate, token, id, input),
   },
+  cards: {
+    archive: (token, id, input) => invoke(IPC_CHANNELS.cardArchive, token, id, input),
+    assign: (token, input) => invoke(IPC_CHANNELS.cardAssign, token, input),
+    block: (token, id, input) => invoke(IPC_CHANNELS.cardBlock, token, id, input),
+    find: (token, barcode) => invoke(IPC_CHANNELS.cardFind, token, barcode),
+    history: (token, cardId) => invoke(IPC_CHANNELS.cardHistory, token, cardId),
+    list: (token, query) => invoke(IPC_CHANNELS.cardList, token, query),
+    markLost: (token, id, input) => invoke(IPC_CHANNELS.cardMarkLost, token, id, input),
+    reactivate: (token, id, input) => invoke(IPC_CHANNELS.cardReactivate, token, id, input),
+    register: (token, input) => invoke(IPC_CHANNELS.cardRegister, token, input),
+    replace: (token, input) => invoke(IPC_CHANNELS.cardReplace, token, input),
+    resolveScan: (token, barcode) => invoke(IPC_CHANNELS.cardResolveScan, token, barcode),
+    scanHistory: (token, cardId) => invoke(IPC_CHANNELS.cardScanHistory, token, cardId),
+    studentCurrent: (token, studentId) => invoke(IPC_CHANNELS.cardStudentCurrent, token, studentId),
+    unassign: (token, id, input) => invoke(IPC_CHANNELS.cardUnassign, token, id, input),
+  },
   rooms: {
     archive: (token, id) => invoke(IPC_CHANNELS.roomArchive, token, id),
     availability: (token, roomId, date) =>

@@ -809,6 +809,20 @@ export class ApplicationService {
       )
     )
       throw new DomainError('AUTHORIZATION', t('domain.authorization.groupCoach'));
+    const activeGroupIds = student.enrollments
+      .filter(({ leftAt, status }) => !leftAt && status !== 'LEFT')
+      .map(({ groupId }) => groupId);
+    const nextLesson = activeGroupIds.length
+      ? await this.database.lesson.findFirst({
+          include: { group: { select: { name: true } } },
+          orderBy: { startsAt: 'asc' },
+          where: {
+            groupId: { in: activeGroupIds },
+            startsAt: { gte: new Date() },
+            status: 'PLANNED',
+          },
+        })
+      : null;
     return {
       ...studentSummary(student),
       attendancePercentage: student.attendance.length
@@ -834,6 +848,13 @@ export class ApplicationService {
         leftAt: leftAt?.toISOString().slice(0, 10),
         status,
       })),
+      nextLesson: nextLesson
+        ? {
+            groupName: nextLesson.group.name,
+            id: nextLesson.id,
+            startsAt: nextLesson.startsAt.toISOString(),
+          }
+        : undefined,
     };
   }
 

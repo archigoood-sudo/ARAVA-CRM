@@ -2,6 +2,7 @@ import { Bell, ChevronsUpDown, LogOut, PanelLeftClose, Search } from 'lucide-rea
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { Sidebar } from '../components/sidebar';
+import { GlobalCardScanner } from '../components/global-card-scanner';
 import { t } from '@arava/shared';
 import { useAuthStore } from '../stores/auth-store';
 
@@ -9,6 +10,7 @@ const pageTitles: Record<string, { eyebrow: string; title: string }> = {
   '/about': { eyebrow: t('page.about.eyebrow'), title: t('nav.about') },
   '/dashboard': { eyebrow: t('page.dashboard.eyebrow'), title: t('nav.dashboard') },
   '/branches': { eyebrow: t('page.branches.eyebrow'), title: t('nav.branches') },
+  '/cards': { eyebrow: 'Доступ клиентов', title: 'Карты' },
   '/students': { eyebrow: t('page.students.eyebrow'), title: t('nav.students') },
   '/users': { eyebrow: t('page.users.eyebrow'), title: t('nav.users') },
   '/settings': { eyebrow: t('page.settings.eyebrow'), title: t('nav.settings') },
@@ -85,6 +87,7 @@ export function AppLayout() {
           <Outlet />
         </div>
       </div>
+      <GlobalCardScanner />
     </div>
   );
 }

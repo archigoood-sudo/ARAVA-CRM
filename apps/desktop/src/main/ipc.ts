@@ -1,6 +1,7 @@
 import {
   ApplicationService,
   CalendarService,
+  CardService,
   FinanceService,
   ManagementService,
   StudioService,
@@ -13,8 +14,14 @@ import {
   attendanceEntriesSchema,
   calendarExceptionInputSchema,
   calendarRangeQuerySchema,
+  barcodeSchema,
   analyticsQuerySchema,
   branchInputSchema,
+  cardActionInputSchema,
+  cardAssignInputSchema,
+  cardListQuerySchema,
+  cardRegisterInputSchema,
+  cardReplaceInputSchema,
   cashCorrectionInputSchema,
   cashRegisterInputSchema,
   cashTransactionQuerySchema,
@@ -84,6 +91,7 @@ export function createIpcHandlers(
   const finance = new FinanceService(database, service);
   const management = new ManagementService(database, service);
   const calendar = new CalendarService(database, service);
+  const cards = new CardService(database, service);
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
@@ -133,6 +141,73 @@ export function createIpcHandlers(
       service.createRecoveryCode(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.userStaffOptions]: (unsafeToken) =>
       studio.listStaffOptions(sessionTokenSchema.parse(unsafeToken)),
+
+    [IPC_CHANNELS.cardList]: (unsafeToken, unsafeQuery) =>
+      cards.listCards(
+        sessionTokenSchema.parse(unsafeToken),
+        cardListQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.cardFind]: (unsafeToken, unsafeBarcode) =>
+      cards.findCard(sessionTokenSchema.parse(unsafeToken), barcodeSchema.parse(unsafeBarcode)),
+    [IPC_CHANNELS.cardRegister]: (unsafeToken, unsafeInput) =>
+      cards.registerCard(
+        sessionTokenSchema.parse(unsafeToken),
+        cardRegisterInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cardAssign]: (unsafeToken, unsafeInput) =>
+      cards.assignCard(
+        sessionTokenSchema.parse(unsafeToken),
+        cardAssignInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cardUnassign]: (unsafeToken, unsafeId, unsafeInput) =>
+      cards.unassignCard(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        cardActionInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cardBlock]: (unsafeToken, unsafeId, unsafeInput) =>
+      cards.blockCard(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        cardActionInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cardReactivate]: (unsafeToken, unsafeId, unsafeInput) =>
+      cards.reactivateCard(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        cardActionInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cardMarkLost]: (unsafeToken, unsafeId, unsafeInput) =>
+      cards.markLost(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        cardActionInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cardArchive]: (unsafeToken, unsafeId, unsafeInput) =>
+      cards.archiveCard(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        cardActionInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cardReplace]: (unsafeToken, unsafeInput) =>
+      cards.replaceCard(
+        sessionTokenSchema.parse(unsafeToken),
+        cardReplaceInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cardResolveScan]: (unsafeToken, unsafeBarcode) =>
+      cards.resolveScan(sessionTokenSchema.parse(unsafeToken), barcodeSchema.parse(unsafeBarcode)),
+    [IPC_CHANNELS.cardHistory]: (unsafeToken, unsafeId) =>
+      cards.cardHistory(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.cardScanHistory]: (unsafeToken, unsafeId) =>
+      cards.scanHistory(
+        sessionTokenSchema.parse(unsafeToken),
+        unsafeId === undefined ? undefined : identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.cardStudentCurrent]: (unsafeToken, unsafeStudentId) =>
+      cards.currentStudentCard(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+      ),
 
     [IPC_CHANNELS.roomList]: (unsafeToken, unsafeBranchId, unsafeIncludeArchived) =>
       calendar.listRooms(

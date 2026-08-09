@@ -252,6 +252,9 @@ describe('Prisma and packaged runtime migration compatibility', () => {
         await database.lesson.findUniqueOrThrow({ where: { id: 'existing-lesson-without-room' } }),
       ).toMatchObject({ room: null, roomId: null });
       expect(await database.room.count()).toBe(0);
+      expect(await database.membershipCard.count()).toBe(0);
+      expect(await database.cardEvent.count()).toBe(0);
+      expect(await database.cardScanEvent.count()).toBe(0);
       expect(
         await database.branch.findUniqueOrThrow({ where: { id: 'existing-branch' } }),
       ).toMatchObject({

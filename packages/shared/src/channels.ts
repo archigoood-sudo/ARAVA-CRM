@@ -82,6 +82,36 @@ export const ROOM_RENTAL_STATUSES = ['ACTIVE', 'CANCELLED', 'ARCHIVED'] as const
 export type RoomRentalStatus = (typeof ROOM_RENTAL_STATUSES)[number];
 export const CALENDAR_EXCEPTION_TYPES = ['DAY_OFF', 'HOLIDAY', 'VACATION', 'CUSTOM'] as const;
 export type CalendarExceptionType = (typeof CALENDAR_EXCEPTION_TYPES)[number];
+export const MEMBERSHIP_CARD_STATUSES = [
+  'FREE',
+  'ASSIGNED',
+  'BLOCKED',
+  'LOST',
+  'ARCHIVED',
+] as const;
+export type MembershipCardStatus = (typeof MEMBERSHIP_CARD_STATUSES)[number];
+export const CARD_EVENT_TYPES = [
+  'REGISTERED',
+  'ASSIGNED',
+  'UNASSIGNED',
+  'BLOCKED',
+  'MARKED_LOST',
+  'REACTIVATED',
+  'REPLACED',
+  'ARCHIVED',
+  'SCANNED',
+] as const;
+export type CardEventType = (typeof CARD_EVENT_TYPES)[number];
+export const CARD_SCAN_RESULTS = [
+  'OPENED',
+  'FREE',
+  'UNKNOWN',
+  'BLOCKED',
+  'LOST',
+  'ARCHIVED',
+  'ACCESS_DENIED',
+] as const;
+export type CardScanResult = (typeof CARD_SCAN_RESULTS)[number];
 export const REPORT_KINDS = [
   'CASH_FLOW',
   'INCOME_EXPENSES',
@@ -121,6 +151,20 @@ export const IPC_CHANNELS = {
   closurePreview: 'closure:preview',
   calendarExceptionCreate: 'calendar-exception:create',
   calendarExceptionList: 'calendar-exception:list',
+  cardArchive: 'card:archive',
+  cardAssign: 'card:assign',
+  cardBlock: 'card:block',
+  cardFind: 'card:find',
+  cardHistory: 'card:history',
+  cardList: 'card:list',
+  cardMarkLost: 'card:mark-lost',
+  cardReactivate: 'card:reactivate',
+  cardRegister: 'card:register',
+  cardReplace: 'card:replace',
+  cardResolveScan: 'card:resolve-scan',
+  cardScanHistory: 'card:scan-history',
+  cardStudentCurrent: 'card:student-current',
+  cardUnassign: 'card:unassign',
   lessonCopyDay: 'lesson:copy-day',
   substitutionAssign: 'substitution:assign',
   contactCreate: 'student-contact:create',
@@ -373,6 +417,106 @@ export interface StudentDetail extends StudentSummary {
   attendanceHistory: StudentAttendanceHistory[];
   contacts: StudentContactSummary[];
   groups: StudentGroupMembership[];
+  nextLesson?:
+    | {
+        groupName: string;
+        id: string;
+        startsAt: string;
+      }
+    | undefined;
+}
+
+export type CardSortField = 'barcode' | 'createdAt' | 'lastScan';
+
+export interface CardListQuery {
+  branchId?: string | undefined;
+  page: number;
+  pageSize: number;
+  search?: string | undefined;
+  sortBy: CardSortField;
+  sortDirection: SortDirection;
+  status?: MembershipCardStatus | undefined;
+}
+
+export interface CardRegisterInput {
+  barcode: string;
+  notes?: string | undefined;
+}
+
+export interface CardAssignInput {
+  barcode: string;
+  notes?: string | undefined;
+  registerIfUnknown: boolean;
+  studentId: string;
+}
+
+export interface CardReplaceInput {
+  comment?: string | undefined;
+  newBarcode: string;
+  oldCardId: string;
+  oldCardStatus: 'BLOCKED' | 'LOST';
+  registerIfUnknown: boolean;
+  studentId: string;
+}
+
+export interface CardActionInput {
+  comment?: string | undefined;
+}
+
+export interface MembershipCardSummary {
+  archivedAt?: string | undefined;
+  barcode: string;
+  blockedAt?: string | undefined;
+  branchId?: string | undefined;
+  branchName?: string | undefined;
+  createdAt: string;
+  id: string;
+  issuedAt?: string | undefined;
+  lastScanAt?: string | undefined;
+  notes?: string | undefined;
+  status: MembershipCardStatus;
+  studentId?: string | undefined;
+  studentName?: string | undefined;
+  unassignedAt?: string | undefined;
+  updatedAt: string;
+}
+
+export interface CardListResult {
+  items: MembershipCardSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface CardHistorySummary {
+  comment?: string | undefined;
+  eventType: CardEventType;
+  id: string;
+  occurredAt: string;
+  performedByName?: string | undefined;
+  relatedCardId?: string | undefined;
+  relatedCardBarcode?: string | undefined;
+  studentId?: string | undefined;
+  studentName?: string | undefined;
+}
+
+export interface CardScanHistorySummary {
+  barcode: string;
+  cardId?: string | undefined;
+  id: string;
+  occurredAt: string;
+  performedByName?: string | undefined;
+  result: CardScanResult;
+  studentId?: string | undefined;
+}
+
+export interface CardScanResolution {
+  barcode: string;
+  card?: MembershipCardSummary | undefined;
+  result: CardScanResult;
+  studentId?: string | undefined;
+  studentName?: string | undefined;
 }
 
 export interface TariffInput {
@@ -1173,6 +1317,29 @@ export interface AravaDesktopApi {
     create: (token: string, input: BranchInput) => Promise<BranchSummary>;
     list: (token: string, includeArchived?: boolean) => Promise<BranchSummary[]>;
     update: (token: string, id: string, input: BranchInput) => Promise<BranchSummary>;
+  };
+  cards: {
+    archive: (token: string, id: string, input: CardActionInput) => Promise<MembershipCardSummary>;
+    assign: (token: string, input: CardAssignInput) => Promise<MembershipCardSummary>;
+    block: (token: string, id: string, input: CardActionInput) => Promise<MembershipCardSummary>;
+    find: (token: string, barcode: string) => Promise<MembershipCardSummary | undefined>;
+    history: (token: string, cardId: string) => Promise<CardHistorySummary[]>;
+    list: (token: string, query: CardListQuery) => Promise<CardListResult>;
+    markLost: (token: string, id: string, input: CardActionInput) => Promise<MembershipCardSummary>;
+    reactivate: (
+      token: string,
+      id: string,
+      input: CardActionInput,
+    ) => Promise<MembershipCardSummary>;
+    register: (token: string, input: CardRegisterInput) => Promise<MembershipCardSummary>;
+    replace: (token: string, input: CardReplaceInput) => Promise<MembershipCardSummary>;
+    resolveScan: (token: string, barcode: string) => Promise<CardScanResolution>;
+    scanHistory: (token: string, cardId?: string) => Promise<CardScanHistorySummary[]>;
+    studentCurrent: (
+      token: string,
+      studentId: string,
+    ) => Promise<MembershipCardSummary | undefined>;
+    unassign: (token: string, id: string, input: CardActionInput) => Promise<MembershipCardSummary>;
   };
   rooms: {
     archive: (token: string, id: string) => Promise<RoomSummary>;

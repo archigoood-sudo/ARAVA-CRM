@@ -4,6 +4,7 @@ import {
   ATTENDANCE_STATUSES,
   CASH_REGISTER_TYPES,
   CALENDAR_EXCEPTION_TYPES,
+  MEMBERSHIP_CARD_STATUSES,
   ENROLLMENT_STATUSES,
   EXPENSE_PAYMENT_METHODS,
   EXPENSE_STATUSES,
@@ -21,6 +22,11 @@ import {
   type BranchInput,
   type CalendarExceptionInput,
   type CalendarRangeQuery,
+  type CardActionInput,
+  type CardAssignInput,
+  type CardListQuery,
+  type CardRegisterInput,
+  type CardReplaceInput,
   type CopyDayInput,
   type AnalyticsQuery,
   type AttendanceEntryInput,
@@ -196,6 +202,48 @@ export const studentContactInputSchema: z.ZodType<StudentContactInput> = z.objec
   secondaryPhone: optionalText(40),
   telegram: optionalText(80),
   whatsapp: z.boolean(),
+});
+
+export const barcodeSchema = z
+  .string()
+  .trim()
+  .min(4, 'Штрихкод должен содержать не менее 4 символов.')
+  .max(128, 'Штрихкод слишком длинный.')
+  .regex(/^[!-~]+$/u, 'Штрихкод содержит недопустимые символы.');
+
+export const cardRegisterInputSchema: z.ZodType<CardRegisterInput> = z.object({
+  barcode: barcodeSchema,
+  notes: optionalText(2000),
+});
+
+export const cardAssignInputSchema: z.ZodType<CardAssignInput> = z.object({
+  barcode: barcodeSchema,
+  notes: optionalText(2000),
+  registerIfUnknown: z.boolean(),
+  studentId: z.string().min(1).max(100),
+});
+
+export const cardReplaceInputSchema: z.ZodType<CardReplaceInput> = z.object({
+  comment: optionalText(1000),
+  newBarcode: barcodeSchema,
+  oldCardId: z.string().min(1).max(100),
+  oldCardStatus: z.enum(['BLOCKED', 'LOST']),
+  registerIfUnknown: z.boolean(),
+  studentId: z.string().min(1).max(100),
+});
+
+export const cardActionInputSchema: z.ZodType<CardActionInput> = z.object({
+  comment: optionalText(1000),
+});
+
+export const cardListQuerySchema: z.ZodType<CardListQuery> = z.object({
+  branchId: z.string().min(1).max(100).optional(),
+  page: z.number().int().min(1).max(100_000),
+  pageSize: z.number().int().min(5).max(100),
+  search: optionalText(160),
+  sortBy: z.enum(['barcode', 'createdAt', 'lastScan']),
+  sortDirection: z.enum(['asc', 'desc']),
+  status: z.enum(MEMBERSHIP_CARD_STATUSES).optional(),
 });
 
 const optionalIdentifier = z

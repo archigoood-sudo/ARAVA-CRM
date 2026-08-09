@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  barcodeSchema,
+  cardAssignInputSchema,
   cashTransferInputSchema,
   expenseInputSchema,
   loginCredentialsSchema,
@@ -8,6 +10,25 @@ import {
   tariffInputSchema,
   weeklyScheduleInputSchema,
 } from './validation';
+
+describe('Sprint 4.1C card validation', () => {
+  it('preserves leading zeroes and trims only surrounding whitespace', () => {
+    expect(barcodeSchema.parse('  0000001001  ')).toBe('0000001001');
+    expect(
+      cardAssignInputSchema.parse({
+        barcode: '0000001001',
+        registerIfUnknown: true,
+        studentId: 'student',
+      }).barcode,
+    ).toBe('0000001001');
+  });
+
+  it('rejects empty, short and malformed barcodes', () => {
+    expect(barcodeSchema.safeParse('').success).toBe(false);
+    expect(barcodeSchema.safeParse('001').success).toBe(false);
+    expect(barcodeSchema.safeParse('0000 001').success).toBe(false);
+  });
+});
 
 describe('loginCredentialsSchema', () => {
   it('normalizes and validates valid credentials', () => {

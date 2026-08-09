@@ -21,6 +21,13 @@ async function completeTemporaryPassword(page: Page, password: string) {
   await page.getByLabel('Новый пароль', { exact: true }).fill(password);
   await page.getByLabel('Повторите новый пароль').fill(password);
   await page.getByRole('button', { name: 'Сохранить пароль и продолжить' }).click();
+  await expect(page.getByRole('link', { name: 'Главная', exact: true })).toBeVisible();
+  await page.waitForFunction(() => {
+    const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+      state?: { user?: { mustChangePassword?: boolean } };
+    };
+    return persisted.state?.user?.mustChangePassword === false;
+  });
 }
 
 async function signOut(page: Page) {
@@ -47,6 +54,25 @@ test('роли, временные пароли, отзыв сессий и ре
     const page = await application.firstWindow();
     await login(page, ownerEmail, initialPassword);
     await completeTemporaryPassword(page, ownerPassword);
+    await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const token = persisted.state?.token ?? '';
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const branch = await api.branches.create(token, { name: 'Закрытый филиал' });
+      const student = await api.students.create(token, {
+        branchId: branch.id,
+        firstName: 'Закрытая',
+        lastName: 'Ученица',
+        status: 'ACTIVE',
+      });
+      await api.cards.assign(token, {
+        barcode: '0000099999',
+        registerIfUnknown: true,
+        studentId: student.id,
+      });
+    });
 
     await page.getByRole('link', { name: 'Филиалы', exact: true }).click();
     await page.getByRole('button', { name: 'Создать филиал' }).click();
@@ -71,6 +97,22 @@ test('роли, временные пароли, отзыв сессий и ре
     await signOut(page);
     await login(page, 'admin-e2e@arava.local', adminTemporaryPassword);
     await completeTemporaryPassword(page, adminPassword);
+    const adminCardScope = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const token = persisted.state?.token ?? '';
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const listed = await api.cards.list(token, {
+        page: 1,
+        pageSize: 20,
+        sortBy: 'createdAt',
+        sortDirection: 'desc',
+      });
+      const scan = await api.cards.resolveScan(token, '0000099999');
+      return { listed: listed.items.map(({ barcode }) => barcode), result: scan.result };
+    });
+    expect(adminCardScope).toEqual({ listed: [], result: 'ACCESS_DENIED' });
     await page.getByRole('link', { name: 'Сотрудники' }).click();
     await page.getByRole('button', { name: 'Добавить сотрудника' }).click();
     const trainerDialog = page.getByRole('dialog');
@@ -92,6 +134,7 @@ test('роли, временные пароли, отзыв сессий и ре
     await expect(page.getByRole('link', { name: 'Мои ученики' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Финансы' })).toHaveCount(0);
     await expect(page.getByRole('link', { name: 'Сотрудники' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Карты', exact: true })).toHaveCount(0);
     const trainerToken = await page.evaluate(() => {
       const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
         state?: { token?: string };
@@ -115,6 +158,23 @@ test('роли, временные пароли, отзыв сессий и ре
       }
     });
     expect(backendDenied).toBe(true);
+    const cardManagementDenied = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      try {
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        await api.cards.register(persisted.state?.token ?? '', { barcode: '0000088888' });
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(cardManagementDenied).toBe(true);
+    await page.locator('main').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.type('0000099999', { delay: 5 });
+    await page.keyboard.press('Enter');
+    await expect(page.getByText('Нет доступа к клиенту этой карты')).toBeVisible();
 
     await signOut(page);
     await login(page, 'admin-e2e@arava.local', adminPassword);

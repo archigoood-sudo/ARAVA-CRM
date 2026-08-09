@@ -26,6 +26,8 @@ import {
   type SubscriptionDetail,
   type TariffSummary,
   type TemporaryPasswordResult,
+  type MembershipCardSummary,
+  type CardScanResolution,
 } from '@arava/shared';
 
 vi.mock('electron', () => ({
@@ -352,5 +354,58 @@ describe('Electron IPC boundary', () => {
     await expect(handlers[IPC_CHANNELS.auditList]?.(adminSession.token)).rejects.toThrow(
       t('domain.authorization.permissionDenied'),
     );
+  });
+
+  it('validates card IPC and keeps card permissions in the service layer', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!CardsIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Карточный филиал' });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Ирина',
+      lastName: 'Карточкина',
+      status: 'ACTIVE',
+    });
+    const coach = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'coach-card-ipc@arava.local',
+      fullName: 'Тренер карт IPC',
+      password: 'Coach!CardsIpc2026',
+      role: 'COACH',
+    });
+    const coachSession = await service.login({
+      email: coach.email,
+      password: 'Coach!CardsIpc2026',
+    });
+    await service.changePassword(coachSession.token, {
+      currentPassword: 'Coach!CardsIpc2026',
+      newPassword: 'Coach!ChangedCardsIpc2026',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() => handlers[IPC_CHANNELS.cardRegister]?.(owner.token, { barcode: '001' })).toThrow();
+    const card = (await handlers[IPC_CHANNELS.cardRegister]?.(owner.token, {
+      barcode: '0000005001',
+    })) as MembershipCardSummary;
+    expect(card).toMatchObject({ barcode: '0000005001', status: 'FREE' });
+    const assigned = (await handlers[IPC_CHANNELS.cardAssign]?.(owner.token, {
+      barcode: '0000005001',
+      registerIfUnknown: false,
+      studentId: student.id,
+    })) as MembershipCardSummary;
+    expect(assigned).toMatchObject({ status: 'ASSIGNED', studentId: student.id });
+    const scan = (await handlers[IPC_CHANNELS.cardResolveScan]?.(
+      owner.token,
+      '0000005001',
+    )) as CardScanResolution;
+    expect(scan).toMatchObject({ result: 'OPENED', studentId: student.id });
+    await expect(
+      handlers[IPC_CHANNELS.cardRegister]?.(coachSession.token, { barcode: '0000005002' }),
+    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
   });
 });
