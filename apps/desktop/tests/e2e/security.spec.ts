@@ -134,9 +134,7 @@ test('роли, временные пароли, отзыв сессий и ре
       }
     }, trainerToken);
     expect(revoked).toBe(true);
-    await resetDialog.getByRole('button', { name: 'Закрыть', exact: true }).click();
-
-    await signOut(page);
+    await expect(page.getByRole('heading', { name: 'Вход в ARAVA' })).toBeVisible();
     await login(page, ownerEmail, ownerPassword);
     await page.getByRole('link', { name: 'Настройки' }).click();
     page.once('dialog', (dialog) => dialog.accept());
