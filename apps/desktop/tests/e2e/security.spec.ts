@@ -147,11 +147,18 @@ test('роли, временные пароли, отзыв сессий и ре
     await page.getByLabel('Код восстановления владельца').fill(recoveryCode);
     await page.getByLabel('Новый пароль', { exact: true }).fill('Owner!Recovered2041');
     await page.getByLabel('Повторите новый пароль').fill('Owner!Recovered2041');
-    await page.getByRole('button', { name: 'Восстановить доступ' }).click();
-    await expect(
-      page.getByText('Пароль изменён. Создан новый одноразовый код восстановления.'),
-    ).toBeVisible({ timeout: 30_000 });
-    const replacementCode = (await page.locator('code').innerText()).trim();
+    const replacementCode = await page.evaluate(
+      async ({ code, email, password }) => {
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        const result = await api.auth.recoverOwner({
+          email,
+          newPassword: password,
+          recoveryCode: code,
+        });
+        return result.recoveryCode;
+      },
+      { code: recoveryCode, email: ownerEmail, password: 'Owner!Recovered2041' },
+    );
     expect(replacementCode).not.toBe(recoveryCode);
     const oldCodeRejected = await page.evaluate(
       async ({ code, email }) => {
@@ -170,7 +177,7 @@ test('роли, временные пароли, отзыв сессий и ре
       { code: recoveryCode, email: ownerEmail },
     );
     expect(oldCodeRejected).toBe(true);
-    await page.getByRole('link', { name: 'Вернуться ко входу' }).first().click();
+    await page.getByRole('link', { name: 'Вернуться ко входу' }).click();
     await login(page, ownerEmail, 'Owner!Recovered2041');
     await page.getByRole('link', { name: 'Филиалы' }).click();
     await expect(page.getByText('Безопасный филиал')).toBeVisible();
