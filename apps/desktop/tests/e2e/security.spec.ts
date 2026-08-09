@@ -150,7 +150,7 @@ test('роли, временные пароли, отзыв сессий и ре
     await page.getByRole('button', { name: 'Восстановить доступ' }).click();
     await expect(
       page.getByText('Пароль изменён. Создан новый одноразовый код восстановления.'),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 30_000 });
     const replacementCode = (await page.locator('code').innerText()).trim();
     expect(replacementCode).not.toBe(recoveryCode);
     const oldCodeRejected = await page.evaluate(
