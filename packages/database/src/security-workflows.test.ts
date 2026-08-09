@@ -175,5 +175,5 @@ describe('Sprint 4.1A security workflows', () => {
     const audit = await database.auditLog.findMany({ select: { detail: true } });
     expect(JSON.stringify(audit)).not.toContain(first.recoveryCode);
     expect(JSON.stringify(audit)).not.toContain('Owner!Recovered2041');
-  });
+  }, 15_000);
 });

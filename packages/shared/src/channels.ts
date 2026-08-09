@@ -78,6 +78,10 @@ export const PAYROLL_PERIOD_STATUSES = [
   'CANCELLED',
 ] as const;
 export type PayrollPeriodStatus = (typeof PAYROLL_PERIOD_STATUSES)[number];
+export const ROOM_RENTAL_STATUSES = ['ACTIVE', 'CANCELLED', 'ARCHIVED'] as const;
+export type RoomRentalStatus = (typeof ROOM_RENTAL_STATUSES)[number];
+export const CALENDAR_EXCEPTION_TYPES = ['DAY_OFF', 'HOLIDAY', 'VACATION', 'CUSTOM'] as const;
+export type CalendarExceptionType = (typeof CALENDAR_EXCEPTION_TYPES)[number];
 export const REPORT_KINDS = [
   'CASH_FLOW',
   'INCOME_EXPENSES',
@@ -91,6 +95,7 @@ export type ReportKind = (typeof REPORT_KINDS)[number];
 
 export const IPC_CHANNELS = {
   activityList: 'activity:list',
+  auditList: 'audit:list',
   authChangePassword: 'auth:change-password',
   authCompletePasswordChange: 'auth:complete-password-change',
   authLogin: 'auth:login',
@@ -101,6 +106,23 @@ export const IPC_CHANNELS = {
   branchCreate: 'branch:create',
   branchList: 'branch:list',
   branchUpdate: 'branch:update',
+  roomArchive: 'room:archive',
+  roomCreate: 'room:create',
+  roomList: 'room:list',
+  roomUpdate: 'room:update',
+  roomAvailability: 'room:availability',
+  roomUtilization: 'room:utilization',
+  rentalCancel: 'rental:cancel',
+  rentalCreate: 'rental:create',
+  rentalList: 'rental:list',
+  rentalUpdate: 'rental:update',
+  closureCreate: 'closure:create',
+  closureList: 'closure:list',
+  closurePreview: 'closure:preview',
+  calendarExceptionCreate: 'calendar-exception:create',
+  calendarExceptionList: 'calendar-exception:list',
+  lessonCopyDay: 'lesson:copy-day',
+  substitutionAssign: 'substitution:assign',
   contactCreate: 'student-contact:create',
   contactRemove: 'student-contact:remove',
   contactUpdate: 'student-contact:update',
@@ -271,13 +293,14 @@ export interface RecoveryCodeResult extends RecoveryCodeStatus {
 }
 
 export interface BranchInput {
-  address: string;
+  address?: string | undefined;
   description?: string | undefined;
   name: string;
-  phone: string;
+  phone?: string | undefined;
 }
 
 export interface BranchSummary extends BranchInput {
+  archivedAt?: string | undefined;
   createdAt: string;
   id: string;
   isActive: boolean;
@@ -835,6 +858,7 @@ export interface WeeklyScheduleInput {
   groupId: string;
   isActive: boolean;
   room?: string | undefined;
+  roomId?: string | undefined;
   startTime: string;
   validFrom: string;
   validTo?: string | undefined;
@@ -846,6 +870,7 @@ export interface WeeklyScheduleQuery {
   coachId?: string | undefined;
   groupId?: string | undefined;
   includeInactive?: boolean | undefined;
+  roomId?: string | undefined;
 }
 
 export interface WeeklyScheduleSummary extends WeeklyScheduleInput {
@@ -863,6 +888,7 @@ export interface LessonInput {
   groupId: string;
   notes?: string | undefined;
   room?: string | undefined;
+  roomId?: string | undefined;
   startsAt: string;
 }
 
@@ -872,6 +898,7 @@ export interface LessonListQuery {
   dateFrom: string;
   dateTo: string;
   groupId?: string | undefined;
+  roomId?: string | undefined;
 }
 
 export interface LessonSummary {
@@ -888,8 +915,146 @@ export interface LessonSummary {
   id: string;
   notes?: string | undefined;
   room?: string | undefined;
+  roomId?: string | undefined;
+  roomName?: string | undefined;
+  originalCoachId?: string | undefined;
+  originalCoachName?: string | undefined;
+  substituteCoachId?: string | undefined;
+  substituteCoachName?: string | undefined;
   startsAt: string;
   status: LessonStatus;
+}
+
+export interface RoomInput {
+  areaSquareMeters?: number | undefined;
+  branchId: string;
+  capacity?: number | undefined;
+  colorKey?: string | undefined;
+  description?: string | undefined;
+  floor?: string | undefined;
+  isActive: boolean;
+  name: string;
+  sortOrder: number;
+}
+
+export interface RoomSummary extends RoomInput {
+  archivedAt?: string | undefined;
+  branchName: string;
+  createdAt: string;
+  id: string;
+  nextEvent?: string | undefined;
+  updatedAt: string;
+}
+
+export interface CalendarRangeQuery {
+  branchId?: string | undefined;
+  dateFrom: string;
+  dateTo: string;
+  roomId?: string | undefined;
+}
+
+export interface RoomRentalInput {
+  amount?: number | undefined;
+  branchId: string;
+  clientName?: string | undefined;
+  comment?: string | undefined;
+  endAt: string;
+  phone?: string | undefined;
+  roomId: string;
+  startAt: string;
+}
+
+export interface RoomRentalSummary extends RoomRentalInput {
+  branchName: string;
+  createdAt: string;
+  id: string;
+  roomName: string;
+  status: RoomRentalStatus;
+  updatedAt: string;
+}
+
+export interface RoomClosureInput {
+  comment?: string | undefined;
+  endAt: string;
+  reason: string;
+  roomId: string;
+  startAt: string;
+}
+
+export interface AffectedCalendarEvent {
+  endAt: string;
+  id: string;
+  startAt: string;
+  title: string;
+  type: 'LESSON' | 'RENTAL';
+}
+
+export interface RoomClosurePreview {
+  affected: AffectedCalendarEvent[];
+  roomName: string;
+}
+
+export interface RoomClosureSummary extends RoomClosureInput {
+  branchId: string;
+  createdAt: string;
+  id: string;
+  roomName: string;
+}
+
+export interface CalendarExceptionInput {
+  branchId?: string | undefined;
+  comment?: string | undefined;
+  endAt: string;
+  startAt: string;
+  title: string;
+  type: CalendarExceptionType;
+}
+
+export interface CalendarExceptionSummary extends CalendarExceptionInput {
+  branchName?: string | undefined;
+  createdAt: string;
+  id: string;
+  updatedAt: string;
+}
+
+export interface TrainerSubstitutionInput {
+  reason?: string | undefined;
+  substituteTrainerId: string;
+}
+
+export interface TrainerSubstitutionSummary extends TrainerSubstitutionInput {
+  createdAt: string;
+  id: string;
+  lessonId: string;
+  originalTrainerId?: string | undefined;
+  originalTrainerName?: string | undefined;
+  substituteTrainerName: string;
+}
+
+export interface RoomAvailabilityInterval {
+  endAt: string;
+  kind: 'FREE' | 'LESSON' | 'RENTAL' | 'CLOSURE';
+  startAt: string;
+  title: string;
+}
+
+export interface RoomUtilization {
+  lessonHours: number;
+  lessons: number;
+  rentalHours: number;
+  rentals: number;
+  totalOccupiedHours: number;
+}
+
+export interface CopyDayInput {
+  sourceDate: string;
+  targetDate: string;
+}
+
+export interface CopyDayResult {
+  conflicts: number;
+  copied: number;
+  errors: string[];
 }
 
 export interface LessonGenerateInput {
@@ -962,6 +1127,16 @@ export interface ActivitySummary {
   createdAt: string;
 }
 
+export interface AuditLogSummary {
+  action: string;
+  actorName: string;
+  createdAt: string;
+  detail?: string | undefined;
+  entityId: string;
+  entityType: string;
+  id: string;
+}
+
 export interface SystemInformation {
   appVersion: string;
   databasePath: string;
@@ -976,6 +1151,9 @@ export interface SettingUpdate {
 }
 
 export interface AravaDesktopApi {
+  audit: {
+    list: (token: string) => Promise<AuditLogSummary[]>;
+  };
   activity: {
     list: (token: string) => Promise<ActivitySummary[]>;
   };
@@ -995,6 +1173,38 @@ export interface AravaDesktopApi {
     create: (token: string, input: BranchInput) => Promise<BranchSummary>;
     list: (token: string, includeArchived?: boolean) => Promise<BranchSummary[]>;
     update: (token: string, id: string, input: BranchInput) => Promise<BranchSummary>;
+  };
+  rooms: {
+    archive: (token: string, id: string) => Promise<RoomSummary>;
+    availability: (
+      token: string,
+      roomId: string,
+      date: string,
+    ) => Promise<RoomAvailabilityInterval[]>;
+    create: (token: string, input: RoomInput) => Promise<RoomSummary>;
+    list: (token: string, branchId?: string, includeArchived?: boolean) => Promise<RoomSummary[]>;
+    update: (token: string, id: string, input: RoomInput) => Promise<RoomSummary>;
+    utilization: (
+      token: string,
+      roomId: string,
+      dateFrom: string,
+      dateTo: string,
+    ) => Promise<RoomUtilization>;
+  };
+  rentals: {
+    cancel: (token: string, id: string) => Promise<RoomRentalSummary>;
+    create: (token: string, input: RoomRentalInput) => Promise<RoomRentalSummary>;
+    list: (token: string, query: CalendarRangeQuery) => Promise<RoomRentalSummary[]>;
+    update: (token: string, id: string, input: RoomRentalInput) => Promise<RoomRentalSummary>;
+  };
+  closures: {
+    create: (token: string, input: RoomClosureInput) => Promise<RoomClosureSummary>;
+    list: (token: string, query: CalendarRangeQuery) => Promise<RoomClosureSummary[]>;
+    preview: (token: string, input: RoomClosureInput) => Promise<RoomClosurePreview>;
+  };
+  calendarExceptions: {
+    create: (token: string, input: CalendarExceptionInput) => Promise<CalendarExceptionSummary>;
+    list: (token: string, query: CalendarRangeQuery) => Promise<CalendarExceptionSummary[]>;
   };
   contacts: {
     create: (
@@ -1042,6 +1252,12 @@ export interface AravaDesktopApi {
     get: (token: string, id: string) => Promise<LessonSummary>;
     list: (token: string, query: LessonListQuery) => Promise<LessonSummary[]>;
     update: (token: string, id: string, input: LessonInput) => Promise<LessonSummary>;
+    copyDay: (token: string, input: CopyDayInput) => Promise<CopyDayResult>;
+    assignSubstitution: (
+      token: string,
+      id: string,
+      input: TrainerSubstitutionInput,
+    ) => Promise<TrainerSubstitutionSummary>;
   };
   attendance: {
     get: (token: string, lessonId: string) => Promise<AttendanceLessonDetail>;

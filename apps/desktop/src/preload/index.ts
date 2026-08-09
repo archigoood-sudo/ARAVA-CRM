@@ -18,6 +18,7 @@ const invoke = async <Result>(channel: string, ...arguments_: unknown[]): Promis
 };
 
 const desktopApi: AravaDesktopApi = {
+  audit: { list: (token) => invoke(IPC_CHANNELS.auditList, token) },
   activity: { list: (token) => invoke(IPC_CHANNELS.activityList, token) },
   auth: {
     changePassword: (token, input) => invoke(IPC_CHANNELS.authChangePassword, token, input),
@@ -35,6 +36,32 @@ const desktopApi: AravaDesktopApi = {
     create: (token, input) => invoke(IPC_CHANNELS.branchCreate, token, input),
     list: (token, includeArchived) => invoke(IPC_CHANNELS.branchList, token, includeArchived),
     update: (token, id, input) => invoke(IPC_CHANNELS.branchUpdate, token, id, input),
+  },
+  rooms: {
+    archive: (token, id) => invoke(IPC_CHANNELS.roomArchive, token, id),
+    availability: (token, roomId, date) =>
+      invoke(IPC_CHANNELS.roomAvailability, token, roomId, date),
+    create: (token, input) => invoke(IPC_CHANNELS.roomCreate, token, input),
+    list: (token, branchId, includeArchived) =>
+      invoke(IPC_CHANNELS.roomList, token, branchId, includeArchived),
+    update: (token, id, input) => invoke(IPC_CHANNELS.roomUpdate, token, id, input),
+    utilization: (token, roomId, dateFrom, dateTo) =>
+      invoke(IPC_CHANNELS.roomUtilization, token, roomId, dateFrom, dateTo),
+  },
+  rentals: {
+    cancel: (token, id) => invoke(IPC_CHANNELS.rentalCancel, token, id),
+    create: (token, input) => invoke(IPC_CHANNELS.rentalCreate, token, input),
+    list: (token, query) => invoke(IPC_CHANNELS.rentalList, token, query),
+    update: (token, id, input) => invoke(IPC_CHANNELS.rentalUpdate, token, id, input),
+  },
+  closures: {
+    create: (token, input) => invoke(IPC_CHANNELS.closureCreate, token, input),
+    list: (token, query) => invoke(IPC_CHANNELS.closureList, token, query),
+    preview: (token, input) => invoke(IPC_CHANNELS.closurePreview, token, input),
+  },
+  calendarExceptions: {
+    create: (token, input) => invoke(IPC_CHANNELS.calendarExceptionCreate, token, input),
+    list: (token, query) => invoke(IPC_CHANNELS.calendarExceptionList, token, query),
   },
   contacts: {
     create: (token, studentId, input) =>
@@ -70,6 +97,9 @@ const desktopApi: AravaDesktopApi = {
     get: (token, id) => invoke(IPC_CHANNELS.lessonGet, token, id),
     list: (token, query) => invoke(IPC_CHANNELS.lessonList, token, query),
     update: (token, id, input) => invoke(IPC_CHANNELS.lessonUpdate, token, id, input),
+    copyDay: (token, input) => invoke(IPC_CHANNELS.lessonCopyDay, token, input),
+    assignSubstitution: (token, id, input) =>
+      invoke(IPC_CHANNELS.substitutionAssign, token, id, input),
   },
   attendance: {
     get: (token, lessonId) => invoke(IPC_CHANNELS.attendanceGet, token, lessonId),

@@ -19,6 +19,7 @@ import {
   type AuthSession,
   type BranchSummary,
   type GroupSummary,
+  type RoomSummary,
   type ExpenseCategorySummary,
   type ExpenseSummary,
   type CashRegisterSummary,
@@ -300,5 +301,56 @@ describe('Electron IPC boundary', () => {
     )) as ExpenseSummary;
     expect(confirmed.status).toBe('CONFIRMED');
     expect(await database.cashTransaction.count({ where: { sourceId: expense.id } })).toBe(1);
+  });
+
+  it('validates room IPC and keeps the global audit OWNER-only', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!Rooms2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Центр' });
+    const admin = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'admin-rooms@arava.local',
+      fullName: 'Администратор залов',
+      password: 'Admin!Rooms2026',
+      role: 'ADMIN',
+    });
+    const adminSession = await service.login({
+      email: admin.email,
+      password: 'Admin!Rooms2026',
+    });
+    await service.changePassword(adminSession.token, {
+      currentPassword: 'Admin!Rooms2026',
+      newPassword: 'Admin!ChangedRooms2026',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() =>
+      handlers[IPC_CHANNELS.roomCreate]?.(owner.token, {
+        branchId: branch.id,
+        capacity: 0,
+        isActive: true,
+        name: '',
+        sortOrder: 0,
+      }),
+    ).toThrow();
+    const room = (await handlers[IPC_CHANNELS.roomCreate]?.(owner.token, {
+      branchId: branch.id,
+      capacity: 20,
+      isActive: true,
+      name: 'Большой зал',
+      sortOrder: 1,
+    })) as RoomSummary;
+    expect(room).toMatchObject({ branchId: branch.id, name: 'Большой зал' });
+    await expect(handlers[IPC_CHANNELS.auditList]?.(owner.token)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ action: 'ROOM_CREATED' })]),
+    );
+    await expect(handlers[IPC_CHANNELS.auditList]?.(adminSession.token)).rejects.toThrow(
+      t('domain.authorization.permissionDenied'),
+    );
   });
 });

@@ -45,7 +45,7 @@ const adminPermissions: PermissionSet = {
   canManagePayroll: true,
   canViewAnalytics: true,
   canManageBackups: false,
-  canViewAuditLog: true,
+  canViewAuditLog: false,
   canResetPasswords: true,
   canManageSystemSettings: false,
 };

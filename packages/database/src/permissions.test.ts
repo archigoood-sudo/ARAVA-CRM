@@ -86,6 +86,9 @@ describe('permission matrix', () => {
     expect(hasPermission('ADMIN', 'canManageUsers')).toBe(true);
     expect(hasPermission('ADMIN', 'canManageOwners')).toBe(false);
     expect(hasPermission('ADMIN', 'canManageBackups')).toBe(false);
+    expect(hasPermission('OWNER', 'canViewAuditLog')).toBe(true);
+    expect(hasPermission('ADMIN', 'canViewAuditLog')).toBe(false);
+    expect(hasPermission('COACH', 'canViewAuditLog')).toBe(false);
     expect(hasPermission('COACH', 'canManageAttendance')).toBe(true);
     expect(hasPermission('COACH', 'canViewPayroll')).toBe(true);
     expect(hasPermission('COACH', 'canViewPayments')).toBe(false);

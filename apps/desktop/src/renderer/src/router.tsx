@@ -14,6 +14,7 @@ import { CashPage } from './features/cash/cash-page';
 import { PayrollPage } from './features/payroll/payroll-page';
 import { AnalyticsPage } from './features/analytics/analytics-page';
 import { ReportsPage } from './features/reports/reports-page';
+import { RoomsPage } from './features/rooms/rooms-page';
 import { GroupProfilePage } from './features/groups/group-profile-page';
 import { GroupsPage } from './features/groups/groups-page';
 import { LessonDetailsPage } from './features/schedule/lesson-details-page';
@@ -52,6 +53,7 @@ export const router = createHashRouter([
         children: [
           { element: <DashboardPage />, path: '/dashboard' },
           { element: <BranchesPage />, path: '/branches' },
+          { element: <RoomsPage />, path: '/rooms' },
           { element: <GroupsPage />, path: '/groups' },
           { element: <GroupProfilePage />, path: '/groups/:groupId' },
           { element: <SchedulePage />, path: '/schedule' },

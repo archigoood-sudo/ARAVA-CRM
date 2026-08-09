@@ -80,13 +80,14 @@ function userSummary(user: UserWithBranches): UserSummary {
 
 function branchSummary(branch: Branch): BranchSummary {
   return {
-    address: branch.address,
+    address: branch.address?.length ? branch.address : undefined,
+    archivedAt: branch.archivedAt?.toISOString(),
     createdAt: branch.createdAt.toISOString(),
     description: branch.description ?? undefined,
     id: branch.id,
     isActive: branch.isActive,
     name: branch.name,
-    phone: branch.phone,
+    phone: branch.phone?.length ? branch.phone : undefined,
     updatedAt: branch.updatedAt.toISOString(),
   };
 }
@@ -634,7 +635,7 @@ export class ApplicationService {
     const branches = await this.database.branch.findMany({
       orderBy: { name: 'asc' },
       where: {
-        ...(includeArchived ? {} : { isActive: true }),
+        ...(includeArchived ? {} : { archivedAt: null, isActive: true }),
         ...(ids ? { id: { in: ids } } : {}),
       },
     });
@@ -644,12 +645,24 @@ export class ApplicationService {
   async createBranch(token: string, input: BranchInput): Promise<BranchSummary> {
     const actor = await this.authenticate(token);
     assertPermission(actor, 'branches:manage');
-    const branch = await this.database.branch.create({
-      data: {
-        ...input,
-        description: optionalValue(input.description),
-        phone: normalizePhone(input.phone),
-      },
+    const branch = await this.database.$transaction(async (transaction) => {
+      const created = await transaction.branch.create({
+        data: {
+          address: input.address?.trim() ?? '',
+          description: optionalValue(input.description),
+          name: input.name.trim(),
+          phone: input.phone ? normalizePhone(input.phone) : '',
+        },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'BRANCH_CREATED',
+          actorUserId: actor.id,
+          entityId: created.id,
+          entityType: 'Branch',
+        },
+      });
+      return created;
     });
     return branchSummary(branch);
   }
@@ -658,13 +671,26 @@ export class ApplicationService {
     const actor = await this.authenticate(token);
     assertPermission(actor, 'branches:manage');
     await this.requireBranch(id);
-    const branch = await this.database.branch.update({
-      data: {
-        ...input,
-        description: optionalValue(input.description),
-        phone: normalizePhone(input.phone),
-      },
-      where: { id },
+    assertBranchAccess(actor, id);
+    const branch = await this.database.$transaction(async (transaction) => {
+      const updated = await transaction.branch.update({
+        data: {
+          address: input.address?.trim() ?? '',
+          description: optionalValue(input.description),
+          name: input.name.trim(),
+          phone: input.phone ? normalizePhone(input.phone) : '',
+        },
+        where: { id },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'BRANCH_UPDATED',
+          actorUserId: actor.id,
+          entityId: id,
+          entityType: 'Branch',
+        },
+      });
+      return updated;
     });
     return branchSummary(branch);
   }
@@ -673,8 +699,23 @@ export class ApplicationService {
     const actor = await this.authenticate(token);
     assertPermission(actor, 'branches:manage');
     await this.requireBranch(id);
+    assertBranchAccess(actor, id);
     return branchSummary(
-      await this.database.branch.update({ data: { isActive: false }, where: { id } }),
+      await this.database.$transaction(async (transaction) => {
+        const archived = await transaction.branch.update({
+          data: { archivedAt: new Date(), isActive: false },
+          where: { id },
+        });
+        await transaction.auditLog.create({
+          data: {
+            action: 'BRANCH_ARCHIVED',
+            actorUserId: actor.id,
+            entityId: id,
+            entityType: 'Branch',
+          },
+        });
+        return archived;
+      }),
     );
   }
 

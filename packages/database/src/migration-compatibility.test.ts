@@ -206,6 +206,28 @@ describe('Prisma and packaged runtime migration compatibility', () => {
         'legacy-manager',
         'existing-branch',
       );
+      await database.$executeRawUnsafe(
+        `INSERT INTO "DanceGroup" (
+          "id", "name", "branchId", "direction", "capacity", "status", "createdAt", "updatedAt"
+        ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        'existing-group',
+        'Существующая группа',
+        'existing-branch',
+        'Хип-хоп',
+        20,
+        'ACTIVE',
+      );
+      await database.$executeRawUnsafe(
+        `INSERT INTO "Lesson" (
+          "id", "groupId", "branchId", "startsAt", "endsAt", "status", "createdAt", "updatedAt"
+        ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        'existing-lesson-without-room',
+        'existing-group',
+        'existing-branch',
+        '2026-08-01T15:00:00.000Z',
+        '2026-08-01T16:00:00.000Z',
+        'COMPLETED',
+      );
       await initializeDatabase(database);
       const upgraded = await database.user.findUniqueOrThrow({
         where: { id: 'legacy-manager' },
@@ -226,6 +248,15 @@ describe('Prisma and packaged runtime migration compatibility', () => {
       ).toMatchObject({ branchId: 'existing-branch', userId: 'legacy-manager' });
       expect(await database.user.count({ where: { role: 'OWNER' } })).toBe(1);
       expect(await database.student.count()).toBe(0);
+      expect(
+        await database.lesson.findUniqueOrThrow({ where: { id: 'existing-lesson-without-room' } }),
+      ).toMatchObject({ room: null, roomId: null });
+      expect(await database.room.count()).toBe(0);
+      expect(
+        await database.branch.findUniqueOrThrow({ where: { id: 'existing-branch' } }),
+      ).toMatchObject({
+        name: 'Существующий филиал',
+      });
       expect(await database.$queryRawUnsafe(`PRAGMA integrity_check`)).toEqual([
         { integrity_check: 'ok' },
       ]);

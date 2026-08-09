@@ -1,5 +1,6 @@
 import {
   ApplicationService,
+  CalendarService,
   FinanceService,
   ManagementService,
   StudioService,
@@ -10,12 +11,15 @@ import {
 import {
   IPC_CHANNELS,
   attendanceEntriesSchema,
+  calendarExceptionInputSchema,
+  calendarRangeQuerySchema,
   analyticsQuerySchema,
   branchInputSchema,
   cashCorrectionInputSchema,
   cashRegisterInputSchema,
   cashTransactionQuerySchema,
   cashTransferInputSchema,
+  copyDayInputSchema,
   enrollmentInputSchema,
   expenseCategoryInputSchema,
   expenseInputSchema,
@@ -39,6 +43,9 @@ import {
   payrollRuleInputSchema,
   refundInputSchema,
   reportQuerySchema,
+  roomClosureInputSchema,
+  roomInputSchema,
+  roomRentalInputSchema,
   sessionTokenSchema,
   settingKeySchema,
   settingUpdateSchema,
@@ -50,17 +57,20 @@ import {
   subscriptionFreezeInputSchema,
   tariffInputSchema,
   tariffListQuerySchema,
+  trainerSubstitutionInputSchema,
   userCreateSchema,
   userUpdateSchema,
   weeklyScheduleInputSchema,
   weeklyScheduleQuerySchema,
   type ActivitySummary,
+  type AuditLogSummary,
   type DashboardStats,
   type SettingKey,
   type SystemInformation,
 } from '@arava/shared';
 import { app, ipcMain } from 'electron';
 import type { EnrollmentStatus } from '@prisma/client';
+import { z } from 'zod';
 
 type IpcHandler = (...arguments_: unknown[]) => unknown;
 const coachEnrollmentStatuses = ['ACTIVE', 'TRIAL', 'FROZEN'] satisfies EnrollmentStatus[];
@@ -73,6 +83,7 @@ export function createIpcHandlers(
   const studio = new StudioService(database, service);
   const finance = new FinanceService(database, service);
   const management = new ManagementService(database, service);
+  const calendar = new CalendarService(database, service);
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
@@ -122,6 +133,85 @@ export function createIpcHandlers(
       service.createRecoveryCode(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.userStaffOptions]: (unsafeToken) =>
       studio.listStaffOptions(sessionTokenSchema.parse(unsafeToken)),
+
+    [IPC_CHANNELS.roomList]: (unsafeToken, unsafeBranchId, unsafeIncludeArchived) =>
+      calendar.listRooms(
+        sessionTokenSchema.parse(unsafeToken),
+        unsafeBranchId === undefined ? undefined : identifierSchema.parse(unsafeBranchId),
+        unsafeIncludeArchived === true,
+      ),
+    [IPC_CHANNELS.roomCreate]: (unsafeToken, unsafeInput) =>
+      calendar.createRoom(
+        sessionTokenSchema.parse(unsafeToken),
+        roomInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.roomUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
+      calendar.updateRoom(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        roomInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.roomArchive]: (unsafeToken, unsafeId) =>
+      calendar.archiveRoom(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.roomAvailability]: (unsafeToken, unsafeRoomId, unsafeDate) =>
+      calendar.availability(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeRoomId),
+        z.string().date().parse(unsafeDate),
+      ),
+    [IPC_CHANNELS.roomUtilization]: (unsafeToken, unsafeRoomId, unsafeDateFrom, unsafeDateTo) =>
+      calendar.utilization(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeRoomId),
+        z.string().datetime({ offset: true }).parse(unsafeDateFrom),
+        z.string().datetime({ offset: true }).parse(unsafeDateTo),
+      ),
+    [IPC_CHANNELS.rentalList]: (unsafeToken, unsafeQuery) =>
+      calendar.listRentals(
+        sessionTokenSchema.parse(unsafeToken),
+        calendarRangeQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.rentalCreate]: (unsafeToken, unsafeInput) =>
+      calendar.createRental(
+        sessionTokenSchema.parse(unsafeToken),
+        roomRentalInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.rentalUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
+      calendar.updateRental(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        roomRentalInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.rentalCancel]: (unsafeToken, unsafeId) =>
+      calendar.cancelRental(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.closurePreview]: (unsafeToken, unsafeInput) =>
+      calendar.previewClosure(
+        sessionTokenSchema.parse(unsafeToken),
+        roomClosureInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.closureCreate]: (unsafeToken, unsafeInput) =>
+      calendar.createClosure(
+        sessionTokenSchema.parse(unsafeToken),
+        roomClosureInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.closureList]: (unsafeToken, unsafeQuery) =>
+      calendar.listClosures(
+        sessionTokenSchema.parse(unsafeToken),
+        calendarRangeQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.calendarExceptionCreate]: (unsafeToken, unsafeInput) =>
+      calendar.createException(
+        sessionTokenSchema.parse(unsafeToken),
+        calendarExceptionInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.calendarExceptionList]: (unsafeToken, unsafeQuery) =>
+      calendar.listExceptions(
+        sessionTokenSchema.parse(unsafeToken),
+        calendarRangeQuerySchema.parse(unsafeQuery),
+      ),
 
     [IPC_CHANNELS.groupList]: (unsafeToken, unsafeQuery) =>
       studio.listGroups(
@@ -206,6 +296,17 @@ export function createIpcHandlers(
       studio.generateLessons(
         sessionTokenSchema.parse(unsafeToken),
         lessonGenerateInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.lessonCopyDay]: (unsafeToken, unsafeInput) =>
+      calendar.copyDay(
+        sessionTokenSchema.parse(unsafeToken),
+        copyDayInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.substitutionAssign]: (unsafeToken, unsafeId, unsafeInput) =>
+      calendar.assignSubstitution(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        trainerSubstitutionInputSchema.parse(unsafeInput),
       ),
 
     [IPC_CHANNELS.attendanceGet]: (unsafeToken, unsafeLessonId) =>
@@ -726,6 +827,24 @@ export function createIpcHandlers(
         detail: event.detail,
         id: event.id,
         title: event.title,
+      }));
+    },
+    [IPC_CHANNELS.auditList]: async (unsafeToken): Promise<AuditLogSummary[]> => {
+      const actor = await service.authenticate(sessionTokenSchema.parse(unsafeToken));
+      assertCapability(actor, 'canViewAuditLog');
+      const entries = await database.auditLog.findMany({
+        include: { actor: { select: { fullName: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+      });
+      return entries.map((entry) => ({
+        action: entry.action,
+        actorName: entry.actor.fullName,
+        createdAt: entry.createdAt.toISOString(),
+        detail: entry.detail ?? undefined,
+        entityId: entry.entityId,
+        entityType: entry.entityType,
+        id: entry.id,
       }));
     },
 

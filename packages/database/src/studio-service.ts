@@ -37,10 +37,10 @@ import {
   isoWeekday,
   scheduleWindowsOverlap,
   startOfLocalDay,
-  timeRangesOverlap,
 } from './schedule';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
+import { CalendarService } from './calendar-service';
 import {
   applyAttendanceWriteOff,
   reverseAttendanceWriteOffs,
@@ -63,6 +63,7 @@ const scheduleInclude = {
   branch: { select: { name: true } },
   coach: { select: { fullName: true } },
   group: { select: { name: true } },
+  roomEntity: { select: { name: true } },
 } satisfies Prisma.WeeklyScheduleInclude;
 
 const lessonInclude = {
@@ -77,6 +78,13 @@ const lessonInclude = {
       assistantCoachId: true,
       coachId: true,
       name: true,
+    },
+  },
+  roomEntity: { select: { name: true } },
+  substitution: {
+    include: {
+      originalTrainer: { select: { fullName: true } },
+      substituteTrainer: { select: { fullName: true } },
     },
   },
 } satisfies Prisma.LessonInclude;
@@ -149,7 +157,8 @@ function scheduleSummary(schedule: ScheduleRecord): WeeklyScheduleSummary {
     groupName: schedule.group.name,
     id: schedule.id,
     isActive: schedule.isActive,
-    room: schedule.room ?? undefined,
+    room: schedule.roomEntity?.name ?? schedule.room ?? undefined,
+    roomId: schedule.roomId ?? undefined,
     startTime: schedule.startTime,
     updatedAt: schedule.updatedAt.toISOString(),
     validFrom: schedule.validFrom.toISOString().slice(0, 10),
@@ -173,6 +182,12 @@ function lessonSummary(lesson: LessonRecord): LessonSummary {
     id: lesson.id,
     notes: lesson.notes ?? undefined,
     room: lesson.room ?? undefined,
+    roomId: lesson.roomId ?? undefined,
+    roomName: lesson.roomEntity?.name,
+    originalCoachId: lesson.substitution?.originalTrainerId ?? undefined,
+    originalCoachName: lesson.substitution?.originalTrainer?.fullName,
+    substituteCoachId: lesson.substitution?.substituteTrainerId,
+    substituteCoachName: lesson.substitution?.substituteTrainer.fullName,
     startsAt: lesson.startsAt.toISOString(),
     status: lesson.status,
   };
@@ -207,10 +222,14 @@ function enrollmentSummary(
 }
 
 export class StudioService {
+  private readonly calendar: CalendarService;
+
   constructor(
     private readonly database: DatabaseClient,
     private readonly application: ApplicationService,
-  ) {}
+  ) {
+    this.calendar = new CalendarService(database, application);
+  }
 
   async listStaffOptions(token: string): Promise<StaffOption[]> {
     const actor = await this.application.authenticate(token);
@@ -449,6 +468,7 @@ export class StudioService {
           : {}),
         ...(query.coachId ? { coachId: query.coachId } : {}),
         ...(query.groupId ? { groupId: query.groupId } : {}),
+        ...(query.roomId ? { roomId: query.roomId } : {}),
         ...(query.includeInactive ? {} : { isActive: true }),
       },
     });
@@ -525,6 +545,7 @@ export class StudioService {
           : {}),
         ...(query.coachId ? { coachId: query.coachId } : {}),
         ...(query.groupId ? { groupId: query.groupId } : {}),
+        ...(query.roomId ? { roomId: query.roomId } : {}),
       },
     });
     return lessons.map(lessonSummary);
@@ -543,7 +564,8 @@ export class StudioService {
     const actor = await this.manageBranch(token, group.branchId, 'lessons:manage');
     if (group.archivedAt) throw new DomainError('VALIDATION', t('domain.validation.groupArchived'));
     await this.validateCoachForBranch(input.coachId, group.branchId);
-    await this.assertLessonNoConflict(input, group.branchId);
+    await this.validateRoomForBranch(input.roomId, group.branchId);
+    await this.assertLessonNoConflict(input);
     try {
       const lesson = await this.database.lesson.create({
         data: this.lessonData(input, group.branchId),
@@ -567,7 +589,8 @@ export class StudioService {
     assertBranchAccess(actor, group.branchId);
     if (group.archivedAt) throw new DomainError('VALIDATION', t('domain.validation.groupArchived'));
     await this.validateCoachForBranch(input.coachId, group.branchId);
-    await this.assertLessonNoConflict(input, group.branchId, id);
+    await this.validateRoomForBranch(input.roomId, group.branchId);
+    await this.assertLessonNoConflict(input, id);
     const moved =
       current.startsAt.toISOString() !== new Date(input.startsAt).toISOString() ||
       current.endsAt.toISOString() !== new Date(input.endsAt).toISOString();
@@ -635,6 +658,17 @@ export class StudioService {
           (schedule.validTo && startsAt > endOfLocalDay(schedule.validTo))
         )
           continue;
+        const exception = await this.database.calendarException.findFirst({
+          where: {
+            OR: [{ branchId: null }, { branchId: schedule.branchId }],
+            startAt: { lte: startsAt },
+            endAt: { gt: startsAt },
+          },
+        });
+        if (exception) {
+          skipped += 1;
+          continue;
+        }
         const exists = await this.database.lesson.findUnique({
           where: { groupId_startsAt: { groupId: schedule.groupId, startsAt } },
         });
@@ -642,13 +676,30 @@ export class StudioService {
           skipped += 1;
           continue;
         }
+        const endsAt = combineLocalDateAndTime(day, schedule.endTime);
+        try {
+          await this.calendar.assertEventAvailable({
+            ...(schedule.coachId ? { coachId: schedule.coachId } : {}),
+            endAt: endsAt,
+            groupId: schedule.groupId,
+            ...(schedule.roomId ? { roomId: schedule.roomId } : {}),
+            startAt: startsAt,
+          });
+        } catch (error) {
+          if (error instanceof DomainError && error.code === 'CONFLICT') {
+            skipped += 1;
+            continue;
+          }
+          throw error;
+        }
         await this.database.lesson.create({
           data: {
             branchId: schedule.branchId,
             coachId: schedule.coachId,
-            endsAt: combineLocalDateAndTime(day, schedule.endTime),
+            endsAt,
             groupId: schedule.groupId,
             room: schedule.room,
+            roomId: schedule.roomId,
             scheduleTemplateId: schedule.id,
             startsAt,
           },
@@ -840,6 +891,7 @@ export class StudioService {
       groupId: input.groupId,
       isActive: input.isActive,
       room: optionalValue(input.room),
+      roomId: input.roomId ?? null,
       startTime: input.startTime,
       validFrom: dateOnly(input.validFrom),
       validTo: input.validTo ? dateOnly(input.validTo) : null,
@@ -853,6 +905,7 @@ export class StudioService {
       throw new DomainError('VALIDATION', t('domain.validation.scheduleBranch'));
     if (group.archivedAt) throw new DomainError('VALIDATION', t('domain.validation.groupArchived'));
     await this.validateCoachForBranch(input.coachId, input.branchId);
+    await this.validateRoomForBranch(input.roomId, input.branchId);
     const candidate = {
       endTime: input.endTime,
       startTime: input.startTime,
@@ -868,16 +921,62 @@ export class StudioService {
         OR: [
           ...(input.coachId ? [{ coachId: input.coachId }] : []),
           ...(input.room ? [{ branchId: input.branchId, room: input.room.trim() }] : []),
+          ...(input.roomId ? [{ roomId: input.roomId }] : []),
+          { groupId: input.groupId },
         ],
       },
     });
     const conflict = possible.find((schedule) => scheduleWindowsOverlap(candidate, schedule));
     if (conflict) {
       const resource =
-        input.coachId && conflict.coachId === input.coachId
-          ? t('schedule.conflict.coach')
-          : t('schedule.conflict.room');
+        conflict.groupId === input.groupId
+          ? 'группа'
+          : input.coachId && conflict.coachId === input.coachId
+            ? t('schedule.conflict.coach')
+            : t('schedule.conflict.room');
       throw new DomainError('CONFLICT', t('domain.conflict.schedule', { resource }));
+    }
+    if (input.roomId) {
+      const rangeStart = candidate.validFrom;
+      const rangeEnd = candidate.validTo ?? new Date(rangeStart.getTime() + 366 * 86_400_000);
+      const [rentals, closures] = await Promise.all([
+        this.database.roomRental.findMany({
+          where: {
+            endAt: { gt: rangeStart },
+            roomId: input.roomId,
+            startAt: { lt: rangeEnd },
+            status: 'ACTIVE',
+          },
+        }),
+        this.database.roomClosure.findMany({
+          where: {
+            endAt: { gt: rangeStart },
+            roomId: input.roomId,
+            startAt: { lt: rangeEnd },
+          },
+        }),
+      ]);
+      const conflictsWithOccurrence = (startAt: Date, endAt: Date) => {
+        const startTime = startAt.toLocaleTimeString('ru-RU', {
+          hour: '2-digit',
+          hour12: false,
+          minute: '2-digit',
+        });
+        const endTime = endAt.toLocaleTimeString('ru-RU', {
+          hour: '2-digit',
+          hour12: false,
+          minute: '2-digit',
+        });
+        return (
+          isoWeekday(startAt) === input.weekday &&
+          input.startTime < endTime &&
+          startTime < input.endTime
+        );
+      };
+      if (rentals.some(({ endAt, startAt }) => conflictsWithOccurrence(startAt, endAt)))
+        throw new DomainError('CONFLICT', 'В одну из дат зал занят арендой.');
+      if (closures.some(({ endAt, startAt }) => conflictsWithOccurrence(startAt, endAt)))
+        throw new DomainError('CONFLICT', 'В одну из дат зал временно закрыт.');
     }
   }
 
@@ -889,40 +988,22 @@ export class StudioService {
       groupId: input.groupId,
       notes: optionalValue(input.notes),
       room: optionalValue(input.room),
+      roomId: input.roomId ?? null,
       startsAt: new Date(input.startsAt),
     };
   }
 
-  private async assertLessonNoConflict(
-    input: LessonInput,
-    branchId: string,
-    excludeId?: string,
-  ): Promise<void> {
+  private async assertLessonNoConflict(input: LessonInput, excludeId?: string): Promise<void> {
     const startsAt = new Date(input.startsAt);
     const endsAt = new Date(input.endsAt);
-    const possible = await this.database.lesson.findMany({
-      where: {
-        ...(excludeId ? { id: { not: excludeId } } : {}),
-        status: { not: 'CANCELLED' },
-        startsAt: { lt: endsAt },
-        endsAt: { gt: startsAt },
-        OR: [
-          ...(input.coachId ? [{ coachId: input.coachId }] : []),
-          ...(input.room ? [{ branchId, room: input.room.trim() }] : []),
-        ],
-      },
+    await this.calendar.assertEventAvailable({
+      ...(input.coachId ? { coachId: input.coachId } : {}),
+      endAt: endsAt,
+      ...(excludeId ? { excludeLessonId: excludeId } : {}),
+      groupId: input.groupId,
+      ...(input.roomId ? { roomId: input.roomId } : {}),
+      startAt: startsAt,
     });
-    if (
-      possible.some((lesson) =>
-        timeRangesOverlap(
-          startsAt.toISOString(),
-          endsAt.toISOString(),
-          lesson.startsAt.toISOString(),
-          lesson.endsAt.toISOString(),
-        ),
-      )
-    )
-      throw new DomainError('CONFLICT', t('domain.conflict.lessonResource'));
   }
 
   private async groupAttendancePercentages(ids: string[]): Promise<Map<string, number>> {
@@ -958,6 +1039,14 @@ export class StudioService {
       },
     });
     if (!coach) throw new DomainError('VALIDATION', t('domain.validation.coachBranch'));
+  }
+
+  private async validateRoomForBranch(roomId: string | undefined, branchId: string): Promise<void> {
+    if (!roomId) return;
+    const room = await this.database.room.findFirst({
+      where: { archivedAt: null, branchId, id: roomId, isActive: true },
+    });
+    if (!room) throw new DomainError('VALIDATION', 'Выбранный зал недоступен в этом филиале.');
   }
 
   private async audit(

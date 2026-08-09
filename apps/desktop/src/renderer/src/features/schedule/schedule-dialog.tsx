@@ -5,12 +5,13 @@ import {
   weeklyScheduleInputSchema,
   type BranchSummary,
   type GroupSummary,
+  type RoomSummary,
   type StaffOption,
   type WeeklyScheduleInput,
   type WeeklyScheduleSummary,
 } from '@arava/shared';
 import { Button, Dialog, Input, Label, Select } from '@arava/ui';
-import { useLayoutEffect } from 'react';
+import { useEffect, useLayoutEffect } from 'react';
 import { useForm } from 'react-hook-form';
 
 export function ScheduleDialog({
@@ -20,6 +21,7 @@ export function ScheduleDialog({
   onClose,
   onSubmit,
   open,
+  rooms,
   schedule,
   staff,
 }: {
@@ -29,6 +31,7 @@ export function ScheduleDialog({
   onClose: () => void;
   onSubmit: (input: WeeklyScheduleInput) => Promise<void>;
   open: boolean;
+  rooms: RoomSummary[];
   schedule: WeeklyScheduleSummary | null;
   staff: StaffOption[];
 }) {
@@ -37,9 +40,18 @@ export function ScheduleDialog({
     handleSubmit,
     register,
     reset,
+    setValue,
     watch,
   } = useForm<WeeklyScheduleInput>({ resolver: zodResolver(weeklyScheduleInputSchema) });
   const branchId = watch('branchId');
+  const groupId = watch('groupId');
+  const roomId = watch('roomId');
+  const selectedGroup = groups.find((group) => group.id === groupId);
+  const selectedRoom = rooms.find((room) => room.id === roomId);
+  useEffect(() => {
+    if (roomId && !rooms.some((room) => room.id === roomId && room.branchId === branchId))
+      setValue('roomId', undefined);
+  }, [branchId, roomId, rooms, setValue]);
   useLayoutEffect(() => {
     if (open)
       reset(
@@ -49,7 +61,7 @@ export function ScheduleDialog({
           endTime: '19:00',
           groupId: '',
           isActive: true,
-          room: '',
+          roomId: undefined,
           startTime: '18:00',
           validFrom: new Date().toISOString().slice(0, 10),
           weekday: 1,
@@ -112,10 +124,27 @@ export function ScheduleDialog({
         <Field error={errors.endTime?.message} label={t('schedule.endTime')}>
           <Input type="time" {...register('endTime')} />
         </Field>
-        <Field label={t('schedule.room')}>
-          <Input {...register('room')} />
+        <Field label="Зал">
+          <Select {...register('roomId')}>
+            <option value="">Зал не указан</option>
+            {rooms
+              .filter((room) => room.branchId === branchId)
+              .map((room) => (
+                <option key={room.id} value={room.id}>
+                  {room.name}
+                </option>
+              ))}
+          </Select>
         </Field>
         <span />
+        {selectedGroup &&
+        selectedRoom?.capacity &&
+        selectedGroup.studentCount > selectedRoom.capacity ? (
+          <p className="col-span-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+            В группе {selectedGroup.studentCount} учеников, вместимость зала —{' '}
+            {selectedRoom.capacity}. Сохранение разрешено после проверки.
+          </p>
+        ) : null}
         <Field label={t('schedule.validFrom')}>
           <Input type="date" {...register('validFrom')} />
         </Field>

@@ -3,10 +3,11 @@ import {
   type GroupSummary,
   type LessonInput,
   type LessonSummary,
+  type RoomSummary,
   type StaffOption,
 } from '@arava/shared';
 import { Button, Dialog, Input, Label, Select, Textarea } from '@arava/ui';
-import { useLayoutEffect } from 'react';
+import { useEffect, useLayoutEffect } from 'react';
 import { useForm } from 'react-hook-form';
 
 function localDateTime(value: string): string {
@@ -21,6 +22,7 @@ interface LessonForm {
   groupId: string;
   notes?: string | undefined;
   room?: string | undefined;
+  roomId?: string | undefined;
   startsAt: string;
 }
 
@@ -31,6 +33,7 @@ export function LessonDialog({
   onClose,
   onSubmit,
   open,
+  rooms,
   staff,
 }: {
   error?: string | undefined;
@@ -39,6 +42,7 @@ export function LessonDialog({
   onClose: () => void;
   onSubmit: (input: LessonInput) => Promise<void>;
   open: boolean;
+  rooms: RoomSummary[];
   staff: StaffOption[];
 }) {
   const {
@@ -46,7 +50,18 @@ export function LessonDialog({
     handleSubmit,
     register,
     reset,
+    setValue,
+    watch,
   } = useForm<LessonForm>();
+  const groupId = watch('groupId');
+  const roomId = watch('roomId');
+  const branchId = groups.find((group) => group.id === groupId)?.branchId;
+  const selectedGroup = groups.find((group) => group.id === groupId);
+  const selectedRoom = rooms.find((room) => room.id === roomId);
+  useEffect(() => {
+    if (roomId && !rooms.some((room) => room.id === roomId && room.branchId === branchId))
+      setValue('roomId', undefined);
+  }, [branchId, roomId, rooms, setValue]);
   useLayoutEffect(() => {
     if (!open) return;
     const start = new Date();
@@ -61,6 +76,7 @@ export function LessonDialog({
             groupId: lesson.groupId,
             notes: lesson.notes,
             room: lesson.room,
+            roomId: lesson.roomId,
             startsAt: localDateTime(lesson.startsAt),
           }
         : {
@@ -87,6 +103,7 @@ export function LessonDialog({
             endsAt: new Date(value.endsAt).toISOString(),
             notes: value.notes?.length ? value.notes : undefined,
             room: value.room?.length ? value.room : undefined,
+            roomId: value.roomId?.length ? value.roomId : undefined,
             startsAt: new Date(value.startsAt).toISOString(),
           }),
         )}
@@ -116,10 +133,27 @@ export function LessonDialog({
         <Field label={t('lesson.end')}>
           <Input required type="datetime-local" {...register('endsAt')} />
         </Field>
-        <Field label={t('lesson.room')}>
-          <Input {...register('room')} />
+        <Field label="Зал">
+          <Select {...register('roomId')}>
+            <option value="">Зал не указан</option>
+            {rooms
+              .filter((room) => room.branchId === branchId)
+              .map((room) => (
+                <option key={room.id} value={room.id}>
+                  {room.name}
+                </option>
+              ))}
+          </Select>
         </Field>
         <span />
+        {selectedGroup &&
+        selectedRoom?.capacity &&
+        selectedGroup.studentCount > selectedRoom.capacity ? (
+          <p className="col-span-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+            В группе {selectedGroup.studentCount} учеников, вместимость зала —{' '}
+            {selectedRoom.capacity}. Можно продолжить после проверки.
+          </p>
+        ) : null}
         <div className="col-span-2">
           <Field label={t('lesson.notes')}>
             <Textarea {...register('notes')} />

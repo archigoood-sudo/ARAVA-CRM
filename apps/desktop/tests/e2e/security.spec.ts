@@ -46,7 +46,7 @@ test('роли, временные пароли, отзыв сессий и ре
     await login(page, ownerEmail, initialPassword);
     await completeTemporaryPassword(page, ownerPassword);
 
-    await page.getByRole('link', { name: 'Филиалы' }).click();
+    await page.getByRole('link', { name: 'Филиалы', exact: true }).click();
     await page.getByRole('button', { name: 'Создать филиал' }).click();
     const branchDialog = page.getByRole('dialog');
     await branchDialog.getByLabel('Название филиала').fill('Безопасный филиал');
@@ -182,7 +182,7 @@ test('роли, временные пароли, отзыв сессий и ре
     });
     await expect(page.getByRole('heading', { name: 'Вход в ARAVA' })).toBeVisible();
     await login(page, ownerEmail, 'Owner!Recovered2041');
-    await page.getByRole('link', { name: 'Филиалы' }).click({ timeout: 30_000 });
+    await page.getByRole('link', { name: 'Филиалы', exact: true }).click({ timeout: 30_000 });
     await expect(page.getByText('Безопасный филиал')).toBeVisible();
   } finally {
     await application.close();

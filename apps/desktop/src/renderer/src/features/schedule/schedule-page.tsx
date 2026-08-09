@@ -22,6 +22,8 @@ import {
   Select,
   StatusBadge,
   WeekCalendar,
+  Dialog,
+  Label,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -32,6 +34,10 @@ import {
   Pencil,
   Plus,
   UserRoundCheck,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  PartyPopper,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -44,12 +50,14 @@ import { LessonDialog } from './lesson-dialog';
 import { ScheduleDialog } from './schedule-dialog';
 
 const isoDate = (date: Date) => date.toISOString().slice(0, 10);
-function calendarRange(view: 'day' | 'week'): LessonListQuery {
-  const from = new Date();
+function calendarRange(view: 'day' | 'month' | 'week', selectedDate: string): LessonListQuery {
+  const from = new Date(`${selectedDate}T12:00:00`);
   from.setHours(0, 0, 0, 0);
   if (view === 'week') from.setDate(from.getDate() - ((from.getDay() || 7) - 1));
+  if (view === 'month') from.setDate(1);
   const to = new Date(from);
   if (view === 'week') to.setDate(to.getDate() + 6);
+  if (view === 'month') to.setMonth(to.getMonth() + 1, 0);
   to.setHours(23, 59, 59, 999);
   return { dateFrom: from.toISOString(), dateTo: to.toISOString() };
 }
@@ -60,7 +68,15 @@ export function SchedulePage() {
   const navigate = useNavigate();
   const client = useQueryClient();
   const [filter, setFilter] = useState<WeeklyScheduleQuery>({});
-  const [calendarView, setCalendarView] = useState<'day' | 'week'>('week');
+  const [calendarView, setCalendarView] = useState<'day' | 'month' | 'week'>('week');
+  const [selectedDate, setSelectedDate] = useState(isoDate(new Date()));
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [exceptionOpen, setExceptionOpen] = useState(false);
+  const [copyTarget, setCopyTarget] = useState(isoDate(new Date(Date.now() + 86_400_000)));
+  const [exceptionTitle, setExceptionTitle] = useState('Праздничный день');
+  const [exceptionType, setExceptionType] = useState<'CUSTOM' | 'DAY_OFF' | 'HOLIDAY' | 'VACATION'>(
+    'HOLIDAY',
+  );
   const [scheduleDialog, setScheduleDialog] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<WeeklyScheduleSummary | null>(null);
   const [lessonDialog, setLessonDialog] = useState(false);
@@ -71,8 +87,14 @@ export function SchedulePage() {
     dateTo: isoDate(new Date(Date.now() + 30 * 86_400_000)),
   });
   const lessonQuery = useMemo(
-    () => ({ ...calendarRange(calendarView), branchId: filter.branchId, coachId: filter.coachId }),
-    [calendarView, filter.branchId, filter.coachId],
+    () => ({
+      ...calendarRange(calendarView, selectedDate),
+      branchId: filter.branchId,
+      coachId: filter.coachId,
+      groupId: filter.groupId,
+      roomId: filter.roomId,
+    }),
+    [calendarView, filter.branchId, filter.coachId, filter.groupId, filter.roomId, selectedDate],
   );
   const schedules = useQuery({
     queryFn: () => getDesktopApi().schedules.list(getSessionToken(), filter),
@@ -93,6 +115,28 @@ export function SchedulePage() {
   const staff = useQuery({
     queryFn: () => getDesktopApi().users.staffOptions(getSessionToken()),
     queryKey: queryKeys.staffOptions,
+  });
+  const rooms = useQuery({
+    queryFn: () => getDesktopApi().rooms.list(getSessionToken()),
+    queryKey: ['rooms'],
+  });
+  const calendarEventsQuery = useMemo(
+    () => ({
+      branchId: filter.branchId,
+      dateFrom: lessonQuery.dateFrom,
+      dateTo: lessonQuery.dateTo,
+      roomId: filter.roomId,
+    }),
+    [filter.branchId, filter.roomId, lessonQuery.dateFrom, lessonQuery.dateTo],
+  );
+  const rentals = useQuery({
+    queryFn: () => getDesktopApi().rentals.list(getSessionToken(), calendarEventsQuery),
+    queryKey: ['rentals', calendarEventsQuery],
+    enabled: user?.role !== 'COACH',
+  });
+  const closures = useQuery({
+    queryFn: () => getDesktopApi().closures.list(getSessionToken(), calendarEventsQuery),
+    queryKey: ['closures', calendarEventsQuery],
   });
   const saveSchedule = useMutation({
     mutationFn: (input: WeeklyScheduleInput) =>
@@ -176,6 +220,42 @@ export function SchedulePage() {
         title={t('schedule.pageTitle')}
       />
       <Card className="mb-5 flex flex-wrap items-center gap-3 p-4">
+        <Button
+          aria-label="Предыдущий период"
+          onClick={() => {
+            const value = new Date(`${selectedDate}T12:00:00`);
+            if (calendarView === 'month') value.setMonth(value.getMonth() - 1);
+            else value.setDate(value.getDate() - (calendarView === 'week' ? 7 : 1));
+            setSelectedDate(isoDate(value));
+          }}
+          size="icon"
+          variant="outline"
+        >
+          <ChevronLeft className="size-4" />
+        </Button>
+        <Button onClick={() => setSelectedDate(isoDate(new Date()))} variant="outline">
+          Сегодня
+        </Button>
+        <Input
+          aria-label="Дата календаря"
+          className="w-40"
+          onChange={(event) => setSelectedDate(event.target.value)}
+          type="date"
+          value={selectedDate}
+        />
+        <Button
+          aria-label="Следующий период"
+          onClick={() => {
+            const value = new Date(`${selectedDate}T12:00:00`);
+            if (calendarView === 'month') value.setMonth(value.getMonth() + 1);
+            else value.setDate(value.getDate() + (calendarView === 'week' ? 7 : 1));
+            setSelectedDate(isoDate(value));
+          }}
+          size="icon"
+          variant="outline"
+        >
+          <ChevronRight className="size-4" />
+        </Button>
         <Select
           onChange={(event) =>
             setFilter((value) => ({ ...value, branchId: event.target.value || undefined }))
@@ -187,6 +267,36 @@ export function SchedulePage() {
               {branch.name}
             </option>
           ))}
+        </Select>
+        <Select
+          onChange={(event) =>
+            setFilter((value) => ({ ...value, roomId: event.target.value || undefined }))
+          }
+          value={filter.roomId ?? ''}
+        >
+          <option value="">Все залы</option>
+          {rooms.data
+            ?.filter((room) => !filter.branchId || room.branchId === filter.branchId)
+            .map((room) => (
+              <option key={room.id} value={room.id}>
+                {room.name}
+              </option>
+            ))}
+        </Select>
+        <Select
+          onChange={(event) =>
+            setFilter((value) => ({ ...value, groupId: event.target.value || undefined }))
+          }
+          value={filter.groupId ?? ''}
+        >
+          <option value="">Все группы</option>
+          {groups.data
+            ?.filter((group) => !filter.branchId || group.branchId === filter.branchId)
+            .map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
         </Select>
         <Select
           onChange={(event) =>
@@ -227,6 +337,14 @@ export function SchedulePage() {
             >
               <CheckCheck className="size-4" />
               {t('schedule.action.generate')}
+            </Button>
+            <Button onClick={() => setCopyOpen(true)} variant="outline">
+              <Copy className="size-4" />
+              Копировать день
+            </Button>
+            <Button onClick={() => setExceptionOpen(true)} variant="outline">
+              <PartyPopper className="size-4" />
+              Исключение
             </Button>
           </>
         ) : null}
@@ -298,19 +416,19 @@ export function SchedulePage() {
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle>{t('lesson.details')}</CardTitle>
           <div className="flex rounded-xl bg-muted p-1">
-            {(['day', 'week'] as const).map((view) => (
+            {(['day', 'week', 'month'] as const).map((view) => (
               <button
                 className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${calendarView === view ? 'bg-surface shadow-sm' : 'text-muted-foreground'}`}
                 key={view}
                 onClick={() => setCalendarView(view)}
                 type="button"
               >
-                {t(view === 'day' ? 'schedule.view.day' : 'schedule.view.week')}
+                {view === 'day' ? 'День' : view === 'week' ? 'Неделя' : 'Месяц'}
               </button>
             ))}
           </div>
         </CardHeader>
-        <CardContent className="grid grid-cols-2 gap-3">
+        <CardContent className="grid grid-cols-1 gap-3 xl:grid-cols-2">
           {lessons.data?.map((lesson) => (
             <article
               className="flex items-center gap-4 rounded-2xl border border-border bg-background p-4"
@@ -329,7 +447,7 @@ export function SchedulePage() {
                     hour: '2-digit',
                     minute: '2-digit',
                   })}{' '}
-                  · {lesson.room ?? t('common.notSpecified')}
+                  · {lesson.roomName ?? lesson.room ?? 'Зал не указан'}
                 </p>
               </div>
               <div className="flex flex-col items-end gap-2 text-right">
@@ -354,6 +472,62 @@ export function SchedulePage() {
               </div>
             </article>
           ))}
+          {rentals.data?.map((rental) => (
+            <article
+              className="rounded-2xl border border-violet-200 bg-violet-50 p-4"
+              key={rental.id}
+            >
+              <p className="text-xs font-semibold uppercase tracking-wider text-violet-700">
+                Аренда зала
+              </p>
+              <p className="mt-2 font-semibold">
+                {rental.roomName}
+                {rental.clientName ? ` · ${rental.clientName}` : ''}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {formatDate(rental.startAt, {
+                  day: 'numeric',
+                  month: 'long',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </p>
+              {canManage && rental.status === 'ACTIVE' ? (
+                <Button
+                  className="mt-3"
+                  onClick={async () => {
+                    await getDesktopApi().rentals.cancel(getSessionToken(), rental.id);
+                    await client.invalidateQueries({ queryKey: ['rentals'] });
+                  }}
+                  size="small"
+                  variant="outline"
+                >
+                  Отменить аренду
+                </Button>
+              ) : null}
+            </article>
+          ))}
+          {closures.data?.map((closure) => (
+            <article
+              className="rounded-2xl border border-amber-200 bg-amber-50 p-4"
+              key={closure.id}
+            >
+              <p className="text-xs font-semibold uppercase tracking-wider text-amber-700">
+                Зал закрыт
+              </p>
+              <p className="mt-2 font-semibold">
+                {closure.roomName} · {closure.reason}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {formatDate(closure.startAt, {
+                  day: 'numeric',
+                  month: 'long',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </p>
+            </article>
+          ))}
         </CardContent>
       </Card>
       <ScheduleDialog
@@ -363,6 +537,7 @@ export function SchedulePage() {
         onClose={() => setScheduleDialog(false)}
         onSubmit={submitSchedule}
         open={scheduleDialog}
+        rooms={rooms.data ?? []}
         schedule={editingSchedule}
         staff={staff.data ?? []}
       />
@@ -373,8 +548,102 @@ export function SchedulePage() {
         onClose={() => setLessonDialog(false)}
         onSubmit={submitLesson}
         open={lessonDialog}
+        rooms={rooms.data ?? []}
         staff={staff.data ?? []}
       />
+      <Dialog
+        closeLabel="Закрыть"
+        onClose={() => setCopyOpen(false)}
+        open={copyOpen}
+        title="Копировать расписание дня"
+      >
+        <div className="space-y-4">
+          <div>
+            <Label>Дата назначения</Label>
+            <Input
+              className="mt-2"
+              onChange={(event) => setCopyTarget(event.target.value)}
+              type="date"
+              value={copyTarget}
+            />
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button onClick={() => setCopyOpen(false)} variant="outline">
+              Отмена
+            </Button>
+            <Button
+              onClick={async () => {
+                const result = await getDesktopApi().lessons.copyDay(getSessionToken(), {
+                  sourceDate: selectedDate,
+                  targetDate: copyTarget,
+                });
+                setMessage(
+                  `Скопировано: ${String(result.copied)}. Конфликты: ${String(result.conflicts)}.`,
+                );
+                await client.invalidateQueries({ queryKey: ['lessons'] });
+                setCopyOpen(false);
+              }}
+            >
+              Копировать
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+      <Dialog
+        closeLabel="Закрыть"
+        onClose={() => setExceptionOpen(false)}
+        open={exceptionOpen}
+        title="Исключение календаря"
+      >
+        <div className="space-y-4">
+          <div>
+            <Label>Название</Label>
+            <Input
+              className="mt-2"
+              onChange={(event) => setExceptionTitle(event.target.value)}
+              value={exceptionTitle}
+            />
+          </div>
+          <div>
+            <Label>Тип исключения</Label>
+            <Select
+              className="mt-2"
+              onChange={(event) => setExceptionType(event.target.value as typeof exceptionType)}
+              value={exceptionType}
+            >
+              <option value="HOLIDAY">Праздничный день</option>
+              <option value="DAY_OFF">Выходной день</option>
+              <option value="VACATION">Каникулы</option>
+              <option value="CUSTOM">Особый период</option>
+            </Select>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            На выбранную дату новые занятия по шаблонам создаваться не будут.
+          </p>
+          <div className="flex justify-end gap-3">
+            <Button onClick={() => setExceptionOpen(false)} variant="outline">
+              Отмена
+            </Button>
+            <Button
+              onClick={async () => {
+                const start = new Date(`${selectedDate}T00:00:00`);
+                const end = new Date(`${selectedDate}T23:59:59.999`);
+                await getDesktopApi().calendarExceptions.create(getSessionToken(), {
+                  ...(filter.branchId ? { branchId: filter.branchId } : {}),
+                  endAt: end.toISOString(),
+                  startAt: start.toISOString(),
+                  title: exceptionTitle,
+                  type: exceptionType,
+                });
+                setMessage('Исключение календаря создано.');
+                setExceptionOpen(false);
+              }}
+            >
+              Создать
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </main>
   );
 }

@@ -108,6 +108,7 @@ export { ApplicationService, isBranchVisibleToUser } from './services';
 export { StudioService } from './studio-service';
 export { FinanceService } from './finance-service';
 export { ManagementService } from './management-service';
+export { CalendarService } from './calendar-service';
 export {
   addDays,
   applyAttendanceWriteOff,

@@ -11,7 +11,15 @@ import {
   StatusBadge,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Ban, CalendarClock, MapPin, Pencil, UserRoundCheck } from 'lucide-react';
+import {
+  ArrowLeft,
+  Ban,
+  CalendarClock,
+  MapPin,
+  Pencil,
+  Repeat2,
+  UserRoundCheck,
+} from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
@@ -29,6 +37,8 @@ export function LessonDetailsPage() {
   const [edit, setEdit] = useState(false);
   const [cancel, setCancel] = useState(false);
   const [reason, setReason] = useState('');
+  const [substitution, setSubstitution] = useState(false);
+  const [substituteId, setSubstituteId] = useState('');
   const lesson = useQuery({
     queryFn: () => getDesktopApi().lessons.get(getSessionToken(), lessonId),
     queryKey: queryKeys.lesson(lessonId),
@@ -40,6 +50,10 @@ export function LessonDetailsPage() {
   const staff = useQuery({
     queryFn: () => getDesktopApi().users.staffOptions(getSessionToken()),
     queryKey: queryKeys.staffOptions,
+  });
+  const rooms = useQuery({
+    queryFn: () => getDesktopApi().rooms.list(getSessionToken()),
+    queryKey: ['rooms'],
   });
   const update = useMutation({
     mutationFn: (input: LessonInput) =>
@@ -102,8 +116,14 @@ export function LessonDetailsPage() {
             label={t('lesson.end')}
             value={formatDate(detail.endsAt, { dateStyle: 'long', timeStyle: 'short' })}
           />
-          <Info label={t('lesson.coach')} value={detail.coachName ?? t('group.noCoach')} />
-          <Info label={t('lesson.room')} value={detail.room ?? t('common.notSpecified')} />
+          <Info
+            label={detail.substituteCoachName ? 'Заменяющий тренер' : t('lesson.coach')}
+            value={detail.substituteCoachName ?? detail.coachName ?? t('group.noCoach')}
+          />
+          <Info
+            label={t('lesson.room')}
+            value={detail.roomName ?? detail.room ?? 'Зал не указан'}
+          />
           <div className="col-span-2 mt-4 flex gap-3">
             <Button onClick={() => navigate(`/attendance/${detail.id}`)}>
               <UserRoundCheck className="size-4" />
@@ -118,6 +138,10 @@ export function LessonDetailsPage() {
                 <Button onClick={() => setCancel(true)} variant="outline">
                   <Ban className="size-4" />
                   {t('lesson.action.cancel')}
+                </Button>
+                <Button onClick={() => setSubstitution(true)} variant="outline">
+                  <Repeat2 className="size-4" />
+                  Назначить замену
                 </Button>
               </>
             ) : null}
@@ -134,6 +158,7 @@ export function LessonDetailsPage() {
           setEdit(false);
         }}
         open={edit}
+        rooms={rooms.data ?? []}
         staff={staff.data ?? []}
       />
       <Dialog
@@ -158,6 +183,49 @@ export function LessonDetailsPage() {
               }}
             >
               {t('lesson.action.cancel')}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+      <Dialog
+        closeLabel="Закрыть"
+        onClose={() => setSubstitution(false)}
+        open={substitution}
+        title="Назначить замену"
+      >
+        <div className="space-y-4">
+          <div>
+            <Label>Заменяющий тренер</Label>
+            <select
+              className="mt-2 h-11 w-full rounded-xl border border-border bg-surface px-3"
+              onChange={(event) => setSubstituteId(event.target.value)}
+              value={substituteId}
+            >
+              <option value="">Выберите тренера</option>
+              {staff.data
+                ?.filter((coach) => coach.id !== detail.coachId)
+                .map((coach) => (
+                  <option key={coach.id} value={coach.id}>
+                    {coach.fullName}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button onClick={() => setSubstitution(false)} variant="outline">
+              Отмена
+            </Button>
+            <Button
+              disabled={!substituteId}
+              onClick={async () => {
+                await getDesktopApi().lessons.assignSubstitution(getSessionToken(), lessonId, {
+                  substituteTrainerId: substituteId,
+                });
+                await refresh();
+                setSubstitution(false);
+              }}
+            >
+              Назначить замену
             </Button>
           </div>
         </div>

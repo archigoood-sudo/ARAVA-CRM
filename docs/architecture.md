@@ -38,6 +38,10 @@ Tariffs, subscriptions, payments, refunds, and finance metrics follow the same m
 
 Enrolments and lessons are historical records. Removing a participant sets a departure date and status, while group removal archives the group. A unique group/start-time key makes lesson generation idempotent. Attendance uses a lesson/student composite key so immediate saves are atomic upserts rather than duplicate records.
 
+Sprint 4.1B calendar operations are isolated in `CalendarService`. Rooms are branch-owned resources and are archived rather than deleted. Existing schedule and lesson rows retain their legacy nullable room label, while new records may also reference a nullable `Room`; this preserves historical databases without inventing assignments. Resource conflicts use half-open intervals (`start < otherEnd && end > otherStart`), so adjacent events are valid. Lessons, active rentals, and closures share the same room-availability checks. Trainer and group overlaps are enforced independently of rooms, which permits simultaneous lessons in different rooms. Calendar queries are date-range scoped and indexed by resource and start time.
+
+Trainer substitution changes the actual lesson coach and appends an audit record while retaining the original coach in `TrainerSubstitution`. Payroll therefore attributes a completed lesson to the trainer who actually taught it, without double-paying the original trainer. Global audit retrieval is capability-protected and remains OWNER-only; ADMIN actions are still recorded.
+
 ## Configuration and observability
 
 Runtime configuration is parsed at startup. `electron-log` writes `arava-crm.log` beneath Electron's standard logs directory and mirrors development messages to the console. Secrets must never be logged or stored in renderer persistence.

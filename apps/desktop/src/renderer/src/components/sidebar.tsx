@@ -9,6 +9,7 @@ import {
   CircleDollarSign,
   FileSpreadsheet,
   FolderTree,
+  DoorOpen,
   HandCoins,
   WalletCards,
   Settings,
@@ -53,7 +54,12 @@ export function Sidebar() {
       label: user?.role === 'COACH' ? 'Моя зарплата' : 'Зарплата',
       to: '/payroll',
     },
-    ...(!trainer ? [{ icon: Building2, label: t('nav.branches'), to: '/branches' }] : []),
+    ...(!trainer
+      ? [
+          { icon: Building2, label: t('nav.branches'), to: '/branches' },
+          { icon: DoorOpen, label: 'Филиалы и залы', to: '/rooms' },
+        ]
+      : []),
     ...(user?.permissions.canManageUsers
       ? [{ icon: ShieldCheck, label: t('nav.users'), to: '/users' }]
       : []),

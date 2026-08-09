@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   ATTENDANCE_STATUSES,
   CASH_REGISTER_TYPES,
+  CALENDAR_EXCEPTION_TYPES,
   ENROLLMENT_STATUSES,
   EXPENSE_PAYMENT_METHODS,
   EXPENSE_STATUSES,
@@ -18,6 +19,9 @@ import {
   TARIFF_TYPES,
   USER_ROLES,
   type BranchInput,
+  type CalendarExceptionInput,
+  type CalendarRangeQuery,
+  type CopyDayInput,
   type AnalyticsQuery,
   type AttendanceEntryInput,
   type EnrollmentInput,
@@ -34,6 +38,10 @@ import {
   type LessonGenerateInput,
   type LessonInput,
   type LessonListQuery,
+  type RoomClosureInput,
+  type RoomInput,
+  type RoomRentalInput,
+  type TrainerSubstitutionInput,
   type LoginCredentials,
   type ForcedPasswordChangeInput,
   type OwnerRecoveryInput,
@@ -137,10 +145,10 @@ export const userUpdateSchema: z.ZodType<UserUpdateInput> = z.object({
 });
 
 export const branchInputSchema: z.ZodType<BranchInput> = z.object({
-  address: z.string().trim().min(2, t('validation.required')).max(240),
+  address: optionalText(240),
   description: optionalText(1000),
   name: z.string().trim().min(2, t('validation.required')).max(120),
-  phone: z.string().trim().min(5, t('validation.phone')).max(40),
+  phone: optionalText(40),
 });
 
 export const studentInputSchema: z.ZodType<StudentInput> = z.object({
@@ -255,6 +263,7 @@ export const weeklyScheduleInputSchema: z.ZodType<WeeklyScheduleInput> = z
     groupId: z.string().min(1).max(100),
     isActive: z.boolean(),
     room: optionalText(120),
+    roomId: optionalIdentifier,
     startTime: clockTime,
     validFrom: isoDate,
     validTo: optionalIsoDate,
@@ -274,6 +283,7 @@ export const weeklyScheduleQuerySchema: z.ZodType<WeeklyScheduleQuery> = z.objec
   coachId: optionalIdentifier,
   groupId: optionalIdentifier,
   includeInactive: z.boolean().optional(),
+  roomId: optionalIdentifier,
 });
 
 export const lessonInputSchema: z.ZodType<LessonInput> = z
@@ -283,6 +293,7 @@ export const lessonInputSchema: z.ZodType<LessonInput> = z
     groupId: z.string().min(1).max(100),
     notes: optionalText(2000),
     room: optionalText(120),
+    roomId: optionalIdentifier,
     startsAt: isoDateTime,
   })
   .refine((input) => input.startsAt < input.endsAt, {
@@ -297,10 +308,90 @@ export const lessonListQuerySchema: z.ZodType<LessonListQuery> = z
     dateFrom: isoDateTime,
     dateTo: isoDateTime,
     groupId: optionalIdentifier,
+    roomId: optionalIdentifier,
   })
   .refine((input) => input.dateFrom <= input.dateTo, {
     message: t('validation.dateRange'),
     path: ['dateTo'],
+  });
+
+export const roomInputSchema: z.ZodType<RoomInput> = z.object({
+  areaSquareMeters: z.number().positive().max(10000).optional(),
+  branchId: z.string().min(1).max(100),
+  capacity: z.number().int().positive().max(10000).optional(),
+  colorKey: optionalText(40),
+  description: optionalText(2000),
+  floor: optionalText(40),
+  isActive: z.boolean(),
+  name: z.string().trim().min(1, t('validation.required')).max(120),
+  sortOrder: z.number().int().min(0).max(10000),
+});
+
+export const calendarRangeQuerySchema: z.ZodType<CalendarRangeQuery> = z
+  .object({
+    branchId: optionalIdentifier,
+    dateFrom: isoDateTime,
+    dateTo: isoDateTime,
+    roomId: optionalIdentifier,
+  })
+  .refine((input) => input.dateFrom < input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
+
+export const roomRentalInputSchema: z.ZodType<RoomRentalInput> = z
+  .object({
+    amount: z.number().int().nonnegative().optional(),
+    branchId: z.string().min(1).max(100),
+    clientName: optionalText(160),
+    comment: optionalText(2000),
+    endAt: isoDateTime,
+    phone: optionalText(40),
+    roomId: z.string().min(1).max(100),
+    startAt: isoDateTime,
+  })
+  .refine((input) => input.startAt < input.endAt, {
+    message: t('validation.timeRange'),
+    path: ['endAt'],
+  });
+
+export const roomClosureInputSchema: z.ZodType<RoomClosureInput> = z
+  .object({
+    comment: optionalText(2000),
+    endAt: isoDateTime,
+    reason: z.string().trim().min(2, t('validation.required')).max(240),
+    roomId: z.string().min(1).max(100),
+    startAt: isoDateTime,
+  })
+  .refine((input) => input.startAt < input.endAt, {
+    message: t('validation.timeRange'),
+    path: ['endAt'],
+  });
+
+export const calendarExceptionInputSchema: z.ZodType<CalendarExceptionInput> = z
+  .object({
+    branchId: optionalIdentifier,
+    comment: optionalText(2000),
+    endAt: isoDateTime,
+    startAt: isoDateTime,
+    title: z.string().trim().min(2, t('validation.required')).max(160),
+    type: z.enum(CALENDAR_EXCEPTION_TYPES),
+  })
+  .refine((input) => input.startAt < input.endAt, {
+    message: t('validation.dateRange'),
+    path: ['endAt'],
+  });
+
+export const trainerSubstitutionInputSchema: z.ZodType<TrainerSubstitutionInput> = z.object({
+  reason: optionalText(500),
+  substituteTrainerId: z.string().min(1).max(100),
+});
+
+export const copyDayInputSchema: z.ZodType<CopyDayInput> = z
+  .object({ sourceDate: isoDate, targetDate: isoDate })
+  .refine((input) => input.sourceDate !== input.targetDate, {
+    message: 'Даты копирования должны отличаться.',
+    path: ['targetDate'],
   });
 
 export const lessonGenerateInputSchema: z.ZodType<LessonGenerateInput> = z

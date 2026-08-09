@@ -146,6 +146,19 @@ enum PayrollPeriodStatus {
   CANCELLED
 }
 
+enum RoomRentalStatus {
+  ACTIVE
+  CANCELLED
+  ARCHIVED
+}
+
+enum CalendarExceptionType {
+  DAY_OFF
+  HOLIDAY
+  VACATION
+  CUSTOM
+}
+
 model User {
   id                   String               @id @default(cuid())
   email                String               @unique
@@ -183,6 +196,11 @@ model User {
   createdPayrolls      PayrollPeriod[]      @relation("PayrollCreator")
   approvedPayrolls     PayrollPeriod[]      @relation("PayrollApprover")
   payrollAccruals      PayrollAccrual[]     @relation("PayrollAccrualCoach")
+  createdRoomRentals   RoomRental[]         @relation("RoomRentalCreator")
+  createdRoomClosures  RoomClosure[]        @relation("RoomClosureCreator")
+  createdSubstitutions TrainerSubstitution[] @relation("SubstitutionCreator")
+  substitutedLessons   TrainerSubstitution[] @relation("SubstituteTrainer")
+  originalSubstitutions TrainerSubstitution[] @relation("OriginalTrainer")
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
 
@@ -208,8 +226,8 @@ model Session {
 model Branch {
   id                String            @id @default(cuid())
   name              String
-  address           String
-  phone             String
+  address           String?
+  phone             String?
   description       String?
   isActive          Boolean           @default(true)
   users             UserBranch[]
@@ -227,11 +245,41 @@ model Branch {
   payrollRules      PayrollRule[]
   payrollPeriods    PayrollPeriod[]
   payrollAccruals   PayrollAccrual[]
+  rooms             Room[]
+  roomRentals       RoomRental[]
+  calendarExceptions CalendarException[]
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
+  archivedAt        DateTime?
 
   @@index([name])
   @@index([isActive])
+  @@index([archivedAt])
+}
+
+model Room {
+  id               String           @id @default(cuid())
+  branchId         String
+  branch           Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  name             String
+  capacity         Int?
+  description      String?
+  floor            String?
+  areaSquareMeters Float?
+  colorKey         String?
+  isActive         Boolean          @default(true)
+  archivedAt       DateTime?
+  sortOrder        Int              @default(0)
+  schedules        WeeklySchedule[]
+  lessons          Lesson[]
+  rentals          RoomRental[]
+  closures         RoomClosure[]
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([branchId, name])
+  @@index([branchId, isActive, sortOrder])
+  @@index([archivedAt])
 }
 
 model UserBranch {
@@ -334,6 +382,8 @@ model WeeklySchedule {
   startTime String
   endTime   String
   room      String?
+  roomId    String?
+  roomEntity Room?      @relation(fields: [roomId], references: [id], onDelete: SetNull)
   coachId   String?
   coach     User?      @relation("ScheduleCoach", fields: [coachId], references: [id], onDelete: SetNull)
   validFrom DateTime
@@ -347,6 +397,7 @@ model WeeklySchedule {
   @@index([groupId, isActive])
   @@index([coachId, weekday, isActive])
   @@index([room, weekday, isActive])
+  @@index([roomId, weekday, isActive])
 }
 
 model Lesson {
@@ -362,12 +413,15 @@ model Lesson {
   startsAt           DateTime
   endsAt             DateTime
   room               String?
+  roomId             String?
+  roomEntity         Room?                @relation(fields: [roomId], references: [id], onDelete: SetNull)
   status             LessonStatus         @default(PLANNED)
   cancellationReason String?
   notes              String?
   attendance         Attendance[]
   ledgerEntries      SubscriptionLedger[]
   payrollAccruals    PayrollAccrual[]
+  substitution       TrainerSubstitution?
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
 
@@ -376,6 +430,78 @@ model Lesson {
   @@index([coachId, startsAt])
   @@index([scheduleTemplateId])
   @@index([status, startsAt])
+  @@index([roomId, startsAt])
+  @@index([groupId, startsAt])
+}
+
+model RoomRental {
+  id              String           @id @default(cuid())
+  branchId        String
+  branch          Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  roomId          String
+  room            Room             @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  startAt         DateTime
+  endAt           DateTime
+  clientName      String?
+  phone           String?
+  amount          Int?
+  comment         String?
+  status          RoomRentalStatus @default(ACTIVE)
+  createdByUserId String
+  createdByUser   User             @relation("RoomRentalCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([branchId, startAt])
+  @@index([roomId, startAt, endAt])
+  @@index([status, startAt])
+}
+
+model RoomClosure {
+  id              String   @id @default(cuid())
+  roomId          String
+  room            Room     @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  startAt         DateTime
+  endAt           DateTime
+  reason          String
+  comment         String?
+  createdByUserId String
+  createdByUser   User     @relation("RoomClosureCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt       DateTime @default(now())
+
+  @@index([roomId, startAt, endAt])
+}
+
+model CalendarException {
+  id        String                @id @default(cuid())
+  branchId  String?
+  branch    Branch?               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  startAt   DateTime
+  endAt     DateTime
+  type      CalendarExceptionType
+  title     String
+  comment   String?
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  @@index([branchId, startAt, endAt])
+  @@index([type, startAt])
+}
+
+model TrainerSubstitution {
+  id                  String   @id @default(cuid())
+  lessonId            String   @unique
+  lesson              Lesson   @relation(fields: [lessonId], references: [id], onDelete: Restrict)
+  originalTrainerId   String?
+  originalTrainer     User?    @relation("OriginalTrainer", fields: [originalTrainerId], references: [id], onDelete: SetNull)
+  substituteTrainerId String
+  substituteTrainer   User     @relation("SubstituteTrainer", fields: [substituteTrainerId], references: [id], onDelete: Restrict)
+  reason              String?
+  createdByUserId     String
+  createdByUser       User     @relation("SubstitutionCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt           DateTime @default(now())
+
+  @@index([substituteTrainerId, createdAt])
 }
 
 model Attendance {

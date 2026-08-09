@@ -37,7 +37,7 @@ test('вход, создание филиала, ученика и контак�
       }),
     ).toBeVisible();
 
-    await window.getByRole('link', { name: 'Филиалы' }).click();
+    await window.getByRole('link', { name: 'Филиалы', exact: true }).click();
     await window.getByRole('button', { name: 'Создать филиал' }).click();
     const branchDialog = window.getByRole('dialog');
     await branchDialog.getByLabel('Название филиала').fill('Центральный филиал');
@@ -45,6 +45,14 @@ test('вход, создание филиала, ученика и контак�
     await branchDialog.getByLabel('Телефон').fill('+7 (999) 123-45-67');
     await branchDialog.getByRole('button', { name: 'Создать филиал' }).click();
     await expect(window.getByText('Центральный филиал')).toBeVisible();
+
+    await window.getByRole('link', { name: 'Филиалы и залы' }).click();
+    await window.getByRole('button', { name: 'Добавить зал' }).click();
+    const roomDialog = window.getByRole('dialog');
+    await roomDialog.locator('input').nth(0).fill('Зал E2E');
+    await roomDialog.locator('input').nth(1).fill('20');
+    await roomDialog.getByRole('button', { name: 'Сохранить' }).click();
+    await expect(window.getByText('Зал E2E')).toBeVisible();
 
     await window.getByRole('link', { name: 'Ученики' }).click();
     await window.getByRole('button', { name: 'Добавить ученика' }).click();
@@ -117,9 +125,9 @@ test('вход, создание филиала, ученика и контак�
       .locator('select')
       .nth(2)
       .selectOption(String(new Date().getDay() || 7));
-    await scheduleDialog.locator('input[type="text"]').fill('Зал E2E');
+    await scheduleDialog.locator('select').nth(4).selectOption({ label: 'Зал E2E' });
     await scheduleDialog.getByRole('button', { name: 'Сохранить расписание' }).click();
-    await expect(window.getByText('Импульс E2E').first()).toBeVisible();
+    await expect(scheduleDialog).not.toBeVisible();
     await window.getByRole('button', { name: 'Создать занятия' }).click();
     await expect(window.getByText(/Создано занятий:/u)).toBeVisible();
     await window.getByRole('button', { name: 'Открыть посещаемость' }).first().click();
