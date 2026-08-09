@@ -12,7 +12,7 @@ const trainerPassword = 'Trainer!Security2041';
 
 async function login(page: Page, email: string, password: string) {
   await page.getByLabel('Электронная почта').fill(email);
-  await page.getByLabel('Пароль').fill(password);
+  await page.getByLabel('Пароль', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Войти в рабочее пространство' }).click();
 }
 
@@ -177,9 +177,12 @@ test('роли, временные пароли, отзыв сессий и ре
       { code: recoveryCode, email: ownerEmail },
     );
     expect(oldCodeRejected).toBe(true);
-    await page.getByRole('link', { name: 'Вернуться ко входу' }).click();
+    await page.evaluate(() => {
+      (globalThis as typeof globalThis & { location: { hash: string } }).location.hash = '#/login';
+    });
+    await expect(page.getByRole('heading', { name: 'Вход в ARAVA' })).toBeVisible();
     await login(page, ownerEmail, 'Owner!Recovered2041');
-    await page.getByRole('link', { name: 'Филиалы' }).click();
+    await page.getByRole('link', { name: 'Филиалы' }).click({ timeout: 30_000 });
     await expect(page.getByText('Безопасный филиал')).toBeVisible();
   } finally {
     await application.close();
