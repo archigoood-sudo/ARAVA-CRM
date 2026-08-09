@@ -5,6 +5,12 @@ import {
   ChevronRight,
   LayoutDashboard,
   Landmark,
+  BarChart3,
+  CircleDollarSign,
+  FileSpreadsheet,
+  FolderTree,
+  HandCoins,
+  WalletCards,
   Settings,
   Shapes,
   ShieldCheck,
@@ -21,17 +27,34 @@ import { BrandMark } from './brand-mark';
 
 export function Sidebar() {
   const user = useAuthStore((state) => state.user);
+  const trainer = user?.role === 'COACH';
   const navigation = [
     { icon: LayoutDashboard, label: t('nav.dashboard'), to: '/dashboard' },
-    { icon: UsersRound, label: t('nav.students'), to: '/students' },
-    { icon: Shapes, label: t('nav.groups'), to: '/groups' },
-    { icon: CalendarDays, label: t('nav.schedule'), to: '/schedule' },
-    { icon: Tags, label: t('nav.tariffs'), to: '/tariffs' },
-    ...(user?.role !== 'COACH'
-      ? [{ icon: Landmark, label: t('nav.finance'), to: '/finance' }]
+    { icon: UsersRound, label: trainer ? t('nav.myStudents') : t('nav.students'), to: '/students' },
+    { icon: Shapes, label: trainer ? t('nav.myGroups') : t('nav.groups'), to: '/groups' },
+    {
+      icon: CalendarDays,
+      label: trainer ? t('nav.mySchedule') : t('nav.schedule'),
+      to: '/schedule',
+    },
+    ...(!trainer ? [{ icon: Tags, label: t('nav.tariffs'), to: '/tariffs' }] : []),
+    ...(user?.permissions.canViewPayments
+      ? [
+          { icon: Landmark, label: t('nav.finance'), to: '/finance' },
+          { icon: CircleDollarSign, label: 'Расходы', to: '/expenses' },
+          { icon: FolderTree, label: 'Категории расходов', to: '/expense-categories' },
+          { icon: WalletCards, label: 'Кассы и счета', to: '/cash' },
+          { icon: BarChart3, label: 'Аналитика', to: '/analytics' },
+          { icon: FileSpreadsheet, label: 'Отчёты', to: '/reports' },
+        ]
       : []),
-    { icon: Building2, label: t('nav.branches'), to: '/branches' },
-    ...(user?.role === 'OWNER' || user?.role === 'ADMIN'
+    {
+      icon: HandCoins,
+      label: user?.role === 'COACH' ? 'Моя зарплата' : 'Зарплата',
+      to: '/payroll',
+    },
+    ...(!trainer ? [{ icon: Building2, label: t('nav.branches'), to: '/branches' }] : []),
+    ...(user?.permissions.canManageUsers
       ? [{ icon: ShieldCheck, label: t('nav.users'), to: '/users' }]
       : []),
   ];

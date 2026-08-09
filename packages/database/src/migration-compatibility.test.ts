@@ -46,11 +46,14 @@ interface SqliteName {
   name: string;
 }
 
-async function applyCheckedInMigrations(database: DatabaseClient): Promise<void> {
+async function applyCheckedInMigrations(
+  database: DatabaseClient,
+  maximumMigration = '99999999999999',
+): Promise<void> {
   await database.$connect();
   const migrationsPath = resolve(import.meta.dirname, '../prisma/migrations');
   const directories = (await readdir(migrationsPath, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() && entry.name <= maximumMigration)
     .map((entry) => entry.name)
     .sort();
   for (const directory of directories) {
@@ -138,6 +141,96 @@ describe('Prisma and packaged runtime migration compatibility', () => {
       expect(await structure(runtimeDatabase)).toEqual(await structure(prismaDatabase));
     } finally {
       await Promise.all([closeDatabase(prismaDatabase), closeDatabase(runtimeDatabase)]);
+    }
+  }, 30_000);
+
+  it('upgrades a Sprint 4 database in place and migrates legacy managers to ADMIN', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'arava-upgrade-'));
+    directories.push(directory);
+    const database = createDatabaseClient(toSqliteUrl(join(directory, 'database.db')));
+    try {
+      await applyCheckedInMigrations(database, '20260807000000_sprint_4');
+      await database.$executeRawUnsafe(
+        `CREATE TABLE "_AppMigration" (
+          "id" TEXT NOT NULL PRIMARY KEY,
+          "appliedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )`,
+      );
+      for (const id of [
+        '20260803000000_initial',
+        '20260804000000_sprint_1',
+        '20260805000000_sprint_2',
+        '20260806000000_sprint_3',
+        '20260807000000_sprint_4',
+      ]) {
+        await database.$executeRawUnsafe('INSERT INTO "_AppMigration" ("id") VALUES (?)', id);
+      }
+      await database.$executeRawUnsafe(
+        `INSERT INTO "User" (
+          "id", "email", "fullName", "passwordHash", "role", "isActive",
+          "mustChangePassword", "createdAt", "updatedAt"
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        'legacy-manager',
+        'legacy@arava.local',
+        'Существующий управляющий',
+        'existing-secure-hash',
+        'BRANCH_MANAGER',
+        true,
+        false,
+      );
+      await database.$executeRawUnsafe(
+        `INSERT INTO "User" (
+          "id", "email", "fullName", "passwordHash", "role", "isActive",
+          "mustChangePassword", "createdAt", "updatedAt"
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        'existing-owner',
+        'owner-existing@arava.local',
+        'Существующий владелец',
+        'owner-secure-hash',
+        'OWNER',
+        true,
+        false,
+      );
+      await database.$executeRawUnsafe(
+        `INSERT INTO "Branch" (
+          "id", "name", "address", "phone", "isActive", "createdAt", "updatedAt"
+        ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        'existing-branch',
+        'Существующий филиал',
+        'Существующий адрес',
+        '+79990000000',
+        true,
+      );
+      await database.$executeRawUnsafe(
+        'INSERT INTO "UserBranch" ("userId", "branchId") VALUES (?, ?)',
+        'legacy-manager',
+        'existing-branch',
+      );
+      await initializeDatabase(database);
+      const upgraded = await database.user.findUniqueOrThrow({
+        where: { id: 'legacy-manager' },
+      });
+      expect(upgraded).toMatchObject({
+        email: 'legacy@arava.local',
+        failedLoginAttempts: 0,
+        role: 'ADMIN',
+        securityVersion: 1,
+      });
+      expect(upgraded.passwordHash).toBe('existing-secure-hash');
+      expect(
+        await database.userBranch.findUniqueOrThrow({
+          where: {
+            userId_branchId: { branchId: 'existing-branch', userId: 'legacy-manager' },
+          },
+        }),
+      ).toMatchObject({ branchId: 'existing-branch', userId: 'legacy-manager' });
+      expect(await database.user.count({ where: { role: 'OWNER' } })).toBe(1);
+      expect(await database.student.count()).toBe(0);
+      expect(await database.$queryRawUnsafe(`PRAGMA integrity_check`)).toEqual([
+        { integrity_check: 'ok' },
+      ]);
+    } finally {
+      await closeDatabase(database);
     }
   }, 30_000);
 });

@@ -15,7 +15,6 @@ import { Controller, useForm } from 'react-hook-form';
 
 const roleLabels: Record<UserRole, string> = {
   ADMIN: t('role.ADMIN'),
-  BRANCH_MANAGER: t('role.BRANCH_MANAGER'),
   COACH: t('role.COACH'),
   OWNER: t('role.OWNER'),
 };
@@ -25,7 +24,7 @@ interface UserFormValues {
   email: string;
   fullName: string;
   isActive: boolean;
-  password: string;
+  phone: string;
   role: UserRole;
 }
 
@@ -62,13 +61,13 @@ export function UserDialog({
       email: '',
       fullName: '',
       isActive: true,
-      password: '',
+      phone: '',
       role: 'COACH',
     },
   });
   const wasOpen = useRef(false);
   const selectedRole = watch('role');
-  const scopedRole = selectedRole === 'BRANCH_MANAGER' || selectedRole === 'COACH';
+  const scopedRole = selectedRole === 'ADMIN' || selectedRole === 'COACH';
 
   useLayoutEffect(() => {
     if (open && !wasOpen.current) {
@@ -79,7 +78,7 @@ export function UserDialog({
               email: user.email,
               fullName: user.fullName,
               isActive: user.isActive,
-              password: '',
+              phone: user.phone ?? '',
               role: user.role,
             }
           : {
@@ -87,7 +86,7 @@ export function UserDialog({
               email: '',
               fullName: '',
               isActive: true,
-              password: '',
+              phone: '',
               role: 'COACH',
             },
       );
@@ -102,6 +101,7 @@ export function UserDialog({
         branchIds,
         fullName: values.fullName,
         isActive: values.isActive,
+        phone: values.phone,
         role: values.role,
       });
       if (!result.success) {
@@ -114,7 +114,7 @@ export function UserDialog({
         branchIds,
         email: values.email,
         fullName: values.fullName,
-        password: values.password,
+        phone: values.phone,
         role: values.role,
       });
       if (!result.success) {
@@ -125,7 +125,7 @@ export function UserDialog({
     }
   });
 
-  const roleOptions = USER_ROLES.filter((role) => actorRole === 'OWNER' || role !== 'OWNER');
+  const roleOptions = USER_ROLES.filter((role) => actorRole === 'OWNER' || role === 'COACH');
   return (
     <Dialog
       closeLabel={t('common.closeDialog')}
@@ -163,17 +163,10 @@ export function UserDialog({
             {...register('email', { required: !user })}
           />
         </div>
-        {!user ? (
-          <div className="space-y-2">
-            <Label htmlFor="user-password">{t('user.temporaryPassword')}</Label>
-            <Input
-              id="user-password"
-              type="password"
-              {...register('password', { required: true })}
-            />
-            <p className="text-xs text-muted-foreground">{t('user.temporaryPasswordHint')}</p>
-          </div>
-        ) : null}
+        <div className="space-y-2">
+          <Label htmlFor="user-phone">{t('common.phone')}</Label>
+          <Input id="user-phone" type="tel" {...register('phone')} />
+        </div>
         {scopedRole ? (
           <fieldset className="space-y-2 rounded-2xl border border-border p-4">
             <legend className="px-1 text-sm font-semibold">{t('user.assignedBranches')}</legend>

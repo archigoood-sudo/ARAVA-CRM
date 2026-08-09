@@ -18,7 +18,10 @@ import {
   Building2,
   CalendarDays,
   CreditCard,
+  HandCoins,
   Landmark,
+  TrendingDown,
+  WalletCards,
   Plus,
   ShieldCheck,
   UserRoundCheck,
@@ -89,8 +92,11 @@ export function DashboardPage() {
   ] as const;
   const financeMetadata = [
     { icon: Landmark, key: 'revenueToday', label: t('dashboard.stat.revenueToday') },
+    { icon: TrendingDown, key: 'expensesToday', label: 'Расходы сегодня' },
+    { icon: WalletCards, key: 'netCashFlow', label: 'Чистый денежный поток' },
     { icon: Landmark, key: 'revenueThisMonth', label: t('dashboard.stat.revenueMonth') },
     { icon: CreditCard, key: 'outstandingDebt', label: t('dashboard.stat.outstandingDebt') },
+    { icon: HandCoins, key: 'payrollPendingApproval', label: 'Зарплата к утверждению' },
   ] as const;
 
   return (
@@ -151,6 +157,12 @@ export function DashboardPage() {
             label={t('dashboard.stat.subscriptionsExpiring')}
             loading={stats.isLoading}
             value={stats.data?.subscriptionsExpiringSoon ?? 0}
+          />
+          <StatCard
+            icon={UsersRound}
+            label="Группы с низкой заполняемостью"
+            loading={stats.isLoading}
+            value={stats.data?.groupsLowOccupancy ?? 0}
           />
           <StatCard
             icon={CreditCard}
@@ -245,6 +257,16 @@ export function DashboardPage() {
                     icon={Landmark}
                     label={t('nav.finance')}
                     onClick={() => navigate('/finance')}
+                  />
+                  <QuickAction
+                    icon={TrendingDown}
+                    label="Добавить расход"
+                    onClick={() => navigate('/expenses')}
+                  />
+                  <QuickAction
+                    icon={HandCoins}
+                    label="Рассчитать зарплату"
+                    onClick={() => navigate('/payroll')}
                   />
                 </>
               ) : null}

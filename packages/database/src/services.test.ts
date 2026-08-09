@@ -112,7 +112,7 @@ describe('Sprint 1 application service', () => {
       email: 'manager@arava.local',
       fullName: 'Manager',
       password: 'Manager!Pass2026',
-      role: 'BRANCH_MANAGER',
+      role: 'ADMIN',
     });
     const createdCoach = await service.createUser(owner.token, {
       branchIds: [branchA.id],
@@ -136,7 +136,7 @@ describe('Sprint 1 application service', () => {
     });
     await expect(
       service.createBranch(manager.token, { address: 'X', name: 'X', phone: '+79990000009' }),
-    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
+    ).resolves.toMatchObject({ name: 'X' });
     await expect(
       service.createStudent(manager.token, {
         branchId: branchB.id,

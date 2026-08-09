@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { loginCredentialsSchema, tariffInputSchema, weeklyScheduleInputSchema } from './validation';
+import {
+  cashTransferInputSchema,
+  expenseInputSchema,
+  loginCredentialsSchema,
+  payrollRuleInputSchema,
+  tariffInputSchema,
+  weeklyScheduleInputSchema,
+} from './validation';
 
 describe('loginCredentialsSchema', () => {
   it('normalizes and validates valid credentials', () => {
@@ -59,5 +66,46 @@ describe('tariffInputSchema', () => {
       tariffInputSchema.safeParse({ ...base, lessonCount: 1, type: 'UNLIMITED' }).success,
     ).toBe(false);
     expect(tariffInputSchema.safeParse({ ...base, type: 'UNLIMITED' }).success).toBe(true);
+  });
+});
+
+describe('Sprint 4 validation', () => {
+  it('rejects zero expenses and transfers to the same register', () => {
+    expect(
+      expenseInputSchema.safeParse({
+        amount: 0,
+        branchId: 'branch',
+        categoryId: 'category',
+        description: 'Аренда',
+        paymentMethod: 'CASH',
+        spentAt: new Date().toISOString(),
+      }).success,
+    ).toBe(false);
+    expect(
+      cashTransferInputSchema.safeParse({
+        amount: 100,
+        fromCashRegisterId: 'cash',
+        occurredAt: new Date().toISOString(),
+        reason: 'Перевод',
+        toCashRegisterId: 'cash',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('validates required payroll model parameters', () => {
+    const base = {
+      branchId: 'branch',
+      coachId: 'coach',
+      isActive: true,
+      validFrom: '2026-08-05',
+    } as const;
+    expect(payrollRuleInputSchema.safeParse({ ...base, type: 'PER_ATTENDEE' }).success).toBe(false);
+    expect(
+      payrollRuleInputSchema.safeParse({
+        ...base,
+        amountPerAttendee: 500,
+        type: 'PER_ATTENDEE',
+      }).success,
+    ).toBe(true);
   });
 });

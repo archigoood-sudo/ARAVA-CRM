@@ -27,11 +27,9 @@ test('вход, создание филиала, ученика и контак�
     await window.getByLabel('Электронная почта').fill(ownerEmail);
     await window.getByLabel('Пароль').fill(initialPassword);
     await window.getByRole('button', { name: 'Войти в рабочее пространство' }).click();
-    await expect(
-      window.getByRole('heading', { name: 'Защитите свою учётную запись' }),
-    ).toBeVisible();
-    await window.getByLabel('Текущий пароль').fill(initialPassword);
-    await window.getByLabel('Новый пароль').fill(securePassword);
+    await expect(window.getByRole('heading', { name: 'Создайте новый пароль' })).toBeVisible();
+    await window.getByLabel('Новый пароль', { exact: true }).fill(securePassword);
+    await window.getByLabel('Повторите новый пароль').fill(securePassword);
     await window.getByRole('button', { name: 'Сохранить пароль и продолжить' }).click();
     await expect(
       window.getByRole('heading', {

@@ -54,6 +54,22 @@ type SubscriptionRecord = Prisma.SubscriptionGetPayload<{ include: typeof subscr
 type PaymentRecord = Prisma.PaymentGetPayload<{ include: typeof paymentInclude }>;
 type FinanceClient = DatabaseClient | Prisma.TransactionClient;
 
+async function ensurePaymentRegister(
+  client: FinanceClient,
+  branchId: string,
+  paymentMethod: PaymentInput['paymentMethod'],
+) {
+  const type = paymentMethod === 'CASH' ? 'CASH' : paymentMethod === 'ONLINE' ? 'ONLINE' : 'BANK';
+  const name =
+    type === 'CASH' ? 'Основная касса' : type === 'ONLINE' ? 'Онлайн-касса' : 'Расчётный счёт';
+  const existing = await client.cashRegister.findFirst({
+    where: { branchId, isActive: true, type },
+  });
+  return (
+    existing ?? client.cashRegister.create({ data: { branchId, name, openingBalance: 0, type } })
+  );
+}
+
 function optionalValue(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed?.length ? trimmed : null;
@@ -558,6 +574,24 @@ export class FinanceService {
           subscriptionId: input.subscriptionId ?? null,
         },
       });
+      const register = await ensurePaymentRegister(
+        transaction,
+        input.branchId,
+        input.paymentMethod,
+      );
+      await transaction.cashTransaction.create({
+        data: {
+          amount: input.amount,
+          branchId: input.branchId,
+          cashRegisterId: register.id,
+          comment: optionalValue(input.comment) ?? 'Оплата ученика',
+          createdByUserId: actor.id,
+          occurredAt: new Date(input.paidAt),
+          sourceId: created.id,
+          sourceType: 'PAYMENT',
+          type: 'INCOME',
+        },
+      });
       await this.audit(transaction, actor.id, 'PAYMENT_CREATED', 'Payment', created.id, {
         amount: input.amount,
         subscriptionId: input.subscriptionId,
@@ -615,6 +649,25 @@ export class FinanceService {
       throw new DomainError('VALIDATION', t('domain.validation.paymentCancellation'));
     await this.database.$transaction(async (transaction) => {
       await transaction.payment.update({ data: { status: 'CANCELLED' }, where: { id } });
+      const income = await transaction.cashTransaction.findFirst({
+        where: { sourceId: id, sourceType: 'PAYMENT', type: 'INCOME' },
+      });
+      const register = income
+        ? await transaction.cashRegister.findUniqueOrThrow({ where: { id: income.cashRegisterId } })
+        : await ensurePaymentRegister(transaction, payment.branchId, payment.paymentMethod);
+      await transaction.cashTransaction.create({
+        data: {
+          amount: payment.amount,
+          branchId: payment.branchId,
+          cashRegisterId: register.id,
+          comment: 'Отмена платежа',
+          createdByUserId: actor.id,
+          occurredAt: new Date(),
+          sourceId: id,
+          sourceType: 'REFUND',
+          type: 'EXPENSE',
+        },
+      });
       await this.audit(transaction, actor.id, 'PAYMENT_CANCELLED', 'Payment', id, {
         amount: payment.amount,
       });
@@ -649,6 +702,25 @@ export class FinanceService {
           refundedAt: new Date(input.refundedAt),
         },
       });
+      const income = await transaction.cashTransaction.findFirst({
+        where: { sourceId: paymentId, sourceType: 'PAYMENT', type: 'INCOME' },
+      });
+      const register = income
+        ? await transaction.cashRegister.findUniqueOrThrow({ where: { id: income.cashRegisterId } })
+        : await ensurePaymentRegister(transaction, payment.branchId, payment.paymentMethod);
+      await transaction.cashTransaction.create({
+        data: {
+          amount: input.amount,
+          branchId: payment.branchId,
+          cashRegisterId: register.id,
+          comment: input.reason.trim(),
+          createdByUserId: actor.id,
+          occurredAt: new Date(input.refundedAt),
+          sourceId: refund.id,
+          sourceType: 'REFUND',
+          type: 'EXPENSE',
+        },
+      });
       const total = refunded + input.amount;
       await transaction.payment.update({
         data: { status: total === payment.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED' },
@@ -672,7 +744,7 @@ export class FinanceService {
       select: { fullName: true, id: true, role: true },
       where: {
         isActive: true,
-        role: { in: ['OWNER', 'ADMIN', 'BRANCH_MANAGER'] },
+        role: { in: ['OWNER', 'ADMIN'] },
         ...(branchIds ? { branchAssignments: { some: { branchId: { in: branchIds } } } } : {}),
       },
     });
@@ -763,7 +835,7 @@ export class FinanceService {
   }
 
   private assertTariffBranch(actor: AuthenticatedUser, branchId: string | undefined): void {
-    if (actor.role === 'BRANCH_MANAGER' && !branchId)
+    if (actor.role === 'ADMIN' && actor.branchIds.length > 0 && !branchId)
       throw new DomainError('AUTHORIZATION', t('domain.authorization.globalTariff'));
     if (branchId) assertBranchAccess(actor, branchId);
   }

@@ -308,7 +308,7 @@ describe('Sprint 3 finance service', () => {
       email: 'manager-finance@arava.local',
       fullName: 'Управляющий финансами',
       password: 'Manager!Finance2026',
-      role: 'BRANCH_MANAGER',
+      role: 'ADMIN',
     });
     await application.createUser(ownerToken, {
       branchIds: [branch.id],

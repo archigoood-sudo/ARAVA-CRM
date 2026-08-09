@@ -3,10 +3,17 @@ import { createHashRouter, Navigate } from 'react-router-dom';
 import { LoginPage } from './features/auth/login-page';
 import { AboutPage } from './features/about/about-page';
 import { ChangePasswordPage } from './features/auth/change-password-page';
+import { ForgotPasswordPage } from './features/auth/forgot-password-page';
 import { BranchesPage } from './features/branches/branches-page';
 import { DashboardPage } from './features/dashboard/dashboard-page';
 import { AttendancePage } from './features/attendance/attendance-page';
 import { FinancePage } from './features/finance/finance-page';
+import { ExpensesPage } from './features/expenses/expenses-page';
+import { ExpenseCategoriesPage } from './features/expenses/expense-categories-page';
+import { CashPage } from './features/cash/cash-page';
+import { PayrollPage } from './features/payroll/payroll-page';
+import { AnalyticsPage } from './features/analytics/analytics-page';
+import { ReportsPage } from './features/reports/reports-page';
 import { GroupProfilePage } from './features/groups/group-profile-page';
 import { GroupsPage } from './features/groups/groups-page';
 import { LessonDetailsPage } from './features/schedule/lesson-details-page';
@@ -28,7 +35,10 @@ export const router = createHashRouter([
   { element: <RootRoute />, path: '/' },
   {
     element: <PublicOnlyRoute />,
-    children: [{ element: <LoginPage />, path: '/login' }],
+    children: [
+      { element: <LoginPage />, path: '/login' },
+      { element: <ForgotPasswordPage />, path: '/forgot-password' },
+    ],
   },
   {
     element: <PasswordChangeRoute />,
@@ -51,6 +61,12 @@ export const router = createHashRouter([
           { element: <StudentProfilePage />, path: '/students/:studentId' },
           { element: <TariffsPage />, path: '/tariffs' },
           { element: <FinancePage />, path: '/finance' },
+          { element: <ExpensesPage />, path: '/expenses' },
+          { element: <ExpenseCategoriesPage />, path: '/expense-categories' },
+          { element: <CashPage />, path: '/cash' },
+          { element: <PayrollPage />, path: '/payroll' },
+          { element: <AnalyticsPage />, path: '/analytics' },
+          { element: <ReportsPage />, path: '/reports' },
           { element: <UsersPage />, path: '/users' },
           { element: <SettingsPage />, path: '/settings' },
           { element: <AboutPage />, path: '/about' },

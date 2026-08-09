@@ -107,6 +107,7 @@ export async function closeDatabase(database: DatabaseClient): Promise<void> {
 export { ApplicationService, isBranchVisibleToUser } from './services';
 export { StudioService } from './studio-service';
 export { FinanceService } from './finance-service';
+export { ManagementService } from './management-service';
 export {
   addDays,
   applyAttendanceWriteOff,
@@ -125,6 +126,7 @@ export {
 } from './schedule';
 export {
   accessibleBranchIds,
+  assertCapability,
   assertBranchAccess,
   assertPermission,
   canAccessBranch,

@@ -62,8 +62,7 @@ const genderLabels: Record<Gender, string> = {
 export function StudentProfilePage() {
   const { studentId = '' } = useParams();
   const user = useAuthStore((state) => state.user);
-  const canManage =
-    user?.role === 'OWNER' || user?.role === 'ADMIN' || user?.role === 'BRANCH_MANAGER';
+  const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
   const queryClient = useQueryClient();
   const [studentDialog, setStudentDialog] = useState(false);
   const [contactDialog, setContactDialog] = useState(false);

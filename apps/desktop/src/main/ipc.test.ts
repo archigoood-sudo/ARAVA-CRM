@@ -19,8 +19,12 @@ import {
   type AuthSession,
   type BranchSummary,
   type GroupSummary,
+  type ExpenseCategorySummary,
+  type ExpenseSummary,
+  type CashRegisterSummary,
   type SubscriptionDetail,
   type TariffSummary,
+  type TemporaryPasswordResult,
 } from '@arava/shared';
 
 vi.mock('electron', () => ({
@@ -56,6 +60,53 @@ describe('Electron IPC boundary', () => {
     })) as AuthSession;
     expect(session.user.role).toBe('OWNER');
     expect(session.user).not.toHaveProperty('passwordHash');
+  });
+
+  it('validates secure user, session, and owner recovery IPC operations', async () => {
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    const initial = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    const owner = (await handlers[IPC_CHANNELS.authCompletePasswordChange]?.(initial.token, {
+      newPassword: 'Owner!Secure2041',
+    })) as AuthSession;
+    const branch = await service.createBranch(owner.token, {
+      address: 'Улица Тестовая, 1',
+      name: 'Тест',
+      phone: '+79990000000',
+    });
+    expect(() =>
+      handlers[IPC_CHANNELS.userCreate]?.(owner.token, {
+        branchIds: [branch.id],
+        email: 'not-an-email',
+        fullName: 'Тренер',
+        role: 'COACH',
+      }),
+    ).toThrow();
+    const trainer = (await handlers[IPC_CHANNELS.userCreate]?.(owner.token, {
+      branchIds: [branch.id],
+      email: 'trainer-ipc@arava.local',
+      fullName: 'Тренер IPC',
+      role: 'COACH',
+    })) as TemporaryPasswordResult;
+    expect(trainer.temporaryPassword).toHaveLength(16);
+    expect(trainer.user).not.toHaveProperty('passwordHash');
+    const trainerSession = await service.login({
+      email: trainer.user.email,
+      password: trainer.temporaryPassword,
+    });
+    await handlers[IPC_CHANNELS.userRevokeSessions]?.(owner.token, trainer.user.id);
+    await expect(handlers[IPC_CHANNELS.authRestore]?.(trainerSession.token)).rejects.toThrow(
+      t('domain.authentication.sessionExpired'),
+    );
+    expect(() =>
+      handlers[IPC_CHANNELS.authRecoverOwner]?.({
+        email: INITIAL_OWNER_EMAIL,
+        newPassword: 'short',
+        recoveryCode: 'bad',
+      }),
+    ).toThrow();
   });
 
   it('applies service authorization to privileged IPC calls', async () => {
@@ -195,5 +246,59 @@ describe('Electron IPC boundary', () => {
         dateTo: new Date(Date.now() + 86_400_000).toISOString(),
       }),
     ).toHaveLength(1);
+  });
+
+  it('validates Sprint 4 payloads and posts confirmed expenses through service authorization', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!Secure2026',
+    });
+    const branch = await service.createBranch(owner.token, {
+      address: 'ул. Кассовая, 1',
+      name: 'Центр',
+      phone: '+79990000000',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() =>
+      handlers[IPC_CHANNELS.expenseCreate]?.(owner.token, {
+        amount: 0,
+        branchId: branch.id,
+        categoryId: '',
+        description: '',
+        paymentMethod: 'CASH',
+        spentAt: 'invalid',
+      }),
+    ).toThrow();
+    const category = (await handlers[IPC_CHANNELS.expenseCategoryCreate]?.(owner.token, {
+      branchId: branch.id,
+      isActive: true,
+      name: 'Аренда',
+    })) as ExpenseCategorySummary;
+    const register = (await handlers[IPC_CHANNELS.cashRegisterCreate]?.(owner.token, {
+      branchId: branch.id,
+      isActive: true,
+      name: 'Основная касса',
+      openingBalance: 100_000,
+      type: 'CASH',
+    })) as CashRegisterSummary;
+    const expense = (await handlers[IPC_CHANNELS.expenseCreate]?.(owner.token, {
+      amount: 25_000,
+      branchId: branch.id,
+      categoryId: category.id,
+      description: 'Аренда зала',
+      paymentMethod: 'CASH',
+      spentAt: new Date().toISOString(),
+    })) as ExpenseSummary;
+    const confirmed = (await handlers[IPC_CHANNELS.expenseConfirm]?.(
+      owner.token,
+      expense.id,
+      register.id,
+    )) as ExpenseSummary;
+    expect(confirmed.status).toBe('CONFIRMED');
+    expect(await database.cashTransaction.count({ where: { sourceId: expense.id } })).toBe(1);
   });
 });

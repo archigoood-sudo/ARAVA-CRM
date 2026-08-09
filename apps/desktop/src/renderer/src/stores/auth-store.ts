@@ -1,6 +1,7 @@
 import {
   t,
   type AuthenticatedUser,
+  type ForcedPasswordChangeInput,
   type LoginCredentials,
   type PasswordChangeInput,
 } from '@arava/shared';
@@ -11,9 +12,11 @@ import { getDesktopApi } from '../lib/desktop-api';
 
 interface AuthState {
   changePassword: (input: PasswordChangeInput) => Promise<void>;
+  completePasswordChange: (input: ForcedPasswordChangeInput) => Promise<void>;
   login: (credentials: LoginCredentials) => Promise<void>;
   logout: () => Promise<void>;
   restore: () => Promise<void>;
+  sessionMessage: string | null;
   status: 'ready' | 'restoring';
   token: string | null;
   user: AuthenticatedUser | null;
@@ -28,9 +31,15 @@ export const useAuthStore = create<AuthState>()(
         const user = await getDesktopApi().auth.changePassword(token, input);
         set({ user });
       },
+      completePasswordChange: async (input) => {
+        const token = get().token;
+        if (!token) throw new Error(t('domain.authentication.required'));
+        const session = await getDesktopApi().auth.completePasswordChange(token, input);
+        set({ token: session.token, user: session.user });
+      },
       login: async (credentials) => {
         const session = await getDesktopApi().auth.login(credentials);
-        set({ status: 'ready', token: session.token, user: session.user });
+        set({ sessionMessage: null, status: 'ready', token: session.token, user: session.user });
       },
       logout: async () => {
         const token = get().token;
@@ -55,6 +64,7 @@ export const useAuthStore = create<AuthState>()(
         }
       },
       status: 'restoring',
+      sessionMessage: null,
       token: null,
       user: null,
     }),
@@ -65,6 +75,24 @@ export const useAuthStore = create<AuthState>()(
     },
   ),
 );
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('message', (event: MessageEvent<unknown>) => {
+    if (
+      typeof event.data === 'object' &&
+      event.data !== null &&
+      'type' in event.data &&
+      event.data.type === 'arava-session-expired'
+    ) {
+      useAuthStore.setState({
+        sessionMessage: t('domain.authentication.sessionExpired'),
+        status: 'ready',
+        token: null,
+        user: null,
+      });
+    }
+  });
+}
 
 export function getSessionToken(): string {
   const token = useAuthStore.getState().token;

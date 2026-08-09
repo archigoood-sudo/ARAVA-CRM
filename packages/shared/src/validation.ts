@@ -2,18 +2,32 @@ import { z } from 'zod';
 
 import {
   ATTENDANCE_STATUSES,
+  CASH_REGISTER_TYPES,
   ENROLLMENT_STATUSES,
+  EXPENSE_PAYMENT_METHODS,
+  EXPENSE_STATUSES,
   GENDERS,
   GROUP_STATUSES,
   LESSON_STATUSES,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
+  PAYROLL_PERIOD_STATUSES,
+  PAYROLL_TYPES,
+  REPORT_KINDS,
   STUDENT_STATUSES,
   TARIFF_TYPES,
   USER_ROLES,
   type BranchInput,
+  type AnalyticsQuery,
   type AttendanceEntryInput,
   type EnrollmentInput,
+  type CashCorrectionInput,
+  type CashRegisterInput,
+  type CashTransactionQuery,
+  type CashTransferInput,
+  type ExpenseCategoryInput,
+  type ExpenseInput,
+  type ExpenseListQuery,
   type GroupInput,
   type GroupListQuery,
   type LessonCancelInput,
@@ -21,10 +35,17 @@ import {
   type LessonInput,
   type LessonListQuery,
   type LoginCredentials,
+  type ForcedPasswordChangeInput,
+  type OwnerRecoveryInput,
   type PasswordChangeInput,
   type PaymentInput,
   type PaymentListQuery,
   type RefundInput,
+  type PayrollAdjustmentInput,
+  type PayrollPaymentInput,
+  type PayrollPeriodInput,
+  type PayrollRuleInput,
+  type ReportQuery,
   type StudentContactInput,
   type StudentInput,
   type StudentListQuery,
@@ -72,6 +93,16 @@ export const passwordChangeSchema: z.ZodType<PasswordChangeInput> = z
     path: ['newPassword'],
   });
 
+export const forcedPasswordChangeSchema: z.ZodType<ForcedPasswordChangeInput> = z.object({
+  newPassword: passwordSchema,
+});
+
+export const ownerRecoverySchema: z.ZodType<OwnerRecoveryInput> = z.object({
+  email: z.string().trim().toLowerCase().email(t('validation.email')).max(254),
+  newPassword: passwordSchema,
+  recoveryCode: z.string().trim().min(16, t('validation.required')).max(200),
+});
+
 export const userRoleSchema = z.enum(USER_ROLES);
 export const studentStatusSchema = z.enum(STUDENT_STATUSES);
 export const genderSchema = z.enum(GENDERS);
@@ -82,12 +113,18 @@ export const attendanceStatusSchema = z.enum(ATTENDANCE_STATUSES);
 export const tariffTypeSchema = z.enum(TARIFF_TYPES);
 export const paymentMethodSchema = z.enum(PAYMENT_METHODS);
 export const paymentStatusSchema = z.enum(PAYMENT_STATUSES);
+export const expensePaymentMethodSchema = z.enum(EXPENSE_PAYMENT_METHODS);
+export const expenseStatusSchema = z.enum(EXPENSE_STATUSES);
+export const cashRegisterTypeSchema = z.enum(CASH_REGISTER_TYPES);
+export const payrollTypeSchema = z.enum(PAYROLL_TYPES);
+export const payrollPeriodStatusSchema = z.enum(PAYROLL_PERIOD_STATUSES);
+export const reportKindSchema = z.enum(REPORT_KINDS);
 
 export const userCreateSchema: z.ZodType<UserCreateInput> = z.object({
   branchIds: z.array(z.string().min(1)).max(100),
   email: z.string().trim().toLowerCase().email(t('validation.email')).max(254),
   fullName: z.string().trim().min(2, t('validation.required')).max(120),
-  password: passwordSchema,
+  phone: optionalText(40),
   role: userRoleSchema,
 });
 
@@ -95,6 +132,7 @@ export const userUpdateSchema: z.ZodType<UserUpdateInput> = z.object({
   branchIds: z.array(z.string().min(1)).max(100),
   fullName: z.string().trim().min(2, t('validation.required')).max(120),
   isActive: z.boolean(),
+  phone: optionalText(40),
   role: userRoleSchema,
 });
 
@@ -400,6 +438,182 @@ export const refundInputSchema: z.ZodType<RefundInput> = z.object({
   reason: z.string().trim().min(3, t('validation.refundReason')).max(1000),
   refundedAt: isoDateTime,
 });
+
+export const expenseCategoryInputSchema: z.ZodType<ExpenseCategoryInput> = z.object({
+  branchId: optionalIdentifier,
+  description: optionalText(2000),
+  isActive: z.boolean(),
+  name: z.string().trim().min(2, t('validation.required')).max(120),
+});
+
+export const expenseInputSchema: z.ZodType<ExpenseInput> = z.object({
+  amount: positiveMoneyAmount,
+  attachmentPath: optionalText(1000),
+  branchId: z.string().min(1).max(100),
+  cashRegisterId: optionalIdentifier,
+  categoryId: z.string().min(1).max(100),
+  description: z.string().trim().min(2, t('validation.required')).max(2000),
+  documentNumber: optionalText(200),
+  paymentMethod: expensePaymentMethodSchema,
+  spentAt: isoDateTime,
+  vendor: optionalText(240),
+});
+
+export const expenseListQuerySchema: z.ZodType<ExpenseListQuery> = z
+  .object({
+    branchId: optionalIdentifier,
+    categoryId: optionalIdentifier,
+    createdByUserId: optionalIdentifier,
+    dateFrom: isoDateTime,
+    dateTo: isoDateTime,
+    paymentMethod: expensePaymentMethodSchema.optional(),
+    search: optionalText(200),
+    status: expenseStatusSchema.optional(),
+  })
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
+
+export const cashRegisterInputSchema: z.ZodType<CashRegisterInput> = z.object({
+  branchId: z.string().min(1).max(100),
+  isActive: z.boolean(),
+  name: z.string().trim().min(2, t('validation.required')).max(120),
+  openingBalance: z.number().int().min(-1_000_000_000).max(1_000_000_000),
+  type: cashRegisterTypeSchema,
+});
+
+export const cashTransactionQuerySchema: z.ZodType<CashTransactionQuery> = z
+  .object({
+    branchId: optionalIdentifier,
+    cashRegisterId: optionalIdentifier,
+    dateFrom: isoDateTime,
+    dateTo: isoDateTime,
+  })
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
+
+export const cashCorrectionInputSchema: z.ZodType<CashCorrectionInput> = z.object({
+  amount: z
+    .number()
+    .int()
+    .min(-1_000_000_000)
+    .max(1_000_000_000)
+    .refine((value) => value !== 0, {
+      message: 'Сумма корректировки не может быть нулевой.',
+    }),
+  cashRegisterId: z.string().min(1).max(100),
+  occurredAt: isoDateTime,
+  reason: z.string().trim().min(3, 'Укажите причину корректировки.').max(1000),
+});
+
+export const cashTransferInputSchema: z.ZodType<CashTransferInput> = z
+  .object({
+    amount: positiveMoneyAmount,
+    fromCashRegisterId: z.string().min(1).max(100),
+    occurredAt: isoDateTime,
+    reason: z.string().trim().min(3, 'Укажите назначение перевода.').max(1000),
+    toCashRegisterId: z.string().min(1).max(100),
+  })
+  .refine((input) => input.fromCashRegisterId !== input.toCashRegisterId, {
+    message: 'Выберите разные кассы для перевода.',
+    path: ['toCashRegisterId'],
+  });
+
+export const payrollRuleInputSchema: z.ZodType<PayrollRuleInput> = z
+  .object({
+    amountPerAttendee: moneyAmount.optional(),
+    branchId: z.string().min(1).max(100),
+    coachId: z.string().min(1).max(100),
+    fixedAmount: moneyAmount.optional(),
+    groupId: optionalIdentifier,
+    isActive: z.boolean(),
+    monthlyAmount: moneyAmount.optional(),
+    percent: z.number().min(0.01).max(100).optional(),
+    type: payrollTypeSchema,
+    validFrom: isoDate,
+    validTo: optionalIsoDate,
+  })
+  .superRefine((input, context) => {
+    if (input.validTo && input.validFrom > input.validTo)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: t('validation.dateRange'),
+        path: ['validTo'],
+      });
+    if (['FIXED_PER_LESSON', 'COMBINED'].includes(input.type) && input.fixedAmount === undefined)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Укажите ставку за занятие.',
+        path: ['fixedAmount'],
+      });
+    if (['PER_ATTENDEE', 'COMBINED'].includes(input.type) && input.amountPerAttendee === undefined)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Укажите ставку за ученика.',
+        path: ['amountPerAttendee'],
+      });
+    if (input.type === 'PERCENT_OF_REVENUE' && input.percent === undefined)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Укажите процент от выручки.',
+        path: ['percent'],
+      });
+    if (input.type === 'FIXED_MONTHLY' && input.monthlyAmount === undefined)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Укажите месячную ставку.',
+        path: ['monthlyAmount'],
+      });
+  });
+
+export const payrollPeriodInputSchema: z.ZodType<PayrollPeriodInput> = z
+  .object({ branchId: optionalIdentifier, dateFrom: isoDate, dateTo: isoDate })
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
+
+export const payrollAdjustmentInputSchema: z.ZodType<PayrollAdjustmentInput> = z.object({
+  amount: z.number().int().min(-1_000_000_000).max(1_000_000_000),
+  reason: z.string().trim().min(3, 'Укажите причину корректировки.').max(1000),
+});
+
+export const payrollPaymentInputSchema: z.ZodType<PayrollPaymentInput> = z.object({
+  cashRegisterId: z.string().min(1).max(100),
+  occurredAt: isoDateTime,
+});
+
+export const analyticsQuerySchema: z.ZodType<AnalyticsQuery> = z
+  .object({
+    branchId: optionalIdentifier,
+    coachId: optionalIdentifier,
+    dateFrom: isoDateTime,
+    dateTo: isoDateTime,
+    direction: optionalText(120),
+    groupId: optionalIdentifier,
+  })
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
+
+export const reportQuerySchema: z.ZodType<ReportQuery> = z
+  .object({
+    branchId: optionalIdentifier,
+    coachId: optionalIdentifier,
+    dateFrom: isoDateTime,
+    dateTo: isoDateTime,
+    direction: optionalText(120),
+    groupId: optionalIdentifier,
+    kind: reportKindSchema,
+  })
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
 
 export const identifierSchema = z.string().min(1).max(100);
 export const sessionTokenSchema = z.string().min(32).max(256);

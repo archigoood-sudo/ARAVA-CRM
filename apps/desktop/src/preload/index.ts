@@ -2,17 +2,32 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import { IPC_CHANNELS, type AravaDesktopApi } from '@arava/shared/channels';
 
-const invoke = <Result>(channel: string, ...arguments_: unknown[]) =>
-  ipcRenderer.invoke(channel, ...arguments_) as Promise<Result>;
+const invoke = async <Result>(channel: string, ...arguments_: unknown[]): Promise<Result> => {
+  try {
+    return (await ipcRenderer.invoke(channel, ...arguments_)) as Result;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Сеанс завершён')) {
+      (
+        globalThis as {
+          postMessage?: (message: unknown, targetOrigin: string) => void;
+        }
+      ).postMessage?.({ type: 'arava-session-expired' }, '*');
+    }
+    throw error;
+  }
+};
 
 const desktopApi: AravaDesktopApi = {
   activity: { list: (token) => invoke(IPC_CHANNELS.activityList, token) },
   auth: {
     changePassword: (token, input) => invoke(IPC_CHANNELS.authChangePassword, token, input),
+    completePasswordChange: (token, input) =>
+      invoke(IPC_CHANNELS.authCompletePasswordChange, token, input),
     login: (credentials) => invoke(IPC_CHANNELS.authLogin, credentials),
     logout: async (token) => {
       await invoke(IPC_CHANNELS.authLogout, token);
     },
+    recoverOwner: (input) => invoke(IPC_CHANNELS.authRecoverOwner, input),
     restore: (token) => invoke(IPC_CHANNELS.authRestore, token),
   },
   branches: {
@@ -91,6 +106,51 @@ const desktopApi: AravaDesktopApi = {
     employees: (token) => invoke(IPC_CHANNELS.financeEmployees, token),
     stats: (token, branchId) => invoke(IPC_CHANNELS.financeStats, token, branchId),
   },
+  expenseCategories: {
+    archive: (token, id) => invoke(IPC_CHANNELS.expenseCategoryArchive, token, id),
+    create: (token, input) => invoke(IPC_CHANNELS.expenseCategoryCreate, token, input),
+    list: (token, includeArchived) =>
+      invoke(IPC_CHANNELS.expenseCategoryList, token, includeArchived),
+    update: (token, id, input) => invoke(IPC_CHANNELS.expenseCategoryUpdate, token, id, input),
+  },
+  expenses: {
+    cancel: (token, id) => invoke(IPC_CHANNELS.expenseCancel, token, id),
+    confirm: (token, id, cashRegisterId) =>
+      invoke(IPC_CHANNELS.expenseConfirm, token, id, cashRegisterId),
+    create: (token, input) => invoke(IPC_CHANNELS.expenseCreate, token, input),
+    list: (token, query) => invoke(IPC_CHANNELS.expenseList, token, query),
+    update: (token, id, input) => invoke(IPC_CHANNELS.expenseUpdate, token, id, input),
+  },
+  cash: {
+    correct: (token, input) => invoke(IPC_CHANNELS.cashCorrectionCreate, token, input),
+    createRegister: (token, input) => invoke(IPC_CHANNELS.cashRegisterCreate, token, input),
+    listRegisters: (token, branchId) => invoke(IPC_CHANNELS.cashRegisterList, token, branchId),
+    listTransactions: (token, query) => invoke(IPC_CHANNELS.cashTransactionList, token, query),
+    transfer: (token, input) => invoke(IPC_CHANNELS.cashTransferCreate, token, input),
+    updateRegister: (token, id, input) => invoke(IPC_CHANNELS.cashRegisterUpdate, token, id, input),
+  },
+  payroll: {
+    adjustAccrual: (token, id, input) =>
+      invoke(IPC_CHANNELS.payrollAccrualAdjust, token, id, input),
+    approvePeriod: (token, id) => invoke(IPC_CHANNELS.payrollPeriodApprove, token, id),
+    calculatePeriod: (token, id) => invoke(IPC_CHANNELS.payrollPeriodCalculate, token, id),
+    coachView: (token, dateFrom, dateTo) =>
+      invoke(IPC_CHANNELS.payrollCoachView, token, dateFrom, dateTo),
+    createPeriod: (token, input) => invoke(IPC_CHANNELS.payrollPeriodCreate, token, input),
+    createRule: (token, input) => invoke(IPC_CHANNELS.payrollRuleCreate, token, input),
+    getPeriod: (token, id) => invoke(IPC_CHANNELS.payrollPeriodGet, token, id),
+    listPeriods: (token, branchId) => invoke(IPC_CHANNELS.payrollPeriodList, token, branchId),
+    listRules: (token, branchId) => invoke(IPC_CHANNELS.payrollRuleList, token, branchId),
+    payPeriod: (token, id, input) => invoke(IPC_CHANNELS.payrollPeriodPay, token, id, input),
+    updateRule: (token, id, input) => invoke(IPC_CHANNELS.payrollRuleUpdate, token, id, input),
+  },
+  analytics: {
+    get: (token, query) => invoke(IPC_CHANNELS.analyticsGet, token, query),
+  },
+  reports: {
+    exportCsv: (token, query) => invoke(IPC_CHANNELS.reportExportCsv, token, query),
+    get: (token, query) => invoke(IPC_CHANNELS.reportGet, token, query),
+  },
   settings: {
     get: (token, key) => invoke(IPC_CHANNELS.settingsGet, token, key),
     set: async (token, update) => {
@@ -108,6 +168,12 @@ const desktopApi: AravaDesktopApi = {
   users: {
     create: (token, input) => invoke(IPC_CHANNELS.userCreate, token, input),
     list: (token) => invoke(IPC_CHANNELS.userList, token),
+    recoveryCodeCreate: (token) => invoke(IPC_CHANNELS.userRecoveryCodeCreate, token),
+    recoveryCodeStatus: (token) => invoke(IPC_CHANNELS.userRecoveryCodeStatus, token),
+    resetPassword: (token, id) => invoke(IPC_CHANNELS.userResetPassword, token, id),
+    revokeSessions: async (token, id) => {
+      await invoke(IPC_CHANNELS.userRevokeSessions, token, id);
+    },
     staffOptions: (token) => invoke(IPC_CHANNELS.userStaffOptions, token),
     update: (token, id, input) => invoke(IPC_CHANNELS.userUpdate, token, id, input),
   },

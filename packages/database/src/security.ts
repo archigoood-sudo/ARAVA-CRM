@@ -6,6 +6,43 @@ const BLOCK_SIZE = 8;
 const PARALLELIZATION = 1;
 const MAX_MEMORY = 128 * 1024 * 1024;
 
+export const SECURITY_CONFIG = Object.freeze({
+  loginLockMinutes: 15,
+  maxLoginAttempts: 5,
+  maxRecoveryAttempts: 5,
+  recoveryLockMinutes: 15,
+});
+
+function randomCharacter(characters: string): string {
+  return characters.charAt(randomBytes(1).readUInt8(0) % characters.length);
+}
+
+export function createTemporaryPassword(): string {
+  const lower = 'abcdefghijkmnopqrstuvwxyz';
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const numbers = '23456789';
+  const symbols = '!@#$%&*+-?';
+  const alphabet = `${lower}${upper}${numbers}${symbols}`;
+  const characters = [
+    randomCharacter(lower),
+    randomCharacter(upper),
+    randomCharacter(numbers),
+    randomCharacter(symbols),
+    ...Array.from({ length: 12 }, () => randomCharacter(alphabet)),
+  ];
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomBytes(1).readUInt8(0) % (index + 1);
+    const current = characters[index] ?? '';
+    characters[index] = characters[swapIndex] ?? '';
+    characters[swapIndex] = current;
+  }
+  return characters.join('');
+}
+
+export function createRecoveryCode(): string {
+  return randomBytes(24).toString('base64url').toUpperCase();
+}
+
 function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     scryptCallback(

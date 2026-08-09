@@ -3,8 +3,13 @@ import type {
   AuthenticatedUser,
   BranchInput,
   BranchSummary,
+  ForcedPasswordChangeInput,
   LoginCredentials,
+  OwnerRecoveryInput,
+  OwnerRecoveryResult,
   PasswordChangeInput,
+  RecoveryCodeResult,
+  RecoveryCodeStatus,
   StudentContactInput,
   StudentContactSummary,
   StudentDetail,
@@ -12,11 +17,12 @@ import type {
   StudentListQuery,
   StudentListResult,
   StudentSummary,
+  TemporaryPasswordResult,
   UserCreateInput,
   UserSummary,
   UserUpdateInput,
 } from '@arava/shared';
-import { t } from '@arava/shared';
+import { permissionsForRole, t } from '@arava/shared';
 import { Prisma, type Branch, type Student, type StudentContact, type User } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
@@ -27,11 +33,14 @@ import {
   canAccessBranch,
 } from './permissions';
 import {
+  createRecoveryCode as generateRecoveryCode,
   createSessionToken,
+  createTemporaryPassword,
   DomainError,
   hashPassword,
   hashSessionToken,
   normalizePhone,
+  SECURITY_CONFIG,
   verifyPassword,
 } from './security';
 
@@ -52,6 +61,7 @@ function userSessionView(user: UserWithBranches): AuthenticatedUser {
     fullName: user.fullName,
     id: user.id,
     mustChangePassword: user.mustChangePassword,
+    permissions: permissionsForRole(user.role),
     role: user.role,
   };
 }
@@ -61,6 +71,9 @@ function userSummary(user: UserWithBranches): UserSummary {
     ...userSessionView(user),
     createdAt: user.createdAt.toISOString(),
     isActive: user.isActive,
+    lastLoginAt: user.lastLoginAt?.toISOString(),
+    lockedUntil: user.lockedUntil?.toISOString(),
+    phone: user.phone ?? undefined,
     updatedAt: user.updatedAt.toISOString(),
   };
 }
@@ -153,23 +166,67 @@ export class ApplicationService {
       include: { branchAssignments: { select: { branchId: true } } },
       where: { email: credentials.email.trim().toLowerCase() },
     });
-    if (
-      !user ||
-      !user.isActive ||
-      !(await verifyPassword(credentials.password, user.passwordHash))
-    ) {
+    if (!user) {
+      throw new DomainError('AUTHENTICATION', t('domain.authentication.invalidCredentials'));
+    }
+
+    if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      await this.audit(user.id, 'AUTH_LOGIN_BLOCKED', 'User', user.id);
+      throw new DomainError('AUTHENTICATION', t('domain.authentication.accountLocked'));
+    }
+
+    if (!user.isActive || !(await verifyPassword(credentials.password, user.passwordHash))) {
+      const attempts = user.failedLoginAttempts + 1;
+      const lockedUntil =
+        user.isActive && attempts >= SECURITY_CONFIG.maxLoginAttempts
+          ? new Date(Date.now() + SECURITY_CONFIG.loginLockMinutes * 60_000)
+          : null;
+      await this.database.$transaction(async (transaction) => {
+        await transaction.user.update({
+          data: { failedLoginAttempts: attempts, lockedUntil },
+          where: { id: user.id },
+        });
+        await transaction.auditLog.create({
+          data: {
+            action: lockedUntil ? 'AUTH_ACCOUNT_LOCKED' : 'AUTH_LOGIN_FAILED',
+            actorUserId: user.id,
+            detail: JSON.stringify({ attempts }),
+            entityId: user.id,
+            entityType: 'User',
+          },
+        });
+      });
+      if (lockedUntil)
+        throw new DomainError('AUTHENTICATION', t('domain.authentication.accountLocked'));
       throw new DomainError('AUTHENTICATION', t('domain.authentication.invalidCredentials'));
     }
 
     const token = createSessionToken();
-    await this.database.session.create({
-      data: {
-        expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
-        tokenHash: hashSessionToken(token),
-        userId: user.id,
-      },
+    const authenticated = await this.database.$transaction(async (transaction) => {
+      const updated = await transaction.user.update({
+        data: { failedLoginAttempts: 0, lastLoginAt: new Date(), lockedUntil: null },
+        include: { branchAssignments: { select: { branchId: true } } },
+        where: { id: user.id },
+      });
+      await transaction.session.create({
+        data: {
+          expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+          securityVersion: updated.securityVersion,
+          tokenHash: hashSessionToken(token),
+          userId: updated.id,
+        },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'AUTH_LOGIN_SUCCEEDED',
+          actorUserId: updated.id,
+          entityId: updated.id,
+          entityType: 'User',
+        },
+      });
+      return updated;
     });
-    return { token, user: userSessionView(user) };
+    return { token, user: userSessionView(authenticated) };
   }
 
   async restoreSession(token: string): Promise<AuthenticatedUser> {
@@ -187,12 +244,78 @@ export class ApplicationService {
       throw new DomainError('AUTHENTICATION', t('domain.authentication.passwordIncorrect'));
     }
     const passwordHash = await hashPassword(input.newPassword);
-    const updated = await this.database.user.update({
-      data: { mustChangePassword: false, passwordHash },
-      include: { branchAssignments: { select: { branchId: true } } },
-      where: { id: actor.id },
+    const tokenHash = hashSessionToken(token);
+    const updated = await this.database.$transaction(async (transaction) => {
+      const changed = await transaction.user.update({
+        data: {
+          mustChangePassword: false,
+          passwordChangedAt: new Date(),
+          passwordHash,
+          securityVersion: { increment: 1 },
+        },
+        include: { branchAssignments: { select: { branchId: true } } },
+        where: { id: actor.id },
+      });
+      await transaction.session.deleteMany({
+        where: { tokenHash: { not: tokenHash }, userId: actor.id },
+      });
+      await transaction.session.update({
+        data: { securityVersion: changed.securityVersion },
+        where: { tokenHash },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'AUTH_PASSWORD_CHANGED',
+          actorUserId: actor.id,
+          entityId: actor.id,
+          entityType: 'User',
+        },
+      });
+      return changed;
     });
     return userSessionView(updated);
+  }
+
+  async completePasswordChange(
+    token: string,
+    input: ForcedPasswordChangeInput,
+  ): Promise<AuthSession> {
+    const actor = await this.authenticate(token, true);
+    if (!actor.mustChangePassword)
+      throw new DomainError('VALIDATION', t('domain.validation.passwordChangeNotRequired'));
+    const passwordHash = await hashPassword(input.newPassword);
+    const newToken = createSessionToken();
+    const updated = await this.database.$transaction(async (transaction) => {
+      const user = await transaction.user.update({
+        data: {
+          mustChangePassword: false,
+          passwordChangedAt: new Date(),
+          passwordHash,
+          securityVersion: { increment: 1 },
+        },
+        include: { branchAssignments: { select: { branchId: true } } },
+        where: { id: actor.id },
+      });
+      await transaction.session.deleteMany({ where: { userId: actor.id } });
+      await transaction.session.create({
+        data: {
+          expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+          securityVersion: user.securityVersion,
+          tokenHash: hashSessionToken(newToken),
+          userId: user.id,
+        },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'AUTH_FORCED_PASSWORD_CHANGED',
+          actorUserId: user.id,
+          entityId: user.id,
+          entityType: 'User',
+        },
+      });
+      return user;
+    });
+    return { token: newToken, user: userSessionView(updated) };
   }
 
   async authenticate(token: string, allowPasswordChange = false): Promise<AuthenticatedUser> {
@@ -202,7 +325,12 @@ export class ApplicationService {
       },
       where: { tokenHash: hashSessionToken(token) },
     });
-    if (!session || session.expiresAt.getTime() <= Date.now() || !session.user.isActive) {
+    if (
+      !session ||
+      session.expiresAt.getTime() <= Date.now() ||
+      !session.user.isActive ||
+      session.securityVersion !== session.user.securityVersion
+    ) {
       if (session) await this.database.session.delete({ where: { id: session.id } });
       throw new DomainError('AUTHENTICATION', t('domain.authentication.sessionExpired'));
     }
@@ -225,6 +353,15 @@ export class ApplicationService {
     const users = await this.database.user.findMany({
       include: { branchAssignments: { select: { branchId: true } } },
       orderBy: [{ role: 'asc' }, { fullName: 'asc' }],
+      where:
+        actor.role === 'ADMIN'
+          ? {
+              role: 'COACH',
+              ...(actor.branchIds.length
+                ? { branchAssignments: { some: { branchId: { in: actor.branchIds } } } }
+                : {}),
+            }
+          : {},
     });
     return users.map(userSummary);
   }
@@ -232,22 +369,25 @@ export class ApplicationService {
   async createUser(token: string, input: UserCreateInput): Promise<UserSummary> {
     const actor = await this.authenticate(token);
     assertPermission(actor, 'users:manage');
-    if (actor.role === 'ADMIN' && input.role === 'OWNER') {
-      throw new DomainError('AUTHORIZATION', t('domain.authorization.ownerCreate'));
-    }
+    if (actor.role === 'ADMIN' && input.role !== 'COACH')
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.userRoleManage'));
     await this.validateBranchAssignments(input.branchIds);
+    for (const branchId of input.branchIds) assertBranchAccess(actor, branchId);
     try {
+      const password = input.password ?? createTemporaryPassword();
       const created = await this.database.user.create({
         data: {
           branchAssignments: { create: input.branchIds.map((branchId) => ({ branchId })) },
           email: input.email.trim().toLowerCase(),
           fullName: input.fullName.trim(),
           mustChangePassword: true,
-          passwordHash: await hashPassword(input.password),
+          passwordHash: await hashPassword(password),
+          phone: input.phone ? normalizePhone(input.phone) : null,
           role: input.role,
         },
         include: { branchAssignments: { select: { branchId: true } } },
       });
+      await this.audit(actor.id, 'USER_CREATED', 'User', created.id, { role: created.role });
       return userSummary(created);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -257,14 +397,25 @@ export class ApplicationService {
     }
   }
 
+  async createUserWithTemporaryPassword(
+    token: string,
+    input: UserCreateInput,
+  ): Promise<TemporaryPasswordResult> {
+    const temporaryPassword = createTemporaryPassword();
+    const user = await this.createUser(token, { ...input, password: temporaryPassword });
+    return { temporaryPassword, user };
+  }
+
   async updateUser(token: string, id: string, input: UserUpdateInput): Promise<UserSummary> {
     const actor = await this.authenticate(token);
     assertPermission(actor, 'users:manage');
-    const target = await this.database.user.findUnique({ where: { id } });
+    const target = await this.database.user.findUnique({
+      include: { branchAssignments: { select: { branchId: true } } },
+      where: { id },
+    });
     if (!target) throw new DomainError('NOT_FOUND', t('domain.notFound.user'));
-    if (actor.role === 'ADMIN' && (target.role === 'OWNER' || input.role === 'OWNER')) {
-      throw new DomainError('AUTHORIZATION', t('domain.authorization.ownerManage'));
-    }
+    if (actor.role === 'ADMIN' && (target.role !== 'COACH' || input.role !== 'COACH'))
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.userRoleManage'));
     if (actor.id === id && (!input.isActive || input.role !== actor.role)) {
       throw new DomainError('VALIDATION', t('domain.validation.ownAccount'));
     }
@@ -273,6 +424,7 @@ export class ApplicationService {
       if (owners <= 1) throw new DomainError('VALIDATION', t('domain.validation.lastOwner'));
     }
     await this.validateBranchAssignments(input.branchIds);
+    for (const branchId of input.branchIds) assertBranchAccess(actor, branchId);
     const updated = await this.database.$transaction(async (transaction) => {
       await transaction.userBranch.deleteMany({ where: { userId: id } });
       await transaction.user.update({
@@ -280,8 +432,10 @@ export class ApplicationService {
           branchAssignments: { create: input.branchIds.map((branchId) => ({ branchId })) },
           fullName: input.fullName.trim(),
           isActive: input.isActive,
+          phone: input.phone ? normalizePhone(input.phone) : null,
           role: input.role,
-          ...(input.isActive ? {} : { sessions: { deleteMany: {} } }),
+          securityVersion: { increment: 1 },
+          sessions: { deleteMany: {} },
         },
         where: { id },
       });
@@ -290,7 +444,188 @@ export class ApplicationService {
         where: { id },
       });
     });
+    await this.audit(actor.id, 'USER_UPDATED', 'User', id, {
+      active: updated.isActive,
+      role: updated.role,
+    });
+    if (target.isActive !== updated.isActive)
+      await this.audit(
+        actor.id,
+        updated.isActive ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
+        'User',
+        id,
+      );
+    if (target.role !== updated.role)
+      await this.audit(actor.id, 'USER_ROLE_CHANGED', 'User', id, {
+        from: target.role,
+        to: updated.role,
+      });
+    const previousBranches = target.branchAssignments.map(({ branchId }) => branchId).sort();
+    const nextBranches = [...input.branchIds].sort();
+    if (JSON.stringify(previousBranches) !== JSON.stringify(nextBranches))
+      await this.audit(actor.id, 'USER_BRANCH_ACCESS_CHANGED', 'User', id, {
+        branchCount: nextBranches.length,
+      });
     return userSummary(updated);
+  }
+
+  async resetUserPassword(token: string, id: string): Promise<TemporaryPasswordResult> {
+    const actor = await this.authenticate(token);
+    const target = await this.requireManageableUser(actor, id);
+    const temporaryPassword = createTemporaryPassword();
+    const passwordHash = await hashPassword(temporaryPassword);
+    const updated = await this.database.$transaction(async (transaction) => {
+      const user = await transaction.user.update({
+        data: {
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          mustChangePassword: true,
+          passwordHash,
+          securityVersion: { increment: 1 },
+        },
+        include: { branchAssignments: { select: { branchId: true } } },
+        where: { id: target.id },
+      });
+      await transaction.session.deleteMany({ where: { userId: target.id } });
+      await transaction.auditLog.create({
+        data: {
+          action: 'USER_PASSWORD_RESET',
+          actorUserId: actor.id,
+          entityId: target.id,
+          entityType: 'User',
+        },
+      });
+      return user;
+    });
+    return { temporaryPassword, user: userSummary(updated) };
+  }
+
+  async revokeUserSessions(token: string, id: string): Promise<void> {
+    const actor = await this.authenticate(token);
+    const target = await this.requireManageableUser(actor, id);
+    await this.database.$transaction(async (transaction) => {
+      await transaction.user.update({
+        data: { securityVersion: { increment: 1 } },
+        where: { id: target.id },
+      });
+      await transaction.session.deleteMany({ where: { userId: target.id } });
+      await transaction.auditLog.create({
+        data: {
+          action: 'USER_SESSIONS_REVOKED',
+          actorUserId: actor.id,
+          entityId: target.id,
+          entityType: 'User',
+        },
+      });
+    });
+  }
+
+  async recoveryCodeStatus(token: string): Promise<RecoveryCodeStatus> {
+    const actor = await this.authenticate(token);
+    if (actor.role !== 'OWNER')
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.ownerSecurity'));
+    const user = await this.database.user.findUniqueOrThrow({ where: { id: actor.id } });
+    return {
+      configured: Boolean(user.recoveryCodeHash),
+      createdAt: user.recoveryCodeCreatedAt?.toISOString(),
+    };
+  }
+
+  async createRecoveryCode(token: string): Promise<RecoveryCodeResult> {
+    const actor = await this.authenticate(token);
+    if (actor.role !== 'OWNER')
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.ownerSecurity'));
+    const current = await this.database.user.findUniqueOrThrow({ where: { id: actor.id } });
+    const recoveryCode = generateRecoveryCode();
+    const createdAt = new Date();
+    await this.database.$transaction(async (transaction) => {
+      await transaction.user.update({
+        data: {
+          recoveryCodeCreatedAt: createdAt,
+          recoveryCodeHash: await hashPassword(recoveryCode),
+          recoveryFailedAttempts: 0,
+          recoveryLockedUntil: null,
+        },
+        where: { id: actor.id },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: current.recoveryCodeHash
+            ? 'OWNER_RECOVERY_CODE_REPLACED'
+            : 'OWNER_RECOVERY_CODE_CREATED',
+          actorUserId: actor.id,
+          entityId: actor.id,
+          entityType: 'User',
+        },
+      });
+    });
+    return { configured: true, createdAt: createdAt.toISOString(), recoveryCode };
+  }
+
+  async recoverOwner(input: OwnerRecoveryInput): Promise<OwnerRecoveryResult> {
+    const user = await this.database.user.findFirst({
+      where: { email: input.email.trim().toLowerCase(), isActive: true, role: 'OWNER' },
+    });
+    const invalid = () =>
+      new DomainError('AUTHENTICATION', t('domain.authentication.recoveryInvalid'));
+    if (!user?.recoveryCodeHash) throw invalid();
+    if (user.recoveryLockedUntil && user.recoveryLockedUntil.getTime() > Date.now())
+      throw new DomainError('AUTHENTICATION', t('domain.authentication.recoveryLocked'));
+    if (!(await verifyPassword(input.recoveryCode.trim().toUpperCase(), user.recoveryCodeHash))) {
+      const attempts = user.recoveryFailedAttempts + 1;
+      const lockedUntil =
+        attempts >= SECURITY_CONFIG.maxRecoveryAttempts
+          ? new Date(Date.now() + SECURITY_CONFIG.recoveryLockMinutes * 60_000)
+          : null;
+      await this.database.$transaction(async (transaction) => {
+        await transaction.user.update({
+          data: { recoveryFailedAttempts: attempts, recoveryLockedUntil: lockedUntil },
+          where: { id: user.id },
+        });
+        await transaction.auditLog.create({
+          data: {
+            action: lockedUntil ? 'OWNER_RECOVERY_LOCKED' : 'OWNER_RECOVERY_FAILED',
+            actorUserId: user.id,
+            detail: JSON.stringify({ attempts }),
+            entityId: user.id,
+            entityType: 'User',
+          },
+        });
+      });
+      if (lockedUntil)
+        throw new DomainError('AUTHENTICATION', t('domain.authentication.recoveryLocked'));
+      throw invalid();
+    }
+    const recoveryCode = generateRecoveryCode();
+    const passwordHash = await hashPassword(input.newPassword);
+    const recoveryCodeHash = await hashPassword(recoveryCode);
+    await this.database.$transaction(async (transaction) => {
+      await transaction.user.update({
+        data: {
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          mustChangePassword: false,
+          passwordChangedAt: new Date(),
+          passwordHash,
+          recoveryCodeCreatedAt: new Date(),
+          recoveryCodeHash,
+          recoveryFailedAttempts: 0,
+          recoveryLockedUntil: null,
+          securityVersion: { increment: 1 },
+        },
+        where: { id: user.id },
+      });
+      await transaction.session.deleteMany({ where: { userId: user.id } });
+      await transaction.auditLog.create({
+        data: {
+          action: 'OWNER_RECOVERY_SUCCEEDED',
+          actorUserId: user.id,
+          entityId: user.id,
+          entityType: 'User',
+        },
+      });
+    });
+    return { recoveryCode };
   }
 
   async listBranches(token: string, includeArchived = false): Promise<BranchSummary[]> {
@@ -571,6 +906,43 @@ export class ApplicationService {
     if (count !== branchIds.length) {
       throw new DomainError('VALIDATION', t('domain.validation.assignmentsInvalid'));
     }
+  }
+
+  private async requireManageableUser(
+    actor: AuthenticatedUser,
+    id: string,
+  ): Promise<UserWithBranches> {
+    assertPermission(actor, 'users:manage');
+    const target = await this.database.user.findUnique({
+      include: { branchAssignments: { select: { branchId: true } } },
+      where: { id },
+    });
+    if (!target) throw new DomainError('NOT_FOUND', t('domain.notFound.user'));
+    if (actor.role === 'ADMIN') {
+      if (target.role !== 'COACH')
+        throw new DomainError('AUTHORIZATION', t('domain.authorization.userRoleManage'));
+      for (const assignment of target.branchAssignments)
+        assertBranchAccess(actor, assignment.branchId);
+    }
+    return target;
+  }
+
+  private async audit(
+    actorUserId: string,
+    action: string,
+    entityType: string,
+    entityId: string,
+    detail?: Record<string, unknown>,
+  ): Promise<void> {
+    await this.database.auditLog.create({
+      data: {
+        action,
+        actorUserId,
+        detail: detail ? JSON.stringify(detail) : null,
+        entityId,
+        entityType,
+      },
+    });
   }
 
   private async requireBranch(id: string): Promise<Branch> {

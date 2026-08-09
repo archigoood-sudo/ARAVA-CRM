@@ -12,6 +12,7 @@ export { Label, type LabelProps } from './label';
 export { LedgerList, type LedgerListItem } from './ledger-list';
 export { Money, type MoneyProps } from './money';
 export { formatMoney } from './money-format';
+export { MiniBarChart, type MiniBarChartItem } from './mini-bar-chart';
 export { PageHeader } from './page-header';
 export { ParticipantRow, type ParticipantRowProps } from './participant-row';
 export { Select, type SelectProps } from './select';

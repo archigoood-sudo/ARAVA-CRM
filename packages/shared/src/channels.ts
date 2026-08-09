@@ -1,4 +1,6 @@
-export const USER_ROLES = ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'] as const;
+import type { PermissionSet } from './permissions';
+
+export const USER_ROLES = ['OWNER', 'ADMIN', 'COACH'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 export const STUDENT_STATUSES = ['ACTIVE', 'TRIAL', 'FROZEN', 'LEFT', 'ARCHIVED'] as const;
@@ -44,12 +46,56 @@ export const LEDGER_OPERATION_TYPES = [
   'UNFREEZE',
 ] as const;
 export type LedgerOperationType = (typeof LEDGER_OPERATION_TYPES)[number];
+export const EXPENSE_PAYMENT_METHODS = ['CASH', 'CARD', 'TRANSFER', 'OTHER'] as const;
+export type ExpensePaymentMethod = (typeof EXPENSE_PAYMENT_METHODS)[number];
+export const EXPENSE_STATUSES = ['DRAFT', 'CONFIRMED', 'CANCELLED'] as const;
+export type ExpenseStatus = (typeof EXPENSE_STATUSES)[number];
+export const CASH_REGISTER_TYPES = ['CASH', 'BANK', 'ONLINE'] as const;
+export type CashRegisterType = (typeof CASH_REGISTER_TYPES)[number];
+export const CASH_TRANSACTION_TYPES = ['INCOME', 'EXPENSE', 'TRANSFER', 'CORRECTION'] as const;
+export type CashTransactionType = (typeof CASH_TRANSACTION_TYPES)[number];
+export const CASH_TRANSACTION_SOURCES = [
+  'PAYMENT',
+  'REFUND',
+  'EXPENSE',
+  'PAYROLL',
+  'MANUAL',
+] as const;
+export type CashTransactionSource = (typeof CASH_TRANSACTION_SOURCES)[number];
+export const PAYROLL_TYPES = [
+  'FIXED_PER_LESSON',
+  'PER_ATTENDEE',
+  'PERCENT_OF_REVENUE',
+  'FIXED_MONTHLY',
+  'COMBINED',
+] as const;
+export type PayrollType = (typeof PAYROLL_TYPES)[number];
+export const PAYROLL_PERIOD_STATUSES = [
+  'DRAFT',
+  'CALCULATED',
+  'APPROVED',
+  'PAID',
+  'CANCELLED',
+] as const;
+export type PayrollPeriodStatus = (typeof PAYROLL_PERIOD_STATUSES)[number];
+export const REPORT_KINDS = [
+  'CASH_FLOW',
+  'INCOME_EXPENSES',
+  'PROFIT_BY_BRANCH',
+  'PAYROLL_BY_COACH',
+  'ATTENDANCE_BY_GROUP',
+  'SUBSCRIPTIONS_DEBTS',
+  'GROUP_OCCUPANCY',
+] as const;
+export type ReportKind = (typeof REPORT_KINDS)[number];
 
 export const IPC_CHANNELS = {
   activityList: 'activity:list',
   authChangePassword: 'auth:change-password',
+  authCompletePasswordChange: 'auth:complete-password-change',
   authLogin: 'auth:login',
   authLogout: 'auth:logout',
+  authRecoverOwner: 'auth:recover-owner',
   authRestore: 'auth:restore',
   branchArchive: 'branch:archive',
   branchCreate: 'branch:create',
@@ -97,6 +143,35 @@ export const IPC_CHANNELS = {
   refundCreate: 'refund:create',
   financeEmployees: 'finance:employees',
   financeStats: 'finance:stats',
+  expenseCategoryArchive: 'expense-category:archive',
+  expenseCategoryCreate: 'expense-category:create',
+  expenseCategoryList: 'expense-category:list',
+  expenseCategoryUpdate: 'expense-category:update',
+  expenseCancel: 'expense:cancel',
+  expenseConfirm: 'expense:confirm',
+  expenseCreate: 'expense:create',
+  expenseList: 'expense:list',
+  expenseUpdate: 'expense:update',
+  cashRegisterCreate: 'cash-register:create',
+  cashRegisterList: 'cash-register:list',
+  cashRegisterUpdate: 'cash-register:update',
+  cashTransactionList: 'cash-transaction:list',
+  cashCorrectionCreate: 'cash-transaction:correction',
+  cashTransferCreate: 'cash-transaction:transfer',
+  payrollRuleCreate: 'payroll-rule:create',
+  payrollRuleList: 'payroll-rule:list',
+  payrollRuleUpdate: 'payroll-rule:update',
+  payrollPeriodApprove: 'payroll-period:approve',
+  payrollPeriodCalculate: 'payroll-period:calculate',
+  payrollPeriodCreate: 'payroll-period:create',
+  payrollPeriodGet: 'payroll-period:get',
+  payrollPeriodList: 'payroll-period:list',
+  payrollPeriodPay: 'payroll-period:pay',
+  payrollAccrualAdjust: 'payroll-accrual:adjust',
+  payrollCoachView: 'payroll:coach-view',
+  analyticsGet: 'analytics:get',
+  reportGet: 'report:get',
+  reportExportCsv: 'report:export-csv',
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
   studentArchive: 'student:archive',
@@ -107,6 +182,10 @@ export const IPC_CHANNELS = {
   systemInformation: 'system:information',
   userCreate: 'user:create',
   userList: 'user:list',
+  userRecoveryCodeCreate: 'user:recovery-code-create',
+  userRecoveryCodeStatus: 'user:recovery-code-status',
+  userResetPassword: 'user:reset-password',
+  userRevokeSessions: 'user:revoke-sessions',
   userStaffOptions: 'user:staff-options',
   userUpdate: 'user:update',
 } as const;
@@ -122,6 +201,7 @@ export interface AuthenticatedUser {
   fullName: string;
   id: string;
   mustChangePassword: boolean;
+  permissions: PermissionSet;
   role: UserRole;
 }
 
@@ -135,9 +215,26 @@ export interface PasswordChangeInput {
   newPassword: string;
 }
 
+export interface ForcedPasswordChangeInput {
+  newPassword: string;
+}
+
+export interface OwnerRecoveryInput {
+  email: string;
+  recoveryCode: string;
+  newPassword: string;
+}
+
+export interface OwnerRecoveryResult {
+  recoveryCode: string;
+}
+
 export interface UserSummary extends AuthenticatedUser {
   createdAt: string;
   isActive: boolean;
+  lastLoginAt?: string | undefined;
+  lockedUntil?: string | undefined;
+  phone?: string | undefined;
   updatedAt: string;
 }
 
@@ -145,7 +242,9 @@ export interface UserCreateInput {
   branchIds: string[];
   email: string;
   fullName: string;
-  password: string;
+  /** Used only by trusted test/bootstrap callers. Desktop IPC always generates this value. */
+  password?: string | undefined;
+  phone?: string | undefined;
   role: UserRole;
 }
 
@@ -153,7 +252,22 @@ export interface UserUpdateInput {
   branchIds: string[];
   fullName: string;
   isActive: boolean;
+  phone?: string | undefined;
   role: UserRole;
+}
+
+export interface TemporaryPasswordResult {
+  temporaryPassword: string;
+  user: UserSummary;
+}
+
+export interface RecoveryCodeStatus {
+  configured: boolean;
+  createdAt?: string | undefined;
+}
+
+export interface RecoveryCodeResult extends RecoveryCodeStatus {
+  recoveryCode: string;
 }
 
 export interface BranchInput {
@@ -406,6 +520,240 @@ export interface FinanceStats {
   revenueToday: number;
 }
 
+export interface ExpenseCategoryInput {
+  branchId?: string | undefined;
+  description?: string | undefined;
+  isActive: boolean;
+  name: string;
+}
+
+export interface ExpenseCategorySummary extends ExpenseCategoryInput {
+  archivedAt?: string | undefined;
+  branchName?: string | undefined;
+  createdAt: string;
+  id: string;
+  updatedAt: string;
+}
+
+export interface ExpenseInput {
+  amount: number;
+  attachmentPath?: string | undefined;
+  branchId: string;
+  cashRegisterId?: string | undefined;
+  categoryId: string;
+  description: string;
+  documentNumber?: string | undefined;
+  paymentMethod: ExpensePaymentMethod;
+  spentAt: string;
+  vendor?: string | undefined;
+}
+
+export interface ExpenseListQuery {
+  branchId?: string | undefined;
+  categoryId?: string | undefined;
+  createdByUserId?: string | undefined;
+  dateFrom: string;
+  dateTo: string;
+  paymentMethod?: ExpensePaymentMethod | undefined;
+  search?: string | undefined;
+  status?: ExpenseStatus | undefined;
+}
+
+export interface ExpenseSummary extends Omit<ExpenseInput, 'cashRegisterId'> {
+  branchName: string;
+  categoryName: string;
+  confirmedByName?: string | undefined;
+  createdAt: string;
+  createdByName: string;
+  id: string;
+  status: ExpenseStatus;
+  updatedAt: string;
+}
+
+export interface CashRegisterInput {
+  branchId: string;
+  isActive: boolean;
+  name: string;
+  openingBalance: number;
+  type: CashRegisterType;
+}
+
+export interface CashRegisterSummary extends CashRegisterInput {
+  balance: number;
+  branchName: string;
+  createdAt: string;
+  id: string;
+  updatedAt: string;
+}
+
+export interface CashTransactionQuery {
+  branchId?: string | undefined;
+  cashRegisterId?: string | undefined;
+  dateFrom: string;
+  dateTo: string;
+}
+
+export interface CashTransactionSummary {
+  amount: number;
+  branchId: string;
+  cashRegisterId: string;
+  cashRegisterName: string;
+  comment?: string | undefined;
+  createdAt: string;
+  createdByName: string;
+  id: string;
+  occurredAt: string;
+  sourceId?: string | undefined;
+  sourceType: CashTransactionSource;
+  type: CashTransactionType;
+}
+
+export interface CashCorrectionInput {
+  amount: number;
+  cashRegisterId: string;
+  occurredAt: string;
+  reason: string;
+}
+
+export interface CashTransferInput {
+  amount: number;
+  fromCashRegisterId: string;
+  occurredAt: string;
+  reason: string;
+  toCashRegisterId: string;
+}
+
+export interface PayrollRuleInput {
+  amountPerAttendee?: number | undefined;
+  branchId: string;
+  coachId: string;
+  fixedAmount?: number | undefined;
+  groupId?: string | undefined;
+  isActive: boolean;
+  monthlyAmount?: number | undefined;
+  percent?: number | undefined;
+  type: PayrollType;
+  validFrom: string;
+  validTo?: string | undefined;
+}
+
+export interface PayrollRuleSummary extends PayrollRuleInput {
+  branchName: string;
+  coachName: string;
+  createdAt: string;
+  groupName?: string | undefined;
+  id: string;
+  updatedAt: string;
+}
+
+export interface PayrollPeriodInput {
+  branchId?: string | undefined;
+  dateFrom: string;
+  dateTo: string;
+}
+
+export interface PayrollAdjustmentInput {
+  amount: number;
+  reason: string;
+}
+
+export interface PayrollPaymentInput {
+  cashRegisterId: string;
+  occurredAt: string;
+}
+
+export interface PayrollAccrualSummary {
+  attendeeCount?: number | undefined;
+  baseAmount: number;
+  branchId: string;
+  branchName: string;
+  calculatedAmount: number;
+  coachId: string;
+  coachName: string;
+  comment?: string | undefined;
+  finalAmount: number;
+  groupId?: string | undefined;
+  groupName?: string | undefined;
+  id: string;
+  lessonId?: string | undefined;
+  manualAdjustment: number;
+  revenueBase?: number | undefined;
+  type: PayrollType;
+}
+
+export interface PayrollPeriodSummary extends PayrollPeriodInput {
+  approvedByName?: string | undefined;
+  createdAt: string;
+  createdByName: string;
+  id: string;
+  status: PayrollPeriodStatus;
+  totalAmount: number;
+  updatedAt: string;
+}
+
+export interface PayrollPeriodDetail extends PayrollPeriodSummary {
+  accruals: PayrollAccrualSummary[];
+}
+
+export interface AnalyticsQuery {
+  branchId?: string | undefined;
+  coachId?: string | undefined;
+  dateFrom: string;
+  dateTo: string;
+  direction?: string | undefined;
+  groupId?: string | undefined;
+}
+
+export interface AnalyticsMetric {
+  changePercent?: number | undefined;
+  current: number;
+  previous: number;
+}
+
+export interface AnalyticsBreakdownRow {
+  attendancePercentage: number;
+  coachWorkload: number;
+  expenses: number;
+  groupOccupancy: number;
+  id: string;
+  label: string;
+  netProfit: number;
+  revenue: number;
+}
+
+export interface ManagementAnalytics {
+  activeStudents: AnalyticsMetric;
+  attendancePercentage: AnalyticsMetric;
+  averagePayment: AnalyticsMetric;
+  breakdown: AnalyticsBreakdownRow[];
+  churnedStudents: AnalyticsMetric;
+  coachWorkload: AnalyticsMetric;
+  expenses: AnalyticsMetric;
+  groupOccupancy: AnalyticsMetric;
+  netProfit: AnalyticsMetric;
+  newStudents: AnalyticsMetric;
+  outstandingDebt: AnalyticsMetric;
+  payrollAccrued: AnalyticsMetric;
+  profitBeforePayroll: AnalyticsMetric;
+  revenue: AnalyticsMetric;
+}
+
+export interface ReportQuery extends AnalyticsQuery {
+  kind: ReportKind;
+}
+
+export interface ReportData {
+  headers: string[];
+  kind: ReportKind;
+  rows: (string | number)[][];
+  title: string;
+}
+
+export interface CsvExport {
+  content: string;
+  filename: string;
+}
+
 export interface StaffOption {
   fullName: string;
   id: string;
@@ -591,10 +939,14 @@ export interface DashboardStats {
   attendanceUnmarked: number;
   branches: number;
   expectedToday: number;
+  expensesToday: number;
   groupsWithPlaces: number;
+  groupsLowOccupancy: number;
   lessonsToday: number;
   lowLessonBalance: number;
   outstandingDebt: number;
+  netCashFlow: number;
+  payrollPendingApproval: number;
   revenueThisMonth: number;
   revenueToday: number;
   students: number;
@@ -629,8 +981,13 @@ export interface AravaDesktopApi {
   };
   auth: {
     changePassword: (token: string, input: PasswordChangeInput) => Promise<AuthenticatedUser>;
+    completePasswordChange: (
+      token: string,
+      input: ForcedPasswordChangeInput,
+    ) => Promise<AuthSession>;
     login: (credentials: LoginCredentials) => Promise<AuthSession>;
     logout: (token: string) => Promise<void>;
+    recoverOwner: (input: OwnerRecoveryInput) => Promise<OwnerRecoveryResult>;
     restore: (token: string) => Promise<AuthenticatedUser>;
   };
   branches: {
@@ -731,6 +1088,70 @@ export interface AravaDesktopApi {
     employees: (token: string) => Promise<StaffOption[]>;
     stats: (token: string, branchId?: string) => Promise<FinanceStats>;
   };
+  expenseCategories: {
+    archive: (token: string, id: string) => Promise<ExpenseCategorySummary>;
+    create: (token: string, input: ExpenseCategoryInput) => Promise<ExpenseCategorySummary>;
+    list: (token: string, includeArchived?: boolean) => Promise<ExpenseCategorySummary[]>;
+    update: (
+      token: string,
+      id: string,
+      input: ExpenseCategoryInput,
+    ) => Promise<ExpenseCategorySummary>;
+  };
+  expenses: {
+    cancel: (token: string, id: string) => Promise<ExpenseSummary>;
+    confirm: (token: string, id: string, cashRegisterId: string) => Promise<ExpenseSummary>;
+    create: (token: string, input: ExpenseInput) => Promise<ExpenseSummary>;
+    list: (token: string, query: ExpenseListQuery) => Promise<ExpenseSummary[]>;
+    update: (token: string, id: string, input: ExpenseInput) => Promise<ExpenseSummary>;
+  };
+  cash: {
+    correct: (token: string, input: CashCorrectionInput) => Promise<CashTransactionSummary>;
+    createRegister: (token: string, input: CashRegisterInput) => Promise<CashRegisterSummary>;
+    listRegisters: (token: string, branchId?: string) => Promise<CashRegisterSummary[]>;
+    listTransactions: (
+      token: string,
+      query: CashTransactionQuery,
+    ) => Promise<CashTransactionSummary[]>;
+    transfer: (token: string, input: CashTransferInput) => Promise<CashTransactionSummary[]>;
+    updateRegister: (
+      token: string,
+      id: string,
+      input: CashRegisterInput,
+    ) => Promise<CashRegisterSummary>;
+  };
+  payroll: {
+    adjustAccrual: (
+      token: string,
+      id: string,
+      input: PayrollAdjustmentInput,
+    ) => Promise<PayrollPeriodDetail>;
+    approvePeriod: (token: string, id: string) => Promise<PayrollPeriodDetail>;
+    calculatePeriod: (token: string, id: string) => Promise<PayrollPeriodDetail>;
+    coachView: (
+      token: string,
+      dateFrom: string,
+      dateTo: string,
+    ) => Promise<PayrollAccrualSummary[]>;
+    createPeriod: (token: string, input: PayrollPeriodInput) => Promise<PayrollPeriodDetail>;
+    createRule: (token: string, input: PayrollRuleInput) => Promise<PayrollRuleSummary>;
+    getPeriod: (token: string, id: string) => Promise<PayrollPeriodDetail>;
+    listPeriods: (token: string, branchId?: string) => Promise<PayrollPeriodSummary[]>;
+    listRules: (token: string, branchId?: string) => Promise<PayrollRuleSummary[]>;
+    payPeriod: (
+      token: string,
+      id: string,
+      input: PayrollPaymentInput,
+    ) => Promise<PayrollPeriodDetail>;
+    updateRule: (token: string, id: string, input: PayrollRuleInput) => Promise<PayrollRuleSummary>;
+  };
+  analytics: {
+    get: (token: string, query: AnalyticsQuery) => Promise<ManagementAnalytics>;
+  };
+  reports: {
+    exportCsv: (token: string, query: ReportQuery) => Promise<CsvExport>;
+    get: (token: string, query: ReportQuery) => Promise<ReportData>;
+  };
   settings: {
     get: (token: string, key: SettingKey) => Promise<string | null>;
     set: (token: string, update: SettingUpdate) => Promise<void>;
@@ -746,8 +1167,12 @@ export interface AravaDesktopApi {
     information: (token: string) => Promise<SystemInformation>;
   };
   users: {
-    create: (token: string, input: UserCreateInput) => Promise<UserSummary>;
+    create: (token: string, input: UserCreateInput) => Promise<TemporaryPasswordResult>;
     list: (token: string) => Promise<UserSummary[]>;
+    recoveryCodeCreate: (token: string) => Promise<RecoveryCodeResult>;
+    recoveryCodeStatus: (token: string) => Promise<RecoveryCodeStatus>;
+    resetPassword: (token: string, id: string) => Promise<TemporaryPasswordResult>;
+    revokeSessions: (token: string, id: string) => Promise<void>;
     staffOptions: (token: string) => Promise<StaffOption[]>;
     update: (token: string, id: string, input: UserUpdateInput) => Promise<UserSummary>;
   };

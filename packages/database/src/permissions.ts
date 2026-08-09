@@ -1,4 +1,10 @@
-import { t, type AuthenticatedUser, type UserRole } from '@arava/shared';
+import {
+  hasPermission,
+  t,
+  type AuthenticatedUser,
+  type PermissionKey,
+  type UserRole,
+} from '@arava/shared';
 
 import { DomainError } from './security';
 
@@ -20,31 +26,59 @@ export type DomainAction =
   | 'payments:read'
   | 'refunds:manage'
   | 'finance:read'
+  | 'expense-categories:manage'
+  | 'expenses:manage'
+  | 'expenses:read'
+  | 'cash:manage'
+  | 'cash:read'
+  | 'cash:correct'
+  | 'payroll:manage'
+  | 'payroll:calculate'
+  | 'payroll:approve'
+  | 'payroll:pay'
+  | 'payroll:adjust'
+  | 'payroll:read'
+  | 'analytics:read'
+  | 'reports:read'
   | 'students:manage'
   | 'students:read'
   | 'users:manage'
   | 'workspace:manage';
 
 const allowedRoles: Record<DomainAction, readonly UserRole[]> = {
-  'attendance:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
+  'attendance:manage': ['OWNER', 'ADMIN', 'COACH'],
   'branches:manage': ['OWNER', 'ADMIN'],
-  'contacts:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'groups:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'groups:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
-  'lessons:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'lessons:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
-  'schedules:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'tariffs:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'tariffs:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
-  'subscriptions:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'subscriptions:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
-  'subscriptions:adjust': ['OWNER', 'ADMIN'],
-  'payments:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'payments:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'refunds:manage': ['OWNER', 'ADMIN'],
-  'finance:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'students:manage': ['OWNER', 'ADMIN', 'BRANCH_MANAGER'],
-  'students:read': ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'],
+  'contacts:manage': ['OWNER', 'ADMIN'],
+  'groups:manage': ['OWNER', 'ADMIN'],
+  'groups:read': ['OWNER', 'ADMIN', 'COACH'],
+  'lessons:manage': ['OWNER', 'ADMIN'],
+  'lessons:read': ['OWNER', 'ADMIN', 'COACH'],
+  'schedules:manage': ['OWNER', 'ADMIN'],
+  'tariffs:manage': ['OWNER', 'ADMIN'],
+  'tariffs:read': ['OWNER', 'ADMIN', 'COACH'],
+  'subscriptions:manage': ['OWNER', 'ADMIN'],
+  'subscriptions:read': ['OWNER', 'ADMIN', 'COACH'],
+  'subscriptions:adjust': ['OWNER'],
+  'payments:manage': ['OWNER', 'ADMIN'],
+  'payments:read': ['OWNER', 'ADMIN'],
+  'refunds:manage': ['OWNER'],
+  'finance:read': ['OWNER', 'ADMIN'],
+  'expense-categories:manage': ['OWNER', 'ADMIN'],
+  'expenses:manage': ['OWNER', 'ADMIN'],
+  'expenses:read': ['OWNER', 'ADMIN'],
+  'cash:manage': ['OWNER', 'ADMIN'],
+  'cash:read': ['OWNER', 'ADMIN'],
+  'cash:correct': ['OWNER', 'ADMIN'],
+  'payroll:manage': ['OWNER', 'ADMIN'],
+  'payroll:calculate': ['OWNER', 'ADMIN'],
+  'payroll:approve': ['OWNER', 'ADMIN'],
+  'payroll:pay': ['OWNER', 'ADMIN'],
+  'payroll:adjust': ['OWNER', 'ADMIN'],
+  'payroll:read': ['OWNER', 'ADMIN', 'COACH'],
+  'analytics:read': ['OWNER', 'ADMIN'],
+  'reports:read': ['OWNER', 'ADMIN'],
+  'students:manage': ['OWNER', 'ADMIN'],
+  'students:read': ['OWNER', 'ADMIN', 'COACH'],
   'users:manage': ['OWNER', 'ADMIN'],
   'workspace:manage': ['OWNER', 'ADMIN'],
 };
@@ -55,8 +89,18 @@ export function assertPermission(user: AuthenticatedUser, action: DomainAction):
   }
 }
 
+export function assertCapability(user: AuthenticatedUser, permission: PermissionKey): void {
+  if (!hasPermission(user.role, permission)) {
+    throw new DomainError('AUTHORIZATION', t('domain.authorization.permissionDenied'));
+  }
+}
+
 export function canAccessBranch(user: AuthenticatedUser, branchId: string): boolean {
-  return user.role === 'OWNER' || user.role === 'ADMIN' || user.branchIds.includes(branchId);
+  return (
+    user.role === 'OWNER' ||
+    (user.role === 'ADMIN' && user.branchIds.length === 0) ||
+    user.branchIds.includes(branchId)
+  );
 }
 
 export function assertBranchAccess(user: AuthenticatedUser, branchId: string): void {
@@ -66,5 +110,7 @@ export function assertBranchAccess(user: AuthenticatedUser, branchId: string): v
 }
 
 export function accessibleBranchIds(user: AuthenticatedUser): string[] | undefined {
-  return user.role === 'OWNER' || user.role === 'ADMIN' ? undefined : user.branchIds;
+  return user.role === 'OWNER' || (user.role === 'ADMIN' && user.branchIds.length === 0)
+    ? undefined
+    : user.branchIds;
 }

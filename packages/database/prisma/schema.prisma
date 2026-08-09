@@ -11,7 +11,6 @@ datasource db {
 enum UserRole {
   OWNER
   ADMIN
-  BRANCH_MANAGER
   COACH
 }
 
@@ -97,6 +96,56 @@ enum LedgerOperationType {
   UNFREEZE
 }
 
+enum ExpensePaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  OTHER
+}
+
+enum ExpenseStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+enum CashRegisterType {
+  CASH
+  BANK
+  ONLINE
+}
+
+enum CashTransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+  CORRECTION
+}
+
+enum CashTransactionSource {
+  PAYMENT
+  REFUND
+  EXPENSE
+  PAYROLL
+  MANUAL
+}
+
+enum PayrollType {
+  FIXED_PER_LESSON
+  PER_ATTENDEE
+  PERCENT_OF_REVENUE
+  FIXED_MONTHLY
+  COMBINED
+}
+
+enum PayrollPeriodStatus {
+  DRAFT
+  CALCULATED
+  APPROVED
+  PAID
+  CANCELLED
+}
+
 model User {
   id                   String               @id @default(cuid())
   email                String               @unique
@@ -105,6 +154,16 @@ model User {
   role                 UserRole
   isActive             Boolean              @default(true)
   mustChangePassword   Boolean              @default(false)
+  phone                String?
+  failedLoginAttempts  Int                  @default(0)
+  lockedUntil          DateTime?
+  lastLoginAt          DateTime?
+  passwordChangedAt    DateTime?
+  securityVersion      Int                  @default(1)
+  recoveryCodeHash     String?
+  recoveryCodeCreatedAt DateTime?
+  recoveryFailedAttempts Int                @default(0)
+  recoveryLockedUntil  DateTime?
   branchAssignments    UserBranch[]
   sessions             Session[]
   coachedGroups        DanceGroup[]         @relation("GroupCoach")
@@ -117,10 +176,18 @@ model User {
   createdPayments      Payment[]            @relation("PaymentCreator")
   createdRefunds       Refund[]             @relation("RefundCreator")
   ledgerEntries        SubscriptionLedger[] @relation("LedgerCreator")
+  createdExpenses      Expense[]            @relation("ExpenseCreator")
+  confirmedExpenses    Expense[]            @relation("ExpenseConfirmer")
+  cashTransactions     CashTransaction[]
+  payrollRules         PayrollRule[]        @relation("PayrollCoach")
+  createdPayrolls      PayrollPeriod[]      @relation("PayrollCreator")
+  approvedPayrolls     PayrollPeriod[]      @relation("PayrollApprover")
+  payrollAccruals      PayrollAccrual[]     @relation("PayrollAccrualCoach")
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
 
   @@index([role, isActive])
+  @@index([lockedUntil])
 }
 
 model Session {
@@ -131,28 +198,37 @@ model Session {
   expiresAt  DateTime
   createdAt  DateTime @default(now())
   lastUsedAt DateTime @default(now())
+  securityVersion Int @default(1)
 
   @@index([userId])
+  @@index([userId, securityVersion])
   @@index([expiresAt])
 }
 
 model Branch {
-  id            String           @id @default(cuid())
-  name          String
-  address       String
-  phone         String
-  description   String?
-  isActive      Boolean          @default(true)
-  users         UserBranch[]
-  students      Student[]
-  groups        DanceGroup[]
-  schedules     WeeklySchedule[]
-  lessons       Lesson[]
-  tariffs       Tariff[]
-  subscriptions Subscription[]
-  payments      Payment[]
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  id                String            @id @default(cuid())
+  name              String
+  address           String
+  phone             String
+  description       String?
+  isActive          Boolean           @default(true)
+  users             UserBranch[]
+  students          Student[]
+  groups            DanceGroup[]
+  schedules         WeeklySchedule[]
+  lessons           Lesson[]
+  tariffs           Tariff[]
+  subscriptions     Subscription[]
+  payments          Payment[]
+  expenseCategories ExpenseCategory[]
+  expenses          Expense[]
+  cashRegisters     CashRegister[]
+  cashTransactions  CashTransaction[]
+  payrollRules      PayrollRule[]
+  payrollPeriods    PayrollPeriod[]
+  payrollAccruals   PayrollAccrual[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
   @@index([name])
   @@index([isActive])
@@ -216,6 +292,8 @@ model DanceGroup {
   enrollments      Enrollment[]
   schedules        WeeklySchedule[]
   lessons          Lesson[]
+  payrollRules     PayrollRule[]
+  payrollAccruals  PayrollAccrual[]
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   archivedAt       DateTime?
@@ -289,6 +367,7 @@ model Lesson {
   notes              String?
   attendance         Attendance[]
   ledgerEntries      SubscriptionLedger[]
+  payrollAccruals    PayrollAccrual[]
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
 
@@ -457,6 +536,160 @@ model SubscriptionLedger {
   @@index([lessonId])
   @@index([attendanceId, type])
   @@index([createdByUserId])
+}
+
+model ExpenseCategory {
+  id          String    @id @default(cuid())
+  name        String
+  branchId    String?
+  branch      Branch?   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  description String?
+  isActive    Boolean   @default(true)
+  expenses    Expense[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  archivedAt  DateTime?
+
+  @@index([branchId, isActive])
+  @@index([name])
+  @@index([archivedAt])
+}
+
+model Expense {
+  id                String               @id @default(cuid())
+  branchId          String
+  branch            Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  categoryId        String
+  category          ExpenseCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  amount            Int
+  spentAt           DateTime
+  paymentMethod     ExpensePaymentMethod
+  vendor            String?
+  description       String
+  documentNumber    String?
+  attachmentPath    String?
+  status            ExpenseStatus        @default(DRAFT)
+  createdByUserId   String
+  createdByUser     User                 @relation("ExpenseCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  confirmedByUserId String?
+  confirmedByUser   User?                @relation("ExpenseConfirmer", fields: [confirmedByUserId], references: [id], onDelete: Restrict)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  @@index([branchId, spentAt])
+  @@index([categoryId, spentAt])
+  @@index([status, spentAt])
+  @@index([paymentMethod, spentAt])
+  @@index([createdByUserId, spentAt])
+  @@index([documentNumber])
+}
+
+model CashRegister {
+  id             String            @id @default(cuid())
+  branchId       String
+  branch         Branch            @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  name           String
+  type           CashRegisterType
+  openingBalance Int               @default(0)
+  isActive       Boolean           @default(true)
+  transactions   CashTransaction[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([branchId, isActive])
+  @@index([type, isActive])
+}
+
+model CashTransaction {
+  id              String                @id @default(cuid())
+  cashRegisterId  String
+  cashRegister    CashRegister          @relation(fields: [cashRegisterId], references: [id], onDelete: Restrict)
+  branchId        String
+  branch          Branch                @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  type            CashTransactionType
+  amount          Int
+  sourceType      CashTransactionSource
+  sourceId        String?
+  occurredAt      DateTime
+  comment         String?
+  createdByUserId String
+  createdByUser   User                  @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt       DateTime              @default(now())
+
+  @@index([cashRegisterId, occurredAt])
+  @@index([branchId, occurredAt])
+  @@index([sourceType, sourceId])
+  @@index([createdByUserId, occurredAt])
+}
+
+model PayrollRule {
+  id                String      @id @default(cuid())
+  coachId           String
+  coach             User        @relation("PayrollCoach", fields: [coachId], references: [id], onDelete: Restrict)
+  branchId          String
+  branch            Branch      @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  groupId           String?
+  group             DanceGroup? @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  type              PayrollType
+  fixedAmount       Int?
+  amountPerAttendee Int?
+  percent           Float?
+  monthlyAmount     Int?
+  validFrom         DateTime
+  validTo           DateTime?
+  isActive          Boolean     @default(true)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([coachId, branchId, groupId, isActive])
+  @@index([validFrom, validTo])
+}
+
+model PayrollPeriod {
+  id               String              @id @default(cuid())
+  dateFrom         DateTime
+  dateTo           DateTime
+  branchId         String?
+  branch           Branch?             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  status           PayrollPeriodStatus @default(DRAFT)
+  createdByUserId  String
+  createdByUser    User                @relation("PayrollCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  approvedByUserId String?
+  approvedByUser   User?               @relation("PayrollApprover", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+  accruals         PayrollAccrual[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([branchId, dateFrom, dateTo])
+  @@index([status, dateFrom])
+}
+
+model PayrollAccrual {
+  id               String        @id @default(cuid())
+  payrollPeriodId  String
+  payrollPeriod    PayrollPeriod @relation(fields: [payrollPeriodId], references: [id], onDelete: Restrict)
+  coachId          String
+  coach            User          @relation("PayrollAccrualCoach", fields: [coachId], references: [id], onDelete: Restrict)
+  branchId         String
+  branch           Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  groupId          String?
+  group            DanceGroup?   @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  lessonId         String?
+  lesson           Lesson?       @relation(fields: [lessonId], references: [id], onDelete: Restrict)
+  type             PayrollType
+  baseAmount       Int
+  attendeeCount    Int?
+  revenueBase      Int?
+  calculatedAmount Int
+  manualAdjustment Int           @default(0)
+  finalAmount      Int
+  comment          String?
+  createdAt        DateTime      @default(now())
+
+  @@unique([payrollPeriodId, coachId, lessonId, type])
+  @@index([payrollPeriodId, coachId])
+  @@index([branchId, coachId])
+  @@index([lessonId])
 }
 
 model StudentContact {

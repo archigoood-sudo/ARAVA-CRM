@@ -1,20 +1,31 @@
 import {
   ApplicationService,
   FinanceService,
+  ManagementService,
   StudioService,
   accessibleBranchIds,
-  assertPermission,
+  assertCapability,
   type DatabaseClient,
 } from '@arava/database';
 import {
   IPC_CHANNELS,
   attendanceEntriesSchema,
+  analyticsQuerySchema,
   branchInputSchema,
+  cashCorrectionInputSchema,
+  cashRegisterInputSchema,
+  cashTransactionQuerySchema,
+  cashTransferInputSchema,
   enrollmentInputSchema,
+  expenseCategoryInputSchema,
+  expenseInputSchema,
+  expenseListQuerySchema,
+  forcedPasswordChangeSchema,
   groupInputSchema,
   groupListQuerySchema,
   identifierSchema,
   loginCredentialsSchema,
+  ownerRecoverySchema,
   lessonCancelInputSchema,
   lessonGenerateInputSchema,
   lessonInputSchema,
@@ -22,7 +33,12 @@ import {
   passwordChangeSchema,
   paymentInputSchema,
   paymentListQuerySchema,
+  payrollAdjustmentInputSchema,
+  payrollPaymentInputSchema,
+  payrollPeriodInputSchema,
+  payrollRuleInputSchema,
   refundInputSchema,
+  reportQuerySchema,
   sessionTokenSchema,
   settingKeySchema,
   settingUpdateSchema,
@@ -56,6 +72,7 @@ export function createIpcHandlers(
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
   const finance = new FinanceService(database, service);
+  const management = new ManagementService(database, service);
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
@@ -68,11 +85,18 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         passwordChangeSchema.parse(unsafeInput),
       ),
+    [IPC_CHANNELS.authCompletePasswordChange]: (unsafeToken, unsafeInput) =>
+      service.completePasswordChange(
+        sessionTokenSchema.parse(unsafeToken),
+        forcedPasswordChangeSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.authRecoverOwner]: (unsafeInput) =>
+      service.recoverOwner(ownerRecoverySchema.parse(unsafeInput)),
 
     [IPC_CHANNELS.userList]: (unsafeToken) =>
       service.listUsers(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.userCreate]: (unsafeToken, unsafeInput) =>
-      service.createUser(
+      service.createUserWithTemporaryPassword(
         sessionTokenSchema.parse(unsafeToken),
         userCreateSchema.parse(unsafeInput),
       ),
@@ -82,6 +106,20 @@ export function createIpcHandlers(
         identifierSchema.parse(unsafeId),
         userUpdateSchema.parse(unsafeInput),
       ),
+    [IPC_CHANNELS.userResetPassword]: (unsafeToken, unsafeId) =>
+      service.resetUserPassword(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.userRevokeSessions]: (unsafeToken, unsafeId) =>
+      service.revokeUserSessions(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.userRecoveryCodeStatus]: (unsafeToken) =>
+      service.recoveryCodeStatus(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.userRecoveryCodeCreate]: (unsafeToken) =>
+      service.createRecoveryCode(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.userStaffOptions]: (unsafeToken) =>
       studio.listStaffOptions(sessionTokenSchema.parse(unsafeToken)),
 
@@ -275,6 +313,160 @@ export function createIpcHandlers(
         unsafeBranchId === undefined ? undefined : identifierSchema.parse(unsafeBranchId),
       ),
 
+    [IPC_CHANNELS.expenseCategoryList]: (unsafeToken, unsafeIncludeArchived) =>
+      management.listExpenseCategories(
+        sessionTokenSchema.parse(unsafeToken),
+        unsafeIncludeArchived === true,
+      ),
+    [IPC_CHANNELS.expenseCategoryCreate]: (unsafeToken, unsafeInput) =>
+      management.createExpenseCategory(
+        sessionTokenSchema.parse(unsafeToken),
+        expenseCategoryInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.expenseCategoryUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
+      management.updateExpenseCategory(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        expenseCategoryInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.expenseCategoryArchive]: (unsafeToken, unsafeId) =>
+      management.archiveExpenseCategory(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.expenseList]: (unsafeToken, unsafeQuery) =>
+      management.listExpenses(
+        sessionTokenSchema.parse(unsafeToken),
+        expenseListQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.expenseCreate]: (unsafeToken, unsafeInput) =>
+      management.createExpense(
+        sessionTokenSchema.parse(unsafeToken),
+        expenseInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.expenseUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
+      management.updateExpense(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        expenseInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.expenseConfirm]: (unsafeToken, unsafeId, unsafeRegisterId) =>
+      management.confirmExpense(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        identifierSchema.parse(unsafeRegisterId),
+      ),
+    [IPC_CHANNELS.expenseCancel]: (unsafeToken, unsafeId) =>
+      management.cancelExpense(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.cashRegisterList]: (unsafeToken, unsafeBranchId) =>
+      management.listCashRegisters(
+        sessionTokenSchema.parse(unsafeToken),
+        unsafeBranchId === undefined ? undefined : identifierSchema.parse(unsafeBranchId),
+      ),
+    [IPC_CHANNELS.cashRegisterCreate]: (unsafeToken, unsafeInput) =>
+      management.createCashRegister(
+        sessionTokenSchema.parse(unsafeToken),
+        cashRegisterInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cashRegisterUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
+      management.updateCashRegister(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        cashRegisterInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cashTransactionList]: (unsafeToken, unsafeQuery) =>
+      management.listCashTransactions(
+        sessionTokenSchema.parse(unsafeToken),
+        cashTransactionQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.cashCorrectionCreate]: (unsafeToken, unsafeInput) =>
+      management.correctCash(
+        sessionTokenSchema.parse(unsafeToken),
+        cashCorrectionInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.cashTransferCreate]: (unsafeToken, unsafeInput) =>
+      management.transferCash(
+        sessionTokenSchema.parse(unsafeToken),
+        cashTransferInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.payrollRuleList]: (unsafeToken, unsafeBranchId) =>
+      management.listPayrollRules(
+        sessionTokenSchema.parse(unsafeToken),
+        unsafeBranchId === undefined ? undefined : identifierSchema.parse(unsafeBranchId),
+      ),
+    [IPC_CHANNELS.payrollRuleCreate]: (unsafeToken, unsafeInput) =>
+      management.createPayrollRule(
+        sessionTokenSchema.parse(unsafeToken),
+        payrollRuleInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.payrollRuleUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
+      management.updatePayrollRule(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        payrollRuleInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.payrollPeriodList]: (unsafeToken, unsafeBranchId) =>
+      management.listPayrollPeriods(
+        sessionTokenSchema.parse(unsafeToken),
+        unsafeBranchId === undefined ? undefined : identifierSchema.parse(unsafeBranchId),
+      ),
+    [IPC_CHANNELS.payrollPeriodCreate]: (unsafeToken, unsafeInput) =>
+      management.createPayrollPeriod(
+        sessionTokenSchema.parse(unsafeToken),
+        payrollPeriodInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.payrollPeriodGet]: (unsafeToken, unsafeId) =>
+      management.getPayrollPeriod(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.payrollPeriodCalculate]: (unsafeToken, unsafeId) =>
+      management.calculatePayrollPeriod(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.payrollPeriodApprove]: (unsafeToken, unsafeId) =>
+      management.approvePayrollPeriod(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.payrollPeriodPay]: (unsafeToken, unsafeId, unsafeInput) =>
+      management.payPayrollPeriod(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        payrollPaymentInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.payrollAccrualAdjust]: (unsafeToken, unsafeId, unsafeInput) =>
+      management.adjustPayrollAccrual(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        payrollAdjustmentInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.payrollCoachView]: (unsafeToken, unsafeDateFrom, unsafeDateTo) =>
+      management.coachPayroll(
+        sessionTokenSchema.parse(unsafeToken),
+        String(unsafeDateFrom),
+        String(unsafeDateTo),
+      ),
+    [IPC_CHANNELS.analyticsGet]: (unsafeToken, unsafeQuery) =>
+      management.analytics(
+        sessionTokenSchema.parse(unsafeToken),
+        analyticsQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.reportGet]: (unsafeToken, unsafeQuery) =>
+      management.report(
+        sessionTokenSchema.parse(unsafeToken),
+        reportQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.reportExportCsv]: (unsafeToken, unsafeQuery) =>
+      management.exportReportCsv(
+        sessionTokenSchema.parse(unsafeToken),
+        reportQuerySchema.parse(unsafeQuery),
+      ),
+
     [IPC_CHANNELS.branchList]: (unsafeToken, unsafeIncludeArchived) =>
       service.listBranches(sessionTokenSchema.parse(unsafeToken), unsafeIncludeArchived === true),
     [IPC_CHANNELS.branchCreate]: (unsafeToken, unsafeInput) =>
@@ -458,12 +650,50 @@ export function createIpcHandlers(
       );
       const now = new Date();
       const expiringBoundary = new Date(now.getTime() + 5 * 86_400_000);
+      const managementScope = branchIds ? { branchId: { in: branchIds } } : {};
+      const [expenseToday, cashToday, payrollPendingApproval] =
+        actor.role === 'COACH'
+          ? [{ _sum: { amount: null } }, [], 0]
+          : await Promise.all([
+              database.expense.aggregate({
+                _sum: { amount: true },
+                where: {
+                  ...managementScope,
+                  spentAt: { gte: dayStart, lte: dayEnd },
+                  status: 'CONFIRMED',
+                },
+              }),
+              database.cashTransaction.findMany({
+                select: { amount: true, type: true },
+                where: { ...managementScope, occurredAt: { gte: dayStart, lte: dayEnd } },
+              }),
+              database.payrollPeriod.count({
+                where: {
+                  ...(branchIds ? { branchId: { in: branchIds } } : {}),
+                  status: 'CALCULATED',
+                },
+              }),
+            ]);
+      const netCashFlow = cashToday.reduce(
+        (sum, transaction) =>
+          sum +
+          (transaction.type === 'INCOME'
+            ? transaction.amount
+            : transaction.type === 'EXPENSE'
+              ? -transaction.amount
+              : transaction.amount),
+        0,
+      );
       return {
         activeGroups: groups.length,
         attendanceMarked,
         attendanceUnmarked: Math.max(0, expectedToday - attendanceMarked),
         branches,
         expectedToday,
+        expensesToday: expenseToday._sum.amount ?? 0,
+        groupsLowOccupancy: groups.filter(
+          (group) => group._count.enrollments / group.capacity < 0.5,
+        ).length,
         groupsWithPlaces: groups.filter((group) => group._count.enrollments < group.capacity)
           .length,
         lessonsToday: lessons.length,
@@ -471,7 +701,9 @@ export function createIpcHandlers(
           ({ lessonLimit, lessonsUsed }) =>
             lessonLimit !== null && Math.max(0, lessonLimit - lessonsUsed) <= 2,
         ).length,
+        netCashFlow,
         outstandingDebt: financeSummary.outstandingDebt,
+        payrollPendingApproval,
         revenueThisMonth: financeSummary.revenueThisMonth,
         revenueToday: financeSummary.revenueToday,
         students,
@@ -506,7 +738,8 @@ export function createIpcHandlers(
     [IPC_CHANNELS.settingsSet]: async (unsafeToken, unsafeUpdate): Promise<void> => {
       const actor = await service.authenticate(sessionTokenSchema.parse(unsafeToken));
       const update = settingUpdateSchema.parse(unsafeUpdate);
-      if (update.key === 'general.workspaceName') assertPermission(actor, 'workspace:manage');
+      if (update.key === 'general.workspaceName')
+        assertCapability(actor, 'canManageSystemSettings');
       await database.appSetting.upsert({
         create: update,
         update: { value: update.value },

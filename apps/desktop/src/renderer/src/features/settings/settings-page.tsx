@@ -12,8 +12,8 @@ import {
   cn,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Database, Laptop, Moon, Save, Sun } from 'lucide-react';
-import { useEffect } from 'react';
+import { Check, Database, KeyRound, Laptop, Moon, Save, Sun } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
@@ -62,7 +62,8 @@ const platformNames: Record<string, string> = {
 
 export function SettingsPage() {
   const user = useAuthStore((state) => state.user);
-  const canManageWorkspace = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const canManageWorkspace = user?.permissions.canManageSystemSettings ?? false;
+  const [recoveryCode, setRecoveryCode] = useState<string>();
   const queryClient = useQueryClient();
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
@@ -74,6 +75,18 @@ export function SettingsPage() {
   const systemQuery = useQuery({
     queryFn: () => getDesktopApi().system.information(getSessionToken()),
     queryKey: queryKeys.system,
+  });
+  const recoveryStatus = useQuery({
+    enabled: user?.role === 'OWNER',
+    queryFn: () => getDesktopApi().users.recoveryCodeStatus(getSessionToken()),
+    queryKey: ['owner-recovery-code'],
+  });
+  const createRecoveryCode = useMutation({
+    mutationFn: () => getDesktopApi().users.recoveryCodeCreate(getSessionToken()),
+    onSuccess: (result) => {
+      setRecoveryCode(result.recoveryCode);
+      queryClient.setQueryData(['owner-recovery-code'], result);
+    },
   });
   const {
     formState: { errors, isDirty },
@@ -117,6 +130,61 @@ export function SettingsPage() {
       <PageHeader description={t('settings.pageDescription')} title={t('settings.pageTitle')} />
 
       <div className="space-y-5">
+        {user?.role === 'OWNER' ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('settings.recovery.title')}</CardTitle>
+              <p className="text-sm text-muted-foreground">{t('settings.recovery.description')}</p>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between gap-6 rounded-2xl border border-border bg-background p-5">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-semibold">
+                    <KeyRound className="size-4" />
+                    {recoveryStatus.data?.configured
+                      ? t('settings.recovery.configured')
+                      : t('settings.recovery.notConfigured')}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t('settings.recovery.storeOffline')}
+                  </p>
+                </div>
+                <Button
+                  disabled={createRecoveryCode.isPending}
+                  onClick={() => {
+                    if (window.confirm(t('settings.recovery.confirmReplace')))
+                      void createRecoveryCode.mutateAsync();
+                  }}
+                  variant="outline"
+                >
+                  {recoveryStatus.data?.configured
+                    ? t('settings.recovery.replace')
+                    : t('settings.recovery.create')}
+                </Button>
+              </div>
+              {recoveryCode ? (
+                <div className="mt-4 rounded-2xl bg-sidebar p-5 text-white">
+                  <p className="text-sm text-neutral-300">{t('settings.recovery.once')}</p>
+                  <code className="mt-3 block select-all text-center text-lg font-semibold tracking-wider text-accent">
+                    {recoveryCode}
+                  </code>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <Button
+                      onClick={() => void navigator.clipboard.writeText(recoveryCode)}
+                      variant="outline"
+                    >
+                      {t('settings.recovery.copy')}
+                    </Button>
+                    <Button onClick={() => setRecoveryCode(undefined)}>
+                      {t('settings.recovery.saved')}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
         <Card>
           <CardHeader>
             <CardTitle>{t('settings.appearance')}</CardTitle>

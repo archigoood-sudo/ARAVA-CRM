@@ -1,4 +1,10 @@
-import { t, type AuthenticatedUser, type UserRole } from '@arava/shared';
+import {
+  hasPermission,
+  permissionsForRole,
+  t,
+  type AuthenticatedUser,
+  type UserRole,
+} from '@arava/shared';
 import { describe, expect, it } from 'vitest';
 
 import { assertPermission, canAccessBranch, type DomainAction } from './permissions';
@@ -27,25 +33,9 @@ const actions: DomainAction[] = [
   'workspace:manage',
 ];
 const expected: Record<UserRole, DomainAction[]> = {
-  ADMIN: actions,
-  BRANCH_MANAGER: [
-    'attendance:manage',
-    'contacts:manage',
-    'finance:read',
-    'groups:manage',
-    'groups:read',
-    'lessons:manage',
-    'lessons:read',
-    'schedules:manage',
-    'payments:manage',
-    'payments:read',
-    'students:manage',
-    'students:read',
-    'subscriptions:manage',
-    'subscriptions:read',
-    'tariffs:manage',
-    'tariffs:read',
-  ],
+  ADMIN: actions.filter(
+    (action) => action !== 'refunds:manage' && action !== 'subscriptions:adjust',
+  ),
   COACH: [
     'attendance:manage',
     'groups:read',
@@ -64,12 +54,13 @@ function user(role: UserRole): AuthenticatedUser {
     fullName: role,
     id: role,
     mustChangePassword: false,
+    permissions: permissionsForRole(role),
     role,
   };
 }
 
 describe('permission matrix', () => {
-  for (const role of ['OWNER', 'ADMIN', 'BRANCH_MANAGER', 'COACH'] as const) {
+  for (const role of ['OWNER', 'ADMIN', 'COACH'] as const) {
     it(`enforces all actions for ${role}`, () => {
       for (const action of actions) {
         if (expected[role].includes(action))
@@ -83,10 +74,21 @@ describe('permission matrix', () => {
   }
 
   it('limits branch-scoped roles to their assignments', () => {
-    expect(canAccessBranch(user('BRANCH_MANAGER'), 'branch-a')).toBe(true);
-    expect(canAccessBranch(user('BRANCH_MANAGER'), 'branch-b')).toBe(false);
     expect(canAccessBranch(user('COACH'), 'branch-b')).toBe(false);
-    expect(canAccessBranch(user('ADMIN'), 'branch-b')).toBe(true);
+    expect(canAccessBranch(user('ADMIN'), 'branch-a')).toBe(true);
+    expect(canAccessBranch(user('ADMIN'), 'branch-b')).toBe(false);
+    expect(canAccessBranch({ ...user('ADMIN'), branchIds: [] }, 'branch-b')).toBe(true);
     expect(canAccessBranch(user('OWNER'), 'branch-b')).toBe(true);
+  });
+
+  it('exposes the centralized business capability matrix', () => {
+    expect(hasPermission('OWNER', 'canManageOwners')).toBe(true);
+    expect(hasPermission('ADMIN', 'canManageUsers')).toBe(true);
+    expect(hasPermission('ADMIN', 'canManageOwners')).toBe(false);
+    expect(hasPermission('ADMIN', 'canManageBackups')).toBe(false);
+    expect(hasPermission('COACH', 'canManageAttendance')).toBe(true);
+    expect(hasPermission('COACH', 'canViewPayroll')).toBe(true);
+    expect(hasPermission('COACH', 'canViewPayments')).toBe(false);
+    expect(hasPermission('COACH', 'canResetPasswords')).toBe(false);
   });
 });

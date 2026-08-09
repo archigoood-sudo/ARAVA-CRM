@@ -121,7 +121,7 @@ describe('Sprint 2 studio service', () => {
       email: 'manager@arava.local',
       fullName: 'Управляющий',
       password: 'Manager!Pass2026',
-      role: 'BRANCH_MANAGER',
+      role: 'ADMIN',
     });
     const manager = await application.login({
       email: 'manager@arava.local',

@@ -1,29 +1,37 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { passwordChangeSchema, t, type PasswordChangeInput } from '@arava/shared';
+import { forcedPasswordChangeSchema, t } from '@arava/shared';
 import { Button, Card, CardContent, Input, Label } from '@arava/ui';
 import { ArrowRight, KeyRound, ShieldCheck } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { useNavigate } from 'react-router-dom';
+import { z } from 'zod';
 
 import { BrandMark } from '../../components/brand-mark';
 import { useAuthStore } from '../../stores/auth-store';
 
 export function ChangePasswordPage() {
-  const changePassword = useAuthStore((state) => state.changePassword);
+  const completePasswordChange = useAuthStore((state) => state.completePasswordChange);
   const navigate = useNavigate();
   const {
     formState: { errors, isSubmitting },
     handleSubmit,
     register,
     setError,
-  } = useForm<PasswordChangeInput>({
-    defaultValues: { currentPassword: '', newPassword: '' },
-    resolver: zodResolver(passwordChangeSchema),
+  } = useForm<{ newPassword: string; repeatPassword: string }>({
+    defaultValues: { newPassword: '', repeatPassword: '' },
+    resolver: zodResolver(
+      forcedPasswordChangeSchema
+        .and(z.object({ repeatPassword: z.string().min(1, t('validation.password.required')) }))
+        .refine((value) => value.newPassword === value.repeatPassword, {
+          message: t('validation.passwordsMatch'),
+          path: ['repeatPassword'],
+        }),
+    ),
   });
 
   const submit = handleSubmit(async (input) => {
     try {
-      await changePassword(input);
+      await completePasswordChange({ newPassword: input.newPassword });
       await navigate('/dashboard');
     } catch {
       setError('root', { message: t('auth.change.error') });
@@ -47,13 +55,6 @@ export function ChangePasswordPage() {
             </p>
             <form className="mt-7 space-y-5" onSubmit={submit}>
               <div className="space-y-2">
-                <Label htmlFor="currentPassword">{t('auth.currentPassword')}</Label>
-                <Input id="currentPassword" type="password" {...register('currentPassword')} />
-                {errors.currentPassword ? (
-                  <p className="text-sm text-red-600">{errors.currentPassword.message}</p>
-                ) : null}
-              </div>
-              <div className="space-y-2">
                 <Label htmlFor="newPassword">{t('auth.newPassword')}</Label>
                 <Input id="newPassword" type="password" {...register('newPassword')} />
                 {errors.newPassword ? (
@@ -61,6 +62,13 @@ export function ChangePasswordPage() {
                 ) : (
                   <p className="text-xs leading-5 text-muted-foreground">{t('auth.change.hint')}</p>
                 )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="repeatPassword">{t('auth.repeatPassword')}</Label>
+                <Input id="repeatPassword" type="password" {...register('repeatPassword')} />
+                {errors.repeatPassword ? (
+                  <p className="text-sm text-red-600">{errors.repeatPassword.message}</p>
+                ) : null}
               </div>
               {errors.root ? <p className="text-sm text-red-600">{errors.root.message}</p> : null}
               <Button className="w-full" disabled={isSubmitting} size="large" type="submit">

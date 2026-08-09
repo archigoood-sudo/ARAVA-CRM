@@ -3,7 +3,7 @@ import { loginCredentialsSchema, t, type LoginCredentials } from '@arava/shared'
 import { Button, Input, Label } from '@arava/ui';
 import { ArrowRight, BarChart3, Check, ShieldCheck, Sparkles } from 'lucide-react';
 import { useForm } from 'react-hook-form';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { BrandMark } from '../../components/brand-mark';
 import { useAuthStore } from '../../stores/auth-store';
@@ -17,6 +17,7 @@ const productHighlights = [
 export function LoginPage() {
   const navigate = useNavigate();
   const login = useAuthStore((state) => state.login);
+  const sessionMessage = useAuthStore((state) => state.sessionMessage);
   const {
     formState: { errors, isSubmitting },
     handleSubmit,
@@ -97,6 +98,11 @@ export function LoginPage() {
           </div>
 
           <form className="space-y-5" onSubmit={submit}>
+            {sessionMessage ? (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm font-medium text-amber-800">
+                {sessionMessage}
+              </p>
+            ) : null}
             <div className="space-y-2.5">
               <Label htmlFor="email">{t('auth.email')}</Label>
               <Input
@@ -145,6 +151,12 @@ export function LoginPage() {
               {isSubmitting ? t('auth.login.progress') : t('auth.login.action')}
               <ArrowRight className="size-4" />
             </Button>
+            <Link
+              className="block text-center text-sm font-medium text-muted-foreground hover:text-foreground"
+              to="/forgot-password"
+            >
+              {t('auth.forgotPassword')}
+            </Link>
           </form>
 
           <p className="mt-8 text-center text-xs leading-5 text-muted-foreground">

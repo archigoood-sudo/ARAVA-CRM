@@ -60,8 +60,7 @@ const statusStyles: Record<StudentStatus, string> = {
 
 export function StudentsPage() {
   const user = useAuthStore((state) => state.user);
-  const canManage =
-    user?.role === 'OWNER' || user?.role === 'ADMIN' || user?.role === 'BRANCH_MANAGER';
+  const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
