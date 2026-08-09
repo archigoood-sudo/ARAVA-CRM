@@ -31,7 +31,9 @@ async function signOut(page: Page) {
 test('роли, временные пароли, отзыв сессий и резервное восстановление владельца', async ({
   request: _request,
 }, testInfo) => {
-  test.setTimeout(120_000);
+  // Packaged Electron plus memory-hard password hashing is substantially slower
+  // on shared Linux CI runners than on a local desktop.
+  test.setTimeout(process.env.CI ? 300_000 : 120_000);
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const userDataArgument = `--user-data-dir=${testInfo.outputPath('security-user-data')}`;
   const application = executablePath
