@@ -5,6 +5,7 @@ import {
   cardAssignInputSchema,
   cashTransferInputSchema,
   expenseInputSchema,
+  globalSearchQuerySchema,
   loginCredentialsSchema,
   payrollRuleInputSchema,
   tariffInputSchema,
@@ -27,6 +28,14 @@ describe('Sprint 4.1C card validation', () => {
     expect(barcodeSchema.safeParse('').success).toBe(false);
     expect(barcodeSchema.safeParse('001').success).toBe(false);
     expect(barcodeSchema.safeParse('0000 001').success).toBe(false);
+  });
+});
+
+describe('Sprint 4.1D global search validation', () => {
+  it('trims a useful query and rejects empty or oversized input', () => {
+    expect(globalSearchQuerySchema.parse('  Иванов  ')).toBe('Иванов');
+    expect(globalSearchQuerySchema.safeParse(' ').success).toBe(false);
+    expect(globalSearchQuerySchema.safeParse('а'.repeat(121)).success).toBe(false);
   });
 });
 

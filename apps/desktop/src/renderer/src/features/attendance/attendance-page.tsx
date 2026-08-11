@@ -93,6 +93,9 @@ export function AttendancePage() {
           <p className="mt-2 text-xs text-muted-foreground">
             {t('attendance.marked', { expected: participants.length, marked })}
           </p>
+          {attendance.data.attendanceCompletedAt ? (
+            <p className="mt-1 text-xs font-semibold text-emerald-600">Посещаемость заполнена</p>
+          ) : null}
         </div>
       </header>
       <Card>

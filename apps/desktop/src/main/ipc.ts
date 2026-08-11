@@ -3,6 +3,7 @@ import {
   CalendarService,
   CardService,
   FinanceService,
+  GlobalSearchService,
   ManagementService,
   StudioService,
   accessibleBranchIds,
@@ -34,6 +35,7 @@ import {
   forcedPasswordChangeSchema,
   groupInputSchema,
   groupListQuerySchema,
+  globalSearchQuerySchema,
   identifierSchema,
   loginCredentialsSchema,
   ownerRecoverySchema,
@@ -92,6 +94,7 @@ export function createIpcHandlers(
   const management = new ManagementService(database, service);
   const calendar = new CalendarService(database, service);
   const cards = new CardService(database, service);
+  const search = new GlobalSearchService(database, service);
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
@@ -141,6 +144,12 @@ export function createIpcHandlers(
       service.createRecoveryCode(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.userStaffOptions]: (unsafeToken) =>
       studio.listStaffOptions(sessionTokenSchema.parse(unsafeToken)),
+
+    [IPC_CHANNELS.globalSearch]: (unsafeToken, unsafeQuery) =>
+      search.search(
+        sessionTokenSchema.parse(unsafeToken),
+        globalSearchQuerySchema.parse(unsafeQuery),
+      ),
 
     [IPC_CHANNELS.cardList]: (unsafeToken, unsafeQuery) =>
       cards.listCards(

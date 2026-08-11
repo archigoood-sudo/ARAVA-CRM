@@ -500,29 +500,30 @@ model WeeklySchedule {
 }
 
 model Lesson {
-  id                 String               @id @default(cuid())
-  groupId            String
-  group              DanceGroup           @relation(fields: [groupId], references: [id], onDelete: Restrict)
-  branchId           String
-  branch             Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  coachId            String?
-  coach              User?                @relation("LessonCoach", fields: [coachId], references: [id], onDelete: SetNull)
-  scheduleTemplateId String?
-  scheduleTemplate   WeeklySchedule?      @relation(fields: [scheduleTemplateId], references: [id], onDelete: SetNull)
-  startsAt           DateTime
-  endsAt             DateTime
-  room               String?
-  roomId             String?
-  roomEntity         Room?                @relation(fields: [roomId], references: [id], onDelete: SetNull)
-  status             LessonStatus         @default(PLANNED)
-  cancellationReason String?
-  notes              String?
-  attendance         Attendance[]
-  ledgerEntries      SubscriptionLedger[]
-  payrollAccruals    PayrollAccrual[]
-  substitution       TrainerSubstitution?
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
+  id                    String               @id @default(cuid())
+  groupId               String
+  group                 DanceGroup           @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  branchId              String
+  branch                Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  coachId               String?
+  coach                 User?                @relation("LessonCoach", fields: [coachId], references: [id], onDelete: SetNull)
+  scheduleTemplateId    String?
+  scheduleTemplate      WeeklySchedule?      @relation(fields: [scheduleTemplateId], references: [id], onDelete: SetNull)
+  startsAt              DateTime
+  endsAt                DateTime
+  room                  String?
+  roomId                String?
+  roomEntity            Room?                @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  status                LessonStatus         @default(PLANNED)
+  cancellationReason    String?
+  notes                 String?
+  attendanceCompletedAt DateTime?
+  attendance            Attendance[]
+  ledgerEntries         SubscriptionLedger[]
+  payrollAccruals       PayrollAccrual[]
+  substitution          TrainerSubstitution?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
 
   @@unique([groupId, startsAt])
   @@index([branchId, startsAt])
@@ -531,6 +532,7 @@ model Lesson {
   @@index([status, startsAt])
   @@index([roomId, startsAt])
   @@index([groupId, startsAt])
+  @@index([attendanceCompletedAt])
 }
 
 model RoomRental {

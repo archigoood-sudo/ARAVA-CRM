@@ -44,6 +44,8 @@ Trainer substitution changes the actual lesson coach and appends an audit record
 
 Sprint 4.1C pre-printed client cards are isolated in `CardService`. Registration, assignment, replacement, status changes, branch isolation, immutable card events, and privacy-scoped scan resolution are enforced behind IPC. A scan may navigate to an accessible student profile, but never creates attendance or changes subscription and financial records. USB/Bluetooth keyboard scanners are detected from fast printable-key sequences followed by Enter; editable controls are excluded, and the minimum barcode length is configurable.
 
+Sprint 4.1D global search is an offline, typed main-process service. It limits each entity category and applies branch/group visibility before results cross IPC. Payroll uses only `Attendance.status = PRESENT`; `Lesson.attendanceCompletedAt` distinguishes an explicitly completed sheet with zero present students from unfinished attendance.
+
 ## Configuration and observability
 
 Runtime configuration is parsed at startup. `electron-log` writes `arava-crm.log` beneath Electron's standard logs directory and mirrors development messages to the console. Secrets must never be logged or stored in renderer persistence.

@@ -15,6 +15,7 @@ describe('runtime migrations', () => {
       '20260809000000_sprint_4_1a',
       '20260809010000_sprint_4_1b',
       '20260809020000_sprint_4_1c',
+      '20260811000000_sprint_4_1d',
     ]);
   });
 });

@@ -28,6 +28,7 @@ import {
   type TemporaryPasswordResult,
   type MembershipCardSummary,
   type CardScanResolution,
+  type GlobalSearchResult,
 } from '@arava/shared';
 
 vi.mock('electron', () => ({
@@ -303,6 +304,37 @@ describe('Electron IPC boundary', () => {
     )) as ExpenseSummary;
     expect(confirmed.status).toBe('CONFIRMED');
     expect(await database.cashTransaction.count({ where: { sourceId: expense.id } })).toBe(1);
+  });
+
+  it('validates and executes global search through the typed IPC boundary', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!SearchIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Филиал поиска IPC' });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Алексей',
+      lastName: 'Поисковый',
+      status: 'ACTIVE',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() => handlers[IPC_CHANNELS.globalSearch]?.(owner.token, ' ')).toThrow();
+    const results = (await handlers[IPC_CHANNELS.globalSearch]?.(
+      owner.token,
+      'поисковый',
+    )) as GlobalSearchResult[];
+    expect(results).toEqual([
+      expect.objectContaining({
+        id: student.id,
+        route: `/students/${student.id}`,
+        type: 'STUDENT',
+      }),
+    ]);
   });
 
   it('validates room IPC and keeps the global audit OWNER-only', async () => {

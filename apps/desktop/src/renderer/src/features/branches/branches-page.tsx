@@ -17,6 +17,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, Building2, MapPin, Pencil, Plus, Phone } from 'lucide-react';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
@@ -25,6 +26,7 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { BranchDialog } from './branch-dialog';
 
 export function BranchesPage() {
+  const [searchParameters] = useSearchParams();
   const user = useAuthStore((state) => state.user);
   const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
   const queryClient = useQueryClient();
@@ -49,6 +51,13 @@ export function BranchesPage() {
     mutationFn: (id: string) => getDesktopApi().branches.archive(getSessionToken(), id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['branches'] }),
   });
+  const search = searchParameters.get('search')?.trim().toLocaleLowerCase('ru-RU');
+  const visibleBranches = query.data?.filter(
+    (branch) =>
+      !search ||
+      branch.name.toLocaleLowerCase('ru-RU').includes(search) ||
+      branch.address?.toLocaleLowerCase('ru-RU').includes(search),
+  );
 
   const openCreate = () => {
     setEditing(null);
@@ -89,7 +98,7 @@ export function BranchesPage() {
             title={t('common.errorTitle')}
           />
         ) : null}
-        {query.data?.length === 0 ? (
+        {visibleBranches?.length === 0 ? (
           <EmptyState
             action={
               canManage ? (
@@ -101,7 +110,7 @@ export function BranchesPage() {
             title={t('branch.emptyTitle')}
           />
         ) : null}
-        {query.data && query.data.length > 0 ? (
+        {visibleBranches && visibleBranches.length > 0 ? (
           <Table>
             <TableHeader>
               <TableRow>
@@ -112,7 +121,7 @@ export function BranchesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {query.data.map((branch) => (
+              {visibleBranches.map((branch) => (
                 <TableRow key={branch.id}>
                   <TableCell>
                     <p className="font-semibold">{branch.name}</p>

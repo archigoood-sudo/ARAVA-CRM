@@ -67,9 +67,16 @@ export function Sidebar() {
       : []),
   ];
   return (
-    <aside className="app-drag-region flex min-h-0 flex-col bg-sidebar px-4 pb-5 pt-9 text-white">
-      <BrandMark className="px-3" />
-      <nav aria-label={t('nav.workspace')} className="app-no-drag mt-12 space-y-1">
+    <aside
+      className="app-drag-region flex h-screen min-h-0 flex-col overflow-hidden bg-sidebar px-4 pb-5 pt-9 text-white"
+      data-testid="sidebar"
+    >
+      <BrandMark className="shrink-0 px-3" />
+      <nav
+        aria-label={t('nav.workspace')}
+        className="app-no-drag mt-8 min-h-0 flex-1 space-y-1 overflow-y-auto pb-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        data-testid="sidebar-navigation"
+      >
         <p className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-600">
           {t('nav.workspace')}
         </p>
@@ -94,8 +101,8 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="mt-auto">
-        <div className="app-no-drag mb-4 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4">
+      <div className="mt-3 shrink-0 border-t border-white/[0.07] pt-3" data-testid="sidebar-footer">
+        <div className="app-no-drag mb-3 hidden rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4 min-[850px]:block">
           <span className="flex size-8 items-center justify-center rounded-lg bg-accent/15 text-accent">
             <ShieldCheck className="size-4" />
           </span>

@@ -16,7 +16,7 @@ async function login(page: Page) {
 
 async function scan(page: Page, barcode: string) {
   await page.locator('main').click({ position: { x: 5, y: 5 } });
-  await page.keyboard.type(barcode, { delay: 5 });
+  await page.keyboard.type(barcode, { delay: 1 });
   await page.keyboard.press('Enter');
 }
 

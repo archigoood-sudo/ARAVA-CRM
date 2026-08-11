@@ -756,3 +756,4 @@ export const reportQuerySchema: z.ZodType<ReportQuery> = z
 
 export const identifierSchema = z.string().min(1).max(100);
 export const sessionTokenSchema = z.string().min(32).max(256);
+export const globalSearchQuerySchema = z.string().trim().min(2).max(120);

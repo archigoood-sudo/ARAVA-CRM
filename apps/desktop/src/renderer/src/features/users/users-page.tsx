@@ -29,6 +29,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { KeyRound, LogOut, Pencil, Plus, Search, ShieldCheck, Users } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
@@ -43,12 +44,13 @@ const roleNames = {
 } as const;
 
 export function UsersPage() {
+  const [searchParameters] = useSearchParams();
   const actor = useAuthStore((state) => state.user);
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<UserSummary | null>(null);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string>();
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(searchParameters.get('search') ?? '');
   const [roleFilter, setRoleFilter] = useState<'ALL' | UserRole>('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
   const [temporary, setTemporary] = useState<TemporaryPasswordResult>();

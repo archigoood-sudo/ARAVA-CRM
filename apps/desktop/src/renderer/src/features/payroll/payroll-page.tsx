@@ -18,8 +18,9 @@ import {
   TableRow,
 } from '@arava/ui';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Calculator, Check, CreditCard, Plus, UsersRound } from 'lucide-react';
+import { Calculator, Check, Clock3, CreditCard, Plus, UsersRound } from 'lucide-react';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
@@ -42,6 +43,19 @@ function inputDate(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 }
 
+function attendanceCalculation(item: {
+  attendeeCount?: number | undefined;
+  baseAmount: number;
+  type: PayrollType;
+}): string {
+  if (item.attendeeCount === undefined) return '—';
+  if (item.type === 'PER_ATTENDEE')
+    return `${String(item.attendeeCount)} × ${String(item.baseAmount / 100)} ₽`;
+  if (item.type === 'COMBINED')
+    return `${String(item.attendeeCount)} присутствовали · комбинированная ставка`;
+  return `${String(item.attendeeCount)} присутствовали`;
+}
+
 export function PayrollPage() {
   const user = useAuthStore((state) => state.user);
   const coachOnly = user?.role === 'COACH';
@@ -54,8 +68,8 @@ export function PayrollPage() {
   const [branchId, setBranchId] = useState('');
   const [coachId, setCoachId] = useState('');
   const [groupId, setGroupId] = useState('');
-  const [type, setType] = useState<PayrollType>('FIXED_PER_LESSON');
-  const [rate, setRate] = useState('');
+  const [type, setType] = useState<PayrollType>('PER_ATTENDEE');
+  const [rate, setRate] = useState('100');
   const [secondRate, setSecondRate] = useState('');
   const [validFrom, setValidFrom] = useState(inputDate(now));
   const [validTo, setValidTo] = useState('');
@@ -199,18 +213,24 @@ export function PayrollPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Дата</TableHead>
                   <TableHead>Филиал</TableHead>
                   <TableHead>Группа</TableHead>
                   <TableHead>Расчёт</TableHead>
+                  <TableHead>Присутствовали</TableHead>
                   <TableHead className="text-right">Начислено</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {coachView.data.map((item) => (
                   <TableRow key={item.id}>
+                    <TableCell>
+                      {item.lessonStartsAt ? formatDate(item.lessonStartsAt) : '—'}
+                    </TableCell>
                     <TableCell>{item.branchName}</TableCell>
                     <TableCell>{item.groupName ?? 'Все группы'}</TableCell>
                     <TableCell>{payrollLabels[item.type]}</TableCell>
+                    <TableCell>{attendanceCalculation(item)}</TableCell>
                     <TableCell className="text-right">
                       <Money amount={item.finalAmount} />
                     </TableCell>
@@ -304,6 +324,11 @@ export function PayrollPage() {
                   <p className="text-sm text-muted-foreground">
                     Итого: <Money amount={selected.data.totalAmount} />
                   </p>
+                  {selected.data.pendingAttendance.length ? (
+                    <p className="mt-1 text-sm font-medium text-amber-600">
+                      Посещаемость заполнена не для всех занятий
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex gap-2">
                   {selected.data.status === 'DRAFT' || selected.data.status === 'CALCULATED' ? (
@@ -329,6 +354,7 @@ export function PayrollPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead>Дата</TableHead>
                     <TableHead>Тренер</TableHead>
                     <TableHead>Группа</TableHead>
                     <TableHead>Основание</TableHead>
@@ -339,10 +365,13 @@ export function PayrollPage() {
                 <TableBody>
                   {selected.data.accruals.map((item) => (
                     <TableRow key={item.id}>
+                      <TableCell>
+                        {item.lessonStartsAt ? formatDate(item.lessonStartsAt) : '—'}
+                      </TableCell>
                       <TableCell>{item.coachName}</TableCell>
                       <TableCell>{item.groupName ?? 'Все группы'}</TableCell>
                       <TableCell>{payrollLabels[item.type]}</TableCell>
-                      <TableCell>{item.attendeeCount ?? '—'}</TableCell>
+                      <TableCell>{attendanceCalculation(item)}</TableCell>
                       <TableCell className="text-right">
                         <Money amount={item.finalAmount} />
                       </TableCell>
@@ -350,6 +379,31 @@ export function PayrollPage() {
                   ))}
                 </TableBody>
               </Table>
+              {selected.data.pendingAttendance.length ? (
+                <div className="border-t border-border bg-amber-50/70 p-5 dark:bg-amber-950/10">
+                  <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-700 dark:text-amber-400">
+                    <Clock3 className="size-4" />
+                    Ожидает посещаемость
+                  </div>
+                  <p className="mb-3 text-sm text-muted-foreground">
+                    Посещаемость не заполнена — зарплата за занятие не рассчитана.
+                  </p>
+                  <div className="space-y-2">
+                    {selected.data.pendingAttendance.map((lesson) => (
+                      <Link
+                        className="flex items-center justify-between rounded-xl border border-amber-200 bg-surface px-3 py-2 text-sm transition hover:border-amber-400 dark:border-amber-900"
+                        key={lesson.lessonId}
+                        to={`/attendance/${lesson.lessonId}`}
+                      >
+                        <span>
+                          {formatDate(lesson.startsAt)} · {lesson.groupName}
+                        </span>
+                        <span className="text-muted-foreground">{lesson.coachName}</span>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </Card>
           )}
         </section>

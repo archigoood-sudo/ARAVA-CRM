@@ -206,6 +206,10 @@ describe('Sprint 4 management service', () => {
         studentId: student.id,
       },
     });
+    await database.lesson.update({
+      data: { attendanceCompletedAt: now },
+      where: { id: lesson.id },
+    });
     const period = await management.createPayrollPeriod(ownerToken, {
       branchId: branch.id,
       dateFrom: dateOnly(new Date(now.getTime() - DAY)),

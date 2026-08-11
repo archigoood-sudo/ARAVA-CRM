@@ -749,7 +749,11 @@ export class StudioService {
           .join(' '),
       };
     });
-    return { lesson: lessonSummary(lesson), participants };
+    return {
+      attendanceCompletedAt: lesson.attendanceCompletedAt?.toISOString(),
+      lesson: lessonSummary(lesson),
+      participants,
+    };
   }
 
   async saveAttendance(
@@ -817,6 +821,14 @@ export class StudioService {
             `${lessonId}:${entry.studentId}`,
             { from: previous.status, to: entry.status },
           );
+      }
+      if (!lesson.attendanceCompletedAt && allowedStudents.size > 0) {
+        const markedCount = await transaction.attendance.count({ where: { lessonId } });
+        if (markedCount >= allowedStudents.size)
+          await transaction.lesson.update({
+            data: { attendanceCompletedAt: new Date() },
+            where: { id: lessonId },
+          });
       }
     });
     return this.getAttendance(token, lessonId);

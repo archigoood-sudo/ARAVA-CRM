@@ -31,6 +31,7 @@ export {
   groupInputSchema,
   groupListQuerySchema,
   groupStatusSchema,
+  globalSearchQuerySchema,
   identifierSchema,
   loginCredentialsSchema,
   lessonCancelInputSchema,

@@ -110,6 +110,7 @@ export { FinanceService } from './finance-service';
 export { ManagementService } from './management-service';
 export { CalendarService } from './calendar-service';
 export { CardService } from './card-service';
+export { GlobalSearchService } from './global-search-service';
 export {
   addDays,
   applyAttendanceWriteOff,

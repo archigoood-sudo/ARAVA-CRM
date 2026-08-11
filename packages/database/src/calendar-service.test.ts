@@ -340,7 +340,10 @@ describe('Sprint 4.1B calendar service', () => {
     expect(await database.lesson.findUniqueOrThrow({ where: { id: lesson.id } })).toMatchObject({
       coachId: context.substitute.id,
     });
-    await database.lesson.update({ data: { status: 'COMPLETED' }, where: { id: lesson.id } });
+    await database.lesson.update({
+      data: { attendanceCompletedAt: new Date(), status: 'COMPLETED' },
+      where: { id: lesson.id },
+    });
     await database.payrollRule.create({
       data: {
         branchId: context.branch.id,

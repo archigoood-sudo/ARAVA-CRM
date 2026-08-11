@@ -122,6 +122,15 @@ export const REPORT_KINDS = [
   'GROUP_OCCUPANCY',
 ] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
+export const GLOBAL_SEARCH_TYPES = [
+  'STUDENT',
+  'GROUP',
+  'TRAINER',
+  'BRANCH',
+  'ROOM',
+  'CARD',
+] as const;
+export type GlobalSearchType = (typeof GLOBAL_SEARCH_TYPES)[number];
 
 export const IPC_CHANNELS = {
   activityList: 'activity:list',
@@ -176,6 +185,7 @@ export const IPC_CHANNELS = {
   groupGet: 'group:get',
   groupList: 'group:list',
   groupUpdate: 'group:update',
+  globalSearch: 'global-search:query',
   enrollmentAdd: 'enrollment:add',
   enrollmentRemove: 'enrollment:remove',
   scheduleCreate: 'schedule:create',
@@ -843,9 +853,21 @@ export interface PayrollAccrualSummary {
   groupName?: string | undefined;
   id: string;
   lessonId?: string | undefined;
+  lessonStartsAt?: string | undefined;
   manualAdjustment: number;
   revenueBase?: number | undefined;
   type: PayrollType;
+}
+
+export interface PayrollPendingLessonSummary {
+  branchId: string;
+  branchName: string;
+  coachId: string;
+  coachName: string;
+  groupId: string;
+  groupName: string;
+  lessonId: string;
+  startsAt: string;
 }
 
 export interface PayrollPeriodSummary extends PayrollPeriodInput {
@@ -860,6 +882,16 @@ export interface PayrollPeriodSummary extends PayrollPeriodInput {
 
 export interface PayrollPeriodDetail extends PayrollPeriodSummary {
   accruals: PayrollAccrualSummary[];
+  pendingAttendance: PayrollPendingLessonSummary[];
+}
+
+export interface GlobalSearchResult {
+  id: string;
+  metadata?: Record<string, string> | undefined;
+  route: string;
+  subtitle?: string | undefined;
+  title: string;
+  type: GlobalSearchType;
 }
 
 export interface AnalyticsQuery {
@@ -1230,6 +1262,7 @@ export interface AttendanceParticipant {
 }
 
 export interface AttendanceLessonDetail {
+  attendanceCompletedAt?: string | undefined;
   lesson: LessonSummary;
   participants: AttendanceParticipant[];
 }
@@ -1311,6 +1344,9 @@ export interface AravaDesktopApi {
     logout: (token: string) => Promise<void>;
     recoverOwner: (input: OwnerRecoveryInput) => Promise<OwnerRecoveryResult>;
     restore: (token: string) => Promise<AuthenticatedUser>;
+  };
+  globalSearch: {
+    query: (token: string, query: string) => Promise<GlobalSearchResult[]>;
   };
   branches: {
     archive: (token: string, id: string) => Promise<BranchSummary>;

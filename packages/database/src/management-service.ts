@@ -22,6 +22,7 @@ import type {
   PayrollPeriodDetail,
   PayrollPeriodInput,
   PayrollPeriodSummary,
+  PayrollPendingLessonSummary,
   PayrollRuleInput,
   PayrollRuleSummary,
   ReportData,
@@ -58,6 +59,7 @@ const payrollPeriodInclude = {
       branch: { select: { name: true } },
       coach: { select: { fullName: true } },
       group: { select: { name: true } },
+      lesson: { select: { startsAt: true } },
     },
     orderBy: [{ coach: { fullName: 'asc' } }, { createdAt: 'asc' }],
   },
@@ -151,6 +153,7 @@ function accrualSummary(accrual: PayrollPeriodRecord['accruals'][number]): Payro
     groupName: accrual.group?.name,
     id: accrual.id,
     lessonId: accrual.lessonId ?? undefined,
+    lessonStartsAt: accrual.lesson?.startsAt.toISOString(),
     manualAdjustment: accrual.manualAdjustment,
     revenueBase: accrual.revenueBase ?? undefined,
     type: accrual.type,
@@ -172,8 +175,15 @@ function periodSummary(period: PayrollPeriodRecord): PayrollPeriodSummary {
   };
 }
 
-function periodDetail(period: PayrollPeriodRecord): PayrollPeriodDetail {
-  return { ...periodSummary(period), accruals: period.accruals.map(accrualSummary) };
+function periodDetail(
+  period: PayrollPeriodRecord,
+  pendingAttendance: PayrollPendingLessonSummary[],
+): PayrollPeriodDetail {
+  return {
+    ...periodSummary(period),
+    accruals: period.accruals.map(accrualSummary),
+    pendingAttendance,
+  };
 }
 
 function metric(current: number, previous: number): AnalyticsMetric {
@@ -742,14 +752,22 @@ export class ManagementService {
     assertPermission(actor, 'payroll:read');
     const period = await this.requirePayrollPeriod(id);
     if (period.branchId) assertBranchAccess(actor, period.branchId);
-    if (actor.role === 'COACH' && !period.accruals.some(({ coachId }) => coachId === actor.id))
+    const pendingAttendance = await this.pendingPayrollAttendance(period);
+    if (
+      actor.role === 'COACH' &&
+      !period.accruals.some(({ coachId }) => coachId === actor.id) &&
+      !pendingAttendance.some(({ coachId }) => coachId === actor.id)
+    )
       throw new DomainError('AUTHORIZATION', 'Расчёт недоступен этому тренеру.');
     return actor.role === 'COACH'
-      ? periodDetail({
-          ...period,
-          accruals: period.accruals.filter(({ coachId }) => coachId === actor.id),
-        })
-      : periodDetail(period);
+      ? periodDetail(
+          {
+            ...period,
+            accruals: period.accruals.filter(({ coachId }) => coachId === actor.id),
+          },
+          pendingAttendance.filter(({ coachId }) => coachId === actor.id),
+        )
+      : periodDetail(period, pendingAttendance);
   }
 
   async calculatePayrollPeriod(token: string, id: string): Promise<PayrollPeriodDetail> {
@@ -788,9 +806,8 @@ export class ManagementService {
         )
         .sort((a, b) => Number(Boolean(b.groupId)) - Number(Boolean(a.groupId)))[0];
       if (!rule || rule.type === 'FIXED_MONTHLY') continue;
-      const attendeeCount = lesson.attendance.filter(({ status }) =>
-        ['PRESENT', 'LATE', 'TRIAL'].includes(status),
-      ).length;
+      if (!lesson.attendanceCompletedAt) continue;
+      const attendeeCount = lesson.attendance.filter(({ status }) => status === 'PRESENT').length;
       const revenueBase =
         rule.type === 'PERCENT_OF_REVENUE' ? await this.lessonRevenueBase(lesson.id) : null;
       const calculatedAmount = this.calculateAccrual(rule, attendeeCount, revenueBase ?? 0);
@@ -865,6 +882,11 @@ export class ManagementService {
     const period = await this.requirePayrollPeriod(id);
     if (period.status !== 'CALCULATED')
       throw new DomainError('VALIDATION', 'Сначала выполните расчёт зарплаты.');
+    if ((await this.pendingPayrollAttendance(period)).length > 0)
+      throw new DomainError(
+        'VALIDATION',
+        'Посещаемость заполнена не для всех занятий — расчёт нельзя утвердить.',
+      );
     await this.database.$transaction(async (transaction) => {
       await transaction.payrollPeriod.update({
         data: { approvedByUserId: actor.id, status: 'APPROVED' },
@@ -940,6 +962,7 @@ export class ManagementService {
         branch: { select: { name: true } },
         coach: { select: { fullName: true } },
         group: { select: { name: true } },
+        lesson: { select: { startsAt: true } },
       },
       where: {
         ...(actor.role === 'COACH' ? { coachId: actor.id } : {}),
@@ -1233,6 +1256,63 @@ export class ManagementService {
     if (rule.type === 'COMBINED')
       return (rule.fixedAmount ?? 0) + (rule.amountPerAttendee ?? 0) * attendees;
     return 0;
+  }
+
+  private async pendingPayrollAttendance(
+    period: PayrollPeriodRecord,
+  ): Promise<PayrollPendingLessonSummary[]> {
+    if (period.status === 'APPROVED' || period.status === 'PAID') return [];
+    const [lessons, rules] = await Promise.all([
+      this.database.lesson.findMany({
+        include: {
+          branch: { select: { name: true } },
+          coach: { select: { fullName: true } },
+          group: { select: { name: true } },
+        },
+        where: {
+          ...(period.branchId ? { branchId: period.branchId } : {}),
+          attendanceCompletedAt: null,
+          coachId: { not: null },
+          startsAt: { gte: period.dateFrom, lte: period.dateTo },
+          status: 'COMPLETED',
+        },
+      }),
+      this.database.payrollRule.findMany({
+        where: {
+          ...(period.branchId ? { branchId: period.branchId } : {}),
+          isActive: true,
+          validFrom: { lte: period.dateTo },
+          OR: [{ validTo: null }, { validTo: { gte: period.dateFrom } }],
+        },
+      }),
+    ]);
+    return lessons.flatMap((lesson) => {
+      if (!lesson.coachId || !lesson.coach) return [];
+      const rule = rules
+        .filter(
+          (item) =>
+            item.type !== 'FIXED_MONTHLY' &&
+            item.coachId === lesson.coachId &&
+            item.branchId === lesson.branchId &&
+            (!item.groupId || item.groupId === lesson.groupId) &&
+            item.validFrom <= lesson.startsAt &&
+            (!item.validTo || item.validTo >= lesson.startsAt),
+        )
+        .sort((a, b) => Number(Boolean(b.groupId)) - Number(Boolean(a.groupId)))[0];
+      if (!rule) return [];
+      return [
+        {
+          branchId: lesson.branchId,
+          branchName: lesson.branch.name,
+          coachId: lesson.coachId,
+          coachName: lesson.coach.fullName,
+          groupId: lesson.groupId,
+          groupName: lesson.group.name,
+          lessonId: lesson.id,
+          startsAt: lesson.startsAt.toISOString(),
+        },
+      ];
+    });
   }
 
   private async lessonRevenueBase(lessonId: string): Promise<number> {

@@ -31,6 +31,9 @@ const desktopApi: AravaDesktopApi = {
     recoverOwner: (input) => invoke(IPC_CHANNELS.authRecoverOwner, input),
     restore: (token) => invoke(IPC_CHANNELS.authRestore, token),
   },
+  globalSearch: {
+    query: (token, query) => invoke(IPC_CHANNELS.globalSearch, token, query),
+  },
   branches: {
     archive: (token, id) => invoke(IPC_CHANNELS.branchArchive, token, id),
     create: (token, input) => invoke(IPC_CHANNELS.branchCreate, token, input),

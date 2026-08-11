@@ -17,3 +17,5 @@ Sprint 3 is introduced by `20260806000000_sprint_3`. It adds `Tariff`, `Subscrip
 Sprint 4.1B is introduced by `20260809010000_sprint_4_1b`. It adds `Room`, `RoomRental`, `RoomClosure`, `CalendarException`, and `TrainerSubstitution`, plus nullable `roomId` references on `WeeklySchedule` and `Lesson`. Existing lessons without a room remain unchanged and readable as «Зал не указан». The migration only adds tables, columns, and indexes; it never recreates or clears the customer database.
 
 Sprint 4.1C is introduced by `20260809020000_sprint_4_1c`. It adds `MembershipCard`, immutable `CardEvent` history, and privacy-scoped `CardScanEvent` records. Barcodes remain unique text values so leading zeroes are preserved. The migration upgrades existing installations in place without rebuilding customer tables.
+
+Sprint 4.1D is introduced by `20260811000000_sprint_4_1d`. It adds nullable `Lesson.attendanceCompletedAt` and its lookup index so payroll never treats an unfinished attendance sheet as confirmed zero attendance.

@@ -1,8 +1,9 @@
-import { Bell, ChevronsUpDown, LogOut, PanelLeftClose, Search } from 'lucide-react';
+import { Bell, ChevronsUpDown, LogOut, PanelLeftClose } from 'lucide-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { Sidebar } from '../components/sidebar';
 import { GlobalCardScanner } from '../components/global-card-scanner';
+import { GlobalSearch } from '../components/global-search';
 import { t } from '@arava/shared';
 import { useAuthStore } from '../stores/auth-store';
 
@@ -52,13 +53,7 @@ export function AppLayout() {
           </div>
 
           <div className="app-no-drag flex items-center gap-2.5">
-            <div className="mr-2 flex h-10 w-60 items-center gap-2.5 rounded-xl border border-border bg-surface px-3 text-sm text-muted-foreground">
-              <Search className="size-4" />
-              <span>{t('layout.search')}</span>
-              <kbd className="ml-auto rounded-md border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium">
-                ⌘K
-              </kbd>
-            </div>
+            <GlobalSearch />
             <button
               aria-label={t('layout.notifications')}
               className="flex size-10 items-center justify-center rounded-xl border border-border bg-surface text-muted-foreground transition hover:text-foreground"
@@ -83,7 +78,7 @@ export function AppLayout() {
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto" data-testid="main-scroll">
           <Outlet />
         </div>
       </div>

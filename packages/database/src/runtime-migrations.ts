@@ -526,4 +526,11 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'CREATE INDEX "CardScanEvent_result_occurredAt_idx" ON "CardScanEvent"("result", "occurredAt")',
     ],
   },
+  {
+    id: '20260811000000_sprint_4_1d',
+    statements: [
+      'ALTER TABLE "Lesson" ADD COLUMN "attendanceCompletedAt" DATETIME',
+      'CREATE INDEX "Lesson_attendanceCompletedAt_idx" ON "Lesson"("attendanceCompletedAt")',
+    ],
+  },
 ];

@@ -33,6 +33,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
@@ -44,10 +45,11 @@ const localInput = (date = new Date()): string => {
 };
 
 export function RoomsPage() {
+  const [searchParameters] = useSearchParams();
   const user = useAuthStore((state) => state.user);
   const canManage = user?.role !== 'COACH';
   const client = useQueryClient();
-  const [branchId, setBranchId] = useState('');
+  const [branchId, setBranchId] = useState(searchParameters.get('branchId') ?? '');
   const [roomDialog, setRoomDialog] = useState<RoomSummary | 'new' | null>(null);
   const [eventDialog, setEventDialog] = useState<{
     room: RoomSummary;
@@ -66,6 +68,11 @@ export function RoomsPage() {
   useEffect(() => {
     if (!branchId && branches.data?.[0]) setBranchId(branches.data[0].id);
   }, [branchId, branches.data]);
+  useEffect(() => {
+    const roomId = searchParameters.get('roomId');
+    const room = rooms.data?.find((item) => item.id === roomId);
+    if (room) setDetailRoom(room);
+  }, [rooms.data, searchParameters]);
   const selectedBranch = branches.data?.find((branch) => branch.id === branchId);
   const archive = useMutation({
     mutationFn: (id: string) => getDesktopApi().rooms.archive(getSessionToken(), id),
