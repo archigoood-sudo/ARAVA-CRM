@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { useEffect, type PropsWithChildren, type ReactNode } from 'react';
+import { useEffect, useId, type PropsWithChildren, type ReactNode } from 'react';
 
 import { cn } from './utils';
 
@@ -23,6 +23,7 @@ export function Dialog({
   title,
   wide,
 }: DialogProps) {
+  const titleId = useId();
   useEffect(() => {
     if (!open) return undefined;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -36,6 +37,7 @@ export function Dialog({
   return (
     <div
       aria-modal="true"
+      aria-labelledby={titleId}
       className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-neutral-950/45 p-6 backdrop-blur-sm"
       role="dialog"
     >
@@ -53,7 +55,9 @@ export function Dialog({
       >
         <header className="flex items-start justify-between gap-6 border-b border-border px-6 py-5">
           <div>
-            <h2 className="text-xl font-semibold tracking-[-0.025em]">{title}</h2>
+            <h2 className="text-xl font-semibold tracking-[-0.025em]" id={titleId}>
+              {title}
+            </h2>
             {description ? (
               <p className="mt-1 text-sm text-muted-foreground">{description}</p>
             ) : null}

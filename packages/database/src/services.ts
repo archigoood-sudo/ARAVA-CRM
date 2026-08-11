@@ -785,14 +785,29 @@ export class ApplicationService {
           include: { lesson: { include: { group: { select: { name: true } } } } },
           orderBy: { markedAt: 'desc' },
           take: 30,
+          ...(actor.role === 'COACH'
+            ? {
+                where: {
+                  lesson: {
+                    group: { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] },
+                  },
+                },
+              }
+            : {}),
         },
         branch: true,
-        contacts: { orderBy: [{ isPrimary: 'desc' }, { fullName: 'asc' }] },
+        contacts: {
+          orderBy: [{ isPrimary: 'desc' }, { fullName: 'asc' }],
+          where: { archivedAt: null },
+        },
         enrollments: {
           include: {
             group: { select: { assistantCoachId: true, coachId: true, name: true } },
           },
           orderBy: { joinedAt: 'desc' },
+          ...(actor.role === 'COACH'
+            ? { where: { group: { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] } } }
+            : {}),
         },
       },
       where: { id },
@@ -840,7 +855,7 @@ export class ApplicationService {
         startsAt: lesson.startsAt.toISOString(),
         status,
       })),
-      contacts: student.contacts.map(contactSummary),
+      contacts: actor.role === 'COACH' ? [] : student.contacts.map(contactSummary),
       groups: student.enrollments.map(({ group, groupId, joinedAt, leftAt, status }) => ({
         groupId,
         groupName: group.name,
@@ -863,9 +878,20 @@ export class ApplicationService {
     assertPermission(actor, 'students:manage');
     assertBranchAccess(actor, input.branchId);
     await this.requireActiveBranch(input.branchId);
-    const student = await this.database.student.create({
-      data: studentData(input),
-      include: { branch: true },
+    const student = await this.database.$transaction(async (transaction) => {
+      const created = await transaction.student.create({
+        data: studentData(input),
+        include: { branch: true },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'STUDENT_CREATED',
+          actorUserId: actor.id,
+          entityId: created.id,
+          entityType: 'Student',
+        },
+      });
+      return created;
     });
     return studentSummary(student);
   }
@@ -878,10 +904,21 @@ export class ApplicationService {
     assertBranchAccess(actor, input.branchId);
     await this.requireActiveBranch(input.branchId);
     const data = studentData(input);
-    const student = await this.database.student.update({
-      data,
-      include: { branch: true },
-      where: { id },
+    const student = await this.database.$transaction(async (transaction) => {
+      const updated = await transaction.student.update({
+        data,
+        include: { branch: true },
+        where: { id },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'STUDENT_UPDATED',
+          actorUserId: actor.id,
+          entityId: id,
+          entityType: 'Student',
+        },
+      });
+      return updated;
     });
     return studentSummary(student);
   }
@@ -892,10 +929,21 @@ export class ApplicationService {
     const current = await this.requireStudent(id);
     assertBranchAccess(actor, current.branchId);
     return studentSummary(
-      await this.database.student.update({
-        data: { archivedAt: new Date(), status: 'ARCHIVED' },
-        include: { branch: true },
-        where: { id },
+      await this.database.$transaction(async (transaction) => {
+        const archived = await transaction.student.update({
+          data: { archivedAt: new Date(), status: 'ARCHIVED' },
+          include: { branch: true },
+          where: { id },
+        });
+        await transaction.auditLog.create({
+          data: {
+            action: 'STUDENT_ARCHIVED',
+            actorUserId: actor.id,
+            entityId: id,
+            entityType: 'Student',
+          },
+        });
+        return archived;
       }),
     );
   }
@@ -916,7 +964,19 @@ export class ApplicationService {
           where: { studentId },
         });
       }
-      return transaction.studentContact.create({ data: { ...contactData(input), studentId } });
+      const created = await transaction.studentContact.create({
+        data: { ...contactData(input), studentId },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'STUDENT_CONTACT_CREATED',
+          actorUserId: actor.id,
+          entityId: created.id,
+          entityType: 'StudentContact',
+          detail: JSON.stringify({ studentId }),
+        },
+      });
+      return created;
     });
     return contactSummary(contact);
   }
@@ -941,7 +1001,20 @@ export class ApplicationService {
           where: { id: { not: id }, studentId: current.studentId },
         });
       }
-      return transaction.studentContact.update({ data: contactData(input), where: { id } });
+      const updated = await transaction.studentContact.update({
+        data: contactData(input),
+        where: { id },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'STUDENT_CONTACT_UPDATED',
+          actorUserId: actor.id,
+          entityId: id,
+          entityType: 'StudentContact',
+          detail: JSON.stringify({ studentId: current.studentId }),
+        },
+      });
+      return updated;
     });
     return contactSummary(contact);
   }
@@ -955,7 +1028,21 @@ export class ApplicationService {
     });
     if (!contact) throw new DomainError('NOT_FOUND', t('domain.notFound.contact'));
     assertBranchAccess(actor, contact.student.branchId);
-    await this.database.studentContact.delete({ where: { id } });
+    await this.database.$transaction(async (transaction) => {
+      await transaction.studentContact.update({
+        data: { archivedAt: new Date(), isPrimary: false },
+        where: { id },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'STUDENT_CONTACT_ARCHIVED',
+          actorUserId: actor.id,
+          entityId: id,
+          entityType: 'StudentContact',
+          detail: JSON.stringify({ studentId: contact.studentId }),
+        },
+      });
+    });
   }
 
   private async validateBranchAssignments(branchIds: string[]): Promise<void> {

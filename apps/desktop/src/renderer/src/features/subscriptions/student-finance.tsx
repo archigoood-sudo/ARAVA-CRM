@@ -35,7 +35,7 @@ import {
   RotateCcw,
   WalletCards,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { PaymentDialog } from '../finance/payment-dialog';
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -50,9 +50,13 @@ const currentStatuses: SubscriptionStatus[] = ['ACTIVE', 'FROZEN'];
 
 export function StudentFinance({
   branches,
+  onRequestedActionHandled,
+  requestedAction,
   student,
 }: {
   branches: BranchSummary[];
+  onRequestedActionHandled?: (() => void) | undefined;
+  requestedAction?: 'payment' | 'subscription' | undefined;
   student: StudentSummary;
 }) {
   const user = useAuthStore((state) => state.user);
@@ -65,6 +69,11 @@ export function StudentFinance({
   const [detailId, setDetailId] = useState<string>();
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [error, setError] = useState<string>();
+  useEffect(() => {
+    if (requestedAction === 'payment') setPaymentOpen(true);
+    if (requestedAction === 'subscription') setIssueOpen(true);
+    if (requestedAction) onRequestedActionHandled?.();
+  }, [onRequestedActionHandled, requestedAction]);
   const finance = useQuery({
     queryFn: () => getDesktopApi().subscriptions.listStudent(getSessionToken(), student.id),
     queryKey: queryKeys.studentFinance(student.id),
@@ -105,6 +114,7 @@ export function StudentFinance({
       queryClient.invalidateQueries({ queryKey: ['subscriptions', 'detail'] }),
       queryClient.invalidateQueries({ queryKey: ['finance'] }),
       queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      queryClient.invalidateQueries({ queryKey: ['student-profile'] }),
     ]);
   };
   const perform = async (

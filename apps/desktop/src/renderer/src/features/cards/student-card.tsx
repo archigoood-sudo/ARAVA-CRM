@@ -13,7 +13,7 @@ import {
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, CreditCard, Link2, RefreshCw, ScanLine, Unlink } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -28,7 +28,15 @@ const labels: Record<MembershipCardStatus, string> = {
   LOST: 'Утеряна',
 };
 
-export function StudentCard({ studentId }: { studentId: string }) {
+export function StudentCard({
+  assignRequested,
+  onAssignRequestedHandled,
+  studentId,
+}: {
+  assignRequested?: boolean | undefined;
+  onAssignRequestedHandled?: (() => void) | undefined;
+  studentId: string;
+}) {
   const user = useAuthStore((state) => state.user);
   const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
   const queryClient = useQueryClient();
@@ -40,8 +48,17 @@ export function StudentCard({ studentId }: { studentId: string }) {
     queryFn: () => getDesktopApi().cards.studentCurrent(getSessionToken(), studentId),
     queryKey: ['cards', 'student-current', studentId],
   });
+  useEffect(() => {
+    if (!assignRequested) return;
+    setError(undefined);
+    setDialog(card.data ? 'replace' : 'assign');
+    onAssignRequestedHandled?.();
+  }, [assignRequested, card.data, onAssignRequestedHandled]);
   const refresh = async () => {
-    await queryClient.invalidateQueries({ queryKey: ['cards'] });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['cards'] }),
+      queryClient.invalidateQueries({ queryKey: ['student-profile'] }),
+    ]);
   };
   const save = useMutation({
     mutationFn: async () => {

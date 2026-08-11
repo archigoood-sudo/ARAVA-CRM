@@ -60,9 +60,9 @@ export class GlobalSearchService {
               { middleName: { contains: value } },
               { phone: { contains: value } },
               { email: { contains: value } },
-              { contacts: { some: { fullName: { contains: value } } } },
-              { contacts: { some: { phone: { contains: value } } } },
-              { contacts: { some: { secondaryPhone: { contains: value } } } },
+              { contacts: { some: { archivedAt: null, fullName: { contains: value } } } },
+              { contacts: { some: { archivedAt: null, phone: { contains: value } } } },
+              { contacts: { some: { archivedAt: null, secondaryPhone: { contains: value } } } },
               { membershipCards: { some: { barcode: { contains: value } } } },
             ]),
             ...(nameParts.length > 1

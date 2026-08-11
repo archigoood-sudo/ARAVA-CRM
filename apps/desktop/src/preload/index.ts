@@ -208,10 +208,18 @@ const desktopApi: AravaDesktopApi = {
   },
   students: {
     archive: (token, id) => invoke(IPC_CHANNELS.studentArchive, token, id),
+    archiveNote: async (token, noteId) => {
+      await invoke(IPC_CHANNELS.studentNoteArchive, token, noteId);
+    },
     create: (token, input) => invoke(IPC_CHANNELS.studentCreate, token, input),
+    createNote: (token, studentId, input) =>
+      invoke(IPC_CHANNELS.studentNoteCreate, token, studentId, input),
     get: (token, id) => invoke(IPC_CHANNELS.studentGet, token, id),
+    getProfile: (token, id) => invoke(IPC_CHANNELS.studentProfileGet, token, id),
     list: (token, query) => invoke(IPC_CHANNELS.studentList, token, query),
     update: (token, id, input) => invoke(IPC_CHANNELS.studentUpdate, token, id, input),
+    updateNote: (token, noteId, input) =>
+      invoke(IPC_CHANNELS.studentNoteUpdate, token, noteId, input),
   },
   system: { information: (token) => invoke(IPC_CHANNELS.systemInformation, token) },
   users: {

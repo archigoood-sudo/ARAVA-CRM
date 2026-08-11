@@ -59,6 +59,7 @@ export {
   studentContactInputSchema,
   studentInputSchema,
   studentListQuerySchema,
+  studentNoteInputSchema,
   studentStatusSchema,
   subscriptionAdjustmentInputSchema,
   subscriptionCreateInputSchema,

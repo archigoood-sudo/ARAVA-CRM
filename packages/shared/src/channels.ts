@@ -253,6 +253,10 @@ export const IPC_CHANNELS = {
   studentArchive: 'student:archive',
   studentCreate: 'student:create',
   studentGet: 'student:get',
+  studentProfileGet: 'student-profile:get',
+  studentNoteCreate: 'student-note:create',
+  studentNoteUpdate: 'student-note:update',
+  studentNoteArchive: 'student-note:archive',
   studentList: 'student:list',
   studentUpdate: 'student:update',
   systemInformation: 'system:information',
@@ -434,6 +438,109 @@ export interface StudentDetail extends StudentSummary {
         startsAt: string;
       }
     | undefined;
+}
+
+export interface StudentNoteInput {
+  text: string;
+}
+
+export interface StudentProfileNote {
+  archivedAt?: string | undefined;
+  authorName: string;
+  authorUserId: string;
+  createdAt: string;
+  id: string;
+  text: string;
+  updatedAt: string;
+}
+
+export interface StudentProfileGroup {
+  branchName: string;
+  coachName?: string | undefined;
+  direction: string;
+  enrollmentId: string;
+  groupId: string;
+  groupName: string;
+  joinedAt: string;
+  membershipStatus: EnrollmentStatus;
+  roomName?: string | undefined;
+  scheduleSummary: string[];
+}
+
+export interface StudentProfileLesson {
+  branchName: string;
+  coachName?: string | undefined;
+  endsAt: string;
+  groupName: string;
+  id: string;
+  roomName?: string | undefined;
+  startsAt: string;
+}
+
+export interface StudentProfileSubscription {
+  debt: number;
+  expiresAt?: string | undefined;
+  frozen: boolean;
+  id: string;
+  lessonLimit?: number | undefined;
+  lessonsUsed: number;
+  purchasedAt: string;
+  remainingLessons?: number | undefined;
+  startsAt: string;
+  status: SubscriptionStatus;
+  tariffName: string;
+}
+
+export interface StudentProfilePayment {
+  amount: number;
+  id: string;
+  method: PaymentMethod;
+  paidAt: string;
+  refundedAmount: number;
+  status: PaymentStatus;
+}
+
+export interface StudentProfileCard {
+  barcode: string;
+  id: string;
+  issuedAt?: string | undefined;
+  lastScannedAt?: string | undefined;
+  status: MembershipCardStatus;
+}
+
+export interface StudentProfileActivity {
+  action: string;
+  actorName: string;
+  createdAt: string;
+  id: string;
+  title: string;
+}
+
+export interface StudentProfileWarning {
+  code: 'CARD_PROBLEM' | 'DEBT' | 'EXPIRING' | 'LOW_BALANCE' | 'NO_GROUP' | 'NO_SUBSCRIPTION';
+  message: string;
+  tone: 'danger' | 'warning';
+}
+
+export interface StudentProfileOverview {
+  access: 'ADMIN' | 'TRAINER';
+  attendance: {
+    attended: number;
+    missed: number;
+    percentage: number;
+    recent: StudentAttendanceHistory[];
+  };
+  card?: StudentProfileCard | undefined;
+  contacts: StudentContactSummary[];
+  currentSubscription?: StudentProfileSubscription | undefined;
+  groups: StudentProfileGroup[];
+  history: StudentProfileActivity[];
+  notes: StudentProfileNote[];
+  recentPayments: StudentProfilePayment[];
+  student: StudentDetail;
+  totalDebt?: number | undefined;
+  upcomingLessons: StudentProfileLesson[];
+  warnings: StudentProfileWarning[];
 }
 
 export type CardSortField = 'barcode' | 'createdAt' | 'lastScan';
@@ -1577,10 +1684,22 @@ export interface AravaDesktopApi {
   };
   students: {
     archive: (token: string, id: string) => Promise<StudentSummary>;
+    archiveNote: (token: string, noteId: string) => Promise<void>;
     create: (token: string, input: StudentInput) => Promise<StudentSummary>;
+    createNote: (
+      token: string,
+      studentId: string,
+      input: StudentNoteInput,
+    ) => Promise<StudentProfileNote>;
     get: (token: string, id: string) => Promise<StudentDetail>;
+    getProfile: (token: string, id: string) => Promise<StudentProfileOverview>;
     list: (token: string, query: StudentListQuery) => Promise<StudentListResult>;
     update: (token: string, id: string, input: StudentInput) => Promise<StudentSummary>;
+    updateNote: (
+      token: string,
+      noteId: string,
+      input: StudentNoteInput,
+    ) => Promise<StudentProfileNote>;
   };
   system: {
     information: (token: string) => Promise<SystemInformation>;

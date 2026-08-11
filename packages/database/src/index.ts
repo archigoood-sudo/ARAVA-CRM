@@ -111,6 +111,7 @@ export { ManagementService } from './management-service';
 export { CalendarService } from './calendar-service';
 export { CardService } from './card-service';
 export { GlobalSearchService } from './global-search-service';
+export { StudentProfileService } from './student-profile-service';
 export {
   addDays,
   applyAttendanceWriteOff,

@@ -6,6 +6,7 @@ import {
   GlobalSearchService,
   ManagementService,
   StudioService,
+  StudentProfileService,
   accessibleBranchIds,
   assertCapability,
   type DatabaseClient,
@@ -61,6 +62,7 @@ import {
   studentContactInputSchema,
   studentInputSchema,
   studentListQuerySchema,
+  studentNoteInputSchema,
   subscriptionAdjustmentInputSchema,
   subscriptionCreateInputSchema,
   subscriptionFreezeInputSchema,
@@ -95,6 +97,7 @@ export function createIpcHandlers(
   const calendar = new CalendarService(database, service);
   const cards = new CardService(database, service);
   const search = new GlobalSearchService(database, service);
+  const studentProfiles = new StudentProfileService(database, service);
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
@@ -678,6 +681,28 @@ export function createIpcHandlers(
       ),
     [IPC_CHANNELS.studentGet]: (unsafeToken, unsafeId) =>
       service.getStudent(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.studentProfileGet]: (unsafeToken, unsafeId) =>
+      studentProfiles.getOverview(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.studentNoteCreate]: (unsafeToken, unsafeStudentId, unsafeInput) =>
+      studentProfiles.createNote(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+        studentNoteInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.studentNoteUpdate]: (unsafeToken, unsafeNoteId, unsafeInput) =>
+      studentProfiles.updateNote(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeNoteId),
+        studentNoteInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.studentNoteArchive]: (unsafeToken, unsafeNoteId) =>
+      studentProfiles.archiveNote(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeNoteId),
+      ),
     [IPC_CHANNELS.studentCreate]: (unsafeToken, unsafeInput) =>
       service.createStudent(
         sessionTokenSchema.parse(unsafeToken),

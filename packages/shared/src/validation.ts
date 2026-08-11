@@ -62,6 +62,7 @@ import {
   type ReportQuery,
   type StudentContactInput,
   type StudentInput,
+  type StudentNoteInput,
   type StudentListQuery,
   type SubscriptionAdjustmentInput,
   type SubscriptionCreateInput,
@@ -184,6 +185,10 @@ export const studentListQuerySchema: z.ZodType<StudentListQuery> = z.object({
   sortBy: z.enum(['name', 'birthDate', 'createdAt', 'status']),
   sortDirection: z.enum(['asc', 'desc']),
   status: studentStatusSchema.optional(),
+});
+
+export const studentNoteInputSchema: z.ZodType<StudentNoteInput> = z.object({
+  text: z.string().trim().min(1, 'Введите текст заметки.').max(4000),
 });
 
 export const studentContactInputSchema: z.ZodType<StudentContactInput> = z.object({

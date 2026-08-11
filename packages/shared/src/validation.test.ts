@@ -8,6 +8,7 @@ import {
   globalSearchQuerySchema,
   loginCredentialsSchema,
   payrollRuleInputSchema,
+  studentNoteInputSchema,
   tariffInputSchema,
   weeklyScheduleInputSchema,
 } from './validation';
@@ -36,6 +37,16 @@ describe('Sprint 4.1D global search validation', () => {
     expect(globalSearchQuerySchema.parse('  Иванов  ')).toBe('Иванов');
     expect(globalSearchQuerySchema.safeParse(' ').success).toBe(false);
     expect(globalSearchQuerySchema.safeParse('а'.repeat(121)).success).toBe(false);
+  });
+});
+
+describe('Sprint 4.2A student note validation', () => {
+  it('trims useful notes and rejects empty or oversized content', () => {
+    expect(studentNoteInputSchema.parse({ text: '  Важная заметка  ' })).toEqual({
+      text: 'Важная заметка',
+    });
+    expect(studentNoteInputSchema.safeParse({ text: ' ' }).success).toBe(false);
+    expect(studentNoteInputSchema.safeParse({ text: 'а'.repeat(4001) }).success).toBe(false);
   });
 });
 

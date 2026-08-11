@@ -255,6 +255,7 @@ describe('Prisma and packaged runtime migration compatibility', () => {
       expect(await database.membershipCard.count()).toBe(0);
       expect(await database.cardEvent.count()).toBe(0);
       expect(await database.cardScanEvent.count()).toBe(0);
+      expect(await database.studentNote.count()).toBe(0);
       expect(
         await database.branch.findUniqueOrThrow({ where: { id: 'existing-branch' } }),
       ).toMatchObject({

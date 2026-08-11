@@ -29,6 +29,7 @@ import {
   type MembershipCardSummary,
   type CardScanResolution,
   type GlobalSearchResult,
+  type StudentProfileOverview,
 } from '@arava/shared';
 
 vi.mock('electron', () => ({
@@ -386,6 +387,40 @@ describe('Electron IPC boundary', () => {
     await expect(handlers[IPC_CHANNELS.auditList]?.(adminSession.token)).rejects.toThrow(
       t('domain.authorization.permissionDenied'),
     );
+  });
+
+  it('validates the consolidated student profile and note IPC boundary', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!ProfileIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Профиль IPC' });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Ирина',
+      lastName: 'Профильная',
+      status: 'ACTIVE',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() =>
+      handlers[IPC_CHANNELS.studentNoteCreate]?.(owner.token, student.id, { text: '' }),
+    ).toThrow();
+    await handlers[IPC_CHANNELS.studentNoteCreate]?.(owner.token, student.id, {
+      text: 'Заметка через IPC',
+    });
+    const overview = (await handlers[IPC_CHANNELS.studentProfileGet]?.(
+      owner.token,
+      student.id,
+    )) as StudentProfileOverview;
+    expect(overview).toMatchObject({
+      access: 'ADMIN',
+      notes: [expect.objectContaining({ text: 'Заметка через IPC' })],
+      student: { id: student.id },
+    });
   });
 
   it('validates card IPC and keeps card permissions in the service layer', async () => {

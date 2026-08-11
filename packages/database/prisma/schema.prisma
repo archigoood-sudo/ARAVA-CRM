@@ -234,6 +234,7 @@ model User {
   createdMembershipCards MembershipCard[]      @relation("CardCreator")
   performedCardEvents    CardEvent[]           @relation("CardEventPerformer")
   cardScans              CardScanEvent[]       @relation("CardScanPerformer")
+  studentNotes           StudentNote[]
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt
 
@@ -347,6 +348,7 @@ model Student {
   membershipCards MembershipCard[]
   cardEvents      CardEvent[]
   cardScans       CardScanEvent[]
+  profileNotes    StudentNote[]
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   archivedAt      DateTime?
@@ -920,24 +922,40 @@ model PayrollAccrual {
 }
 
 model StudentContact {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   studentId      String
-  student        Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  student        Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
   fullName       String
   relationship   String
   phone          String
   secondaryPhone String?
   email          String?
   telegram       String?
-  whatsapp       Boolean  @default(false)
-  isPrimary      Boolean  @default(false)
+  whatsapp       Boolean   @default(false)
+  isPrimary      Boolean   @default(false)
   notes          String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  archivedAt     DateTime?
 
-  @@index([studentId])
+  @@index([studentId, archivedAt])
   @@index([studentId, isPrimary])
   @@index([phone])
+}
+
+model StudentNote {
+  id           String    @id @default(cuid())
+  studentId    String
+  student      Student   @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  authorUserId String
+  author       User      @relation(fields: [authorUserId], references: [id], onDelete: Restrict)
+  text         String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  archivedAt   DateTime?
+
+  @@index([studentId, archivedAt, createdAt])
+  @@index([authorUserId, createdAt])
 }
 
 model Contact {

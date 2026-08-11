@@ -46,6 +46,8 @@ Sprint 4.1C pre-printed client cards are isolated in `CardService`. Registration
 
 Sprint 4.1D global search is an offline, typed main-process service. It limits each entity category and applies branch/group visibility before results cross IPC. Payroll uses only `Attendance.status = PRESENT`; `Lesson.attendanceCompletedAt` distinguishes an explicitly completed sheet with zero present students from unfinished attendance.
 
+Sprint 4.2A makes `StudentProfileService` the bounded read model for the student workspace. It delegates subscription balances to `FinanceService`, limits recent attendance, payments, lessons, notes, and activity, and returns a reduced TRAINER projection without contacts, cards, notes, or financial data. Existing mutation services remain the only write paths.
+
 ## Configuration and observability
 
 Runtime configuration is parsed at startup. `electron-log` writes `arava-crm.log` beneath Electron's standard logs directory and mirrors development messages to the console. Secrets must never be logged or stored in renderer persistence.
