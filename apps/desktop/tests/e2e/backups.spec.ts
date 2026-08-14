@@ -110,6 +110,18 @@ test('OWNER создаёт, проверяет и безопасно восст�
     });
     expect(backendDenied).toBe(true);
   } finally {
-    await application.close();
+    const closeProcess = application.process();
+    const closePromise = application.close();
+    let closed = false;
+    await Promise.race([
+      closePromise.then(() => {
+        closed = true;
+      }),
+      new Promise<void>((resolveCloseTimeout) => {
+        setTimeout(resolveCloseTimeout, 10_000);
+      }),
+    ]);
+    if (!closed && !closeProcess.killed) closeProcess.kill('SIGKILL');
+    await closePromise.catch(() => undefined);
   }
 });
