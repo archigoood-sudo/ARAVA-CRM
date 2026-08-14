@@ -112,16 +112,13 @@ test('OWNER создаёт, проверяет и безопасно восст�
   } finally {
     const closeProcess = application.process();
     const closePromise = application.close();
-    let closed = false;
-    await Promise.race([
-      closePromise.then(() => {
-        closed = true;
-      }),
+    const closed = await Promise.race([
+      closePromise.then(() => true),
       new Promise<void>((resolveCloseTimeout) => {
         setTimeout(resolveCloseTimeout, 10_000);
-      }),
+      }).then(() => false),
     ]);
-    if (!closed && !closeProcess.killed) closeProcess.kill('SIGKILL');
+    if (!closed) closeProcess.kill('SIGKILL');
     await closePromise.catch(() => undefined);
   }
 });
