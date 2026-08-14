@@ -46,6 +46,10 @@ interface SqliteName {
   name: string;
 }
 
+function singleConnectionSqliteUrl(databasePath: string): string {
+  return `${toSqliteUrl(databasePath)}?connection_limit=1`;
+}
+
 async function applyCheckedInMigrations(
   database: DatabaseClient,
   maximumMigration = '99999999999999',
@@ -131,9 +135,11 @@ describe('Prisma and packaged runtime migration compatibility', () => {
     const prismaDirectory = await mkdtemp(join(tmpdir(), 'arava-prisma-'));
     const runtimeDirectory = await mkdtemp(join(tmpdir(), 'arava-runtime-'));
     directories.push(prismaDirectory, runtimeDirectory);
-    const prismaDatabase = createDatabaseClient(toSqliteUrl(join(prismaDirectory, 'database.db')));
+    const prismaDatabase = createDatabaseClient(
+      singleConnectionSqliteUrl(join(prismaDirectory, 'database.db')),
+    );
     const runtimeDatabase = createDatabaseClient(
-      toSqliteUrl(join(runtimeDirectory, 'database.db')),
+      singleConnectionSqliteUrl(join(runtimeDirectory, 'database.db')),
     );
     try {
       await applyCheckedInMigrations(prismaDatabase);
@@ -147,7 +153,9 @@ describe('Prisma and packaged runtime migration compatibility', () => {
   it('upgrades a Sprint 4 database in place and migrates legacy managers to ADMIN', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'arava-upgrade-'));
     directories.push(directory);
-    const database = createDatabaseClient(toSqliteUrl(join(directory, 'database.db')));
+    const database = createDatabaseClient(
+      singleConnectionSqliteUrl(join(directory, 'database.db')),
+    );
     try {
       await applyCheckedInMigrations(database, '20260807000000_sprint_4');
       await database.$executeRawUnsafe(
