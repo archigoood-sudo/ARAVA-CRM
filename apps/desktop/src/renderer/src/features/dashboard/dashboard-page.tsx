@@ -365,6 +365,7 @@ function attentionCategoryLabel(category: string): string {
       STUDENTS: 'Ученики',
       SUBSCRIPTIONS: 'Абонементы',
       SUBSTITUTIONS: 'Замены',
+      BACKUPS: 'Резервные копии',
     }[category] ?? category
   );
 }

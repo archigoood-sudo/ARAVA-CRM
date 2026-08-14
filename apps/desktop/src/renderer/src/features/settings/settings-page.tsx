@@ -21,6 +21,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { useThemeStore, type ThemeMode } from '../../stores/theme-store';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
+import { BackupSettings } from './backup-settings';
 
 const settingsSchema = z.object({
   workspaceName: z.string().trim().min(2, t('validation.workspaceName')).max(80),
@@ -101,6 +102,14 @@ export function SettingsPage() {
   useEffect(() => {
     if (workspaceQuery.data) reset({ workspaceName: workspaceQuery.data });
   }, [reset, workspaceQuery.data]);
+
+  useEffect(() => {
+    if (window.location.hash !== '#backups') return;
+    const frame = window.requestAnimationFrame(() =>
+      document.querySelector('#backups')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   const saveWorkspace = useMutation({
     mutationFn: async ({ workspaceName }: SettingsForm) => {
@@ -184,6 +193,8 @@ export function SettingsPage() {
             </CardContent>
           </Card>
         ) : null}
+
+        {user?.role === 'OWNER' ? <BackupSettings /> : null}
 
         <Card>
           <CardHeader>

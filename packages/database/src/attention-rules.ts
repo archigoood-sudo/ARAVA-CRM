@@ -6,6 +6,10 @@ export const ATTENTION_RULES = {
   operationalHistoryDays: 30,
   operationalHorizonDays: 30,
   substitutionHorizonDays: 7,
+  backupWarningDays: 3,
+  backupCriticalDays: 7,
+  backupInitialGraceHours: 24,
+  backupRepeatedFailures: 2,
 } as const;
 
 export const DAY_MS = 86_400_000;

@@ -1,5 +1,7 @@
 import { APP_ID, createApplicationConfig } from '@arava/config';
 import {
+  ApplicationService,
+  BackupService,
   closeDatabase,
   createDatabaseClient,
   initializeDatabase,
@@ -40,7 +42,15 @@ async function bootstrap(): Promise<void> {
   });
 
   await initializeDatabase(database);
-  registerIpcHandlers(database, databasePath);
+  const service = new ApplicationService(database);
+  const backups = new BackupService(database, service, {
+    databasePath,
+    defaultBackupDirectory: join(app.getPath('userData'), 'backups'),
+    externalLogPath: join(app.getPath('userData'), 'backup-restore.log'),
+  });
+  const automaticBackup = await backups.runAutomaticBackup();
+  if (automaticBackup) log.info('Automatic backup created', { file: automaticBackup.fileName });
+  registerIpcHandlers(database, databasePath, { backup: backups, service });
   createMainWindow();
 
   app.on('activate', () => {

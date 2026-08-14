@@ -25,6 +25,7 @@ import {
   CreditCard,
   DoorClosed,
   HandCoins,
+  HardDrive,
   IdCard,
   RefreshCw,
   UserRoundCog,
@@ -47,6 +48,7 @@ const categories: { icon: typeof BellRing; label: string; value: AttentionCatego
   { icon: CalendarCheck, label: 'Расписание', value: 'SCHEDULE' },
   { icon: DoorClosed, label: 'Залы', value: 'ROOMS' },
   { icon: UserRoundCog, label: 'Замены', value: 'SUBSTITUTIONS' },
+  { icon: HardDrive, label: 'Резервные копии', value: 'BACKUPS' },
 ];
 
 const severityLabels: Record<AttentionSeverity, string> = {

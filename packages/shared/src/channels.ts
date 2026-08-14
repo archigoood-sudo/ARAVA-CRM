@@ -182,6 +182,17 @@ export const IPC_CHANNELS = {
   dashboardStats: 'dashboard:stats',
   attentionList: 'attention:list',
   attentionSummary: 'attention:summary',
+  backupCreate: 'backup:create',
+  backupExport: 'backup:export',
+  backupList: 'backup:list',
+  backupOpenFolder: 'backup:open-folder',
+  backupSelectFolder: 'backup:select-folder',
+  backupSelectManaged: 'backup:select-managed',
+  backupSelectRestoreFile: 'backup:select-restore-file',
+  backupSetAutomatic: 'backup:set-automatic',
+  backupStatus: 'backup:status',
+  backupRestore: 'backup:restore',
+  backupValidate: 'backup:validate',
   groupArchive: 'group:archive',
   groupCreate: 'group:create',
   groupGet: 'group:get',
@@ -1415,7 +1426,8 @@ export type AttentionCategory =
   | 'CARDS'
   | 'SCHEDULE'
   | 'ROOMS'
-  | 'SUBSTITUTIONS';
+  | 'SUBSTITUTIONS'
+  | 'BACKUPS';
 
 export type AttentionSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
 
@@ -1475,6 +1487,50 @@ export interface SystemInformation {
   appVersion: string;
   databasePath: string;
   platform: NodeJS.Platform;
+}
+
+export type BackupType = 'AUTOMATIC' | 'MANUAL' | 'RESTORE_SAFETY';
+export type BackupIntegrityStatus = 'VALID' | 'INVALID' | 'UNCHECKED';
+
+export interface BackupEntry {
+  createdAt: string;
+  fileName: string;
+  id: string;
+  integrity: BackupIntegrityStatus;
+  location: string;
+  size: number;
+  type: BackupType;
+}
+
+export interface BackupStatus {
+  automaticEnabled: boolean;
+  backupDirectory: string;
+  consecutiveFailures: number;
+  count: number;
+  lastAttemptAt?: string | undefined;
+  lastError?: string | undefined;
+  lastSuccessfulAt?: string | undefined;
+  retentionCount: number;
+  totalSize: number;
+  usingLocalFallback: boolean;
+}
+
+export interface BackupValidationResult {
+  backup?: BackupEntry | undefined;
+  canRestore: boolean;
+  integrity: BackupIntegrityStatus;
+  message: string;
+  migrationLevel?: string | undefined;
+}
+
+export interface BackupRestoreSelection extends BackupValidationResult {
+  displayPath: string;
+  selectionId: string;
+}
+
+export interface BackupRestoreResult {
+  safetyBackup: BackupEntry;
+  success: true;
 }
 
 export type SettingKey = 'appearance.theme' | 'general.workspaceName';
@@ -1585,6 +1641,23 @@ export interface AravaDesktopApi {
   attention: {
     list: (token: string, filters: AttentionFilters) => Promise<AttentionItem[]>;
     summary: (token: string) => Promise<AttentionSummary>;
+  };
+  backups: {
+    create: (token: string) => Promise<BackupEntry>;
+    export: (token: string) => Promise<BackupEntry | undefined>;
+    list: (token: string) => Promise<BackupEntry[]>;
+    openFolder: (token: string) => Promise<void>;
+    restore: (
+      token: string,
+      selectionId: string,
+      confirmation: string,
+    ) => Promise<BackupRestoreResult>;
+    selectFolder: (token: string) => Promise<BackupStatus | undefined>;
+    selectManaged: (token: string, backupId: string) => Promise<BackupRestoreSelection>;
+    selectRestoreFile: (token: string) => Promise<BackupRestoreSelection | undefined>;
+    setAutomatic: (token: string, enabled: boolean) => Promise<BackupStatus>;
+    status: (token: string) => Promise<BackupStatus>;
+    validate: (token: string, backupId: string) => Promise<BackupValidationResult>;
   };
   groups: {
     addEnrollment: (

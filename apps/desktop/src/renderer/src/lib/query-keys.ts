@@ -11,6 +11,8 @@ export const queryKeys = {
   activity: ['activity'] as const,
   attention: (filters: object = {}) => ['attention', 'list', filters] as const,
   attentionSummary: (userId?: string) => ['attention', 'summary', userId] as const,
+  backups: ['backups', 'list'] as const,
+  backupStatus: ['backups', 'status'] as const,
   branches: (includeArchived = false) => ['branches', { includeArchived }] as const,
   dashboard: ['dashboard', 'stats'] as const,
   group: (id: string) => ['groups', 'detail', id] as const,

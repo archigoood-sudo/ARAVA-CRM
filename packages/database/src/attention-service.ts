@@ -202,6 +202,13 @@ export class AttentionService {
           },
         }),
       ]);
+    const backupSettings =
+      actor.role === 'OWNER'
+        ? await this.database.appSetting.findMany({
+            where: { key: { startsWith: 'backup.' } },
+          })
+        : [];
+    const backupSetting = new Map(backupSettings.map(({ key, value }) => [key, value]));
 
     const items: AttentionItem[] = [];
     const add = (item: AttentionItem) => items.push(item);
@@ -459,6 +466,56 @@ export class AttentionService {
       });
 
     await this.appendPayrollItems(items, periods, branchIds, now);
+
+    if (actor.role === 'OWNER') {
+      const initializedAt = new Date(
+        backupSetting.get('backup.initializedAt') ?? now.toISOString(),
+      );
+      const lastSuccessfulValue = backupSetting.get('backup.lastSuccessfulAt');
+      const lastSuccessfulAt = lastSuccessfulValue ? new Date(lastSuccessfulValue) : undefined;
+      const ageDays = lastSuccessfulAt
+        ? (now.getTime() - lastSuccessfulAt.getTime()) / DAY_MS
+        : undefined;
+      const graceElapsed =
+        now.getTime() - initializedAt.getTime() >=
+        ATTENTION_RULES.backupInitialGraceHours * 60 * 60 * 1000;
+      if (
+        (!lastSuccessfulAt && graceElapsed) ||
+        (ageDays ?? 0) > ATTENTION_RULES.backupWarningDays
+      ) {
+        const critical = !lastSuccessfulAt || (ageDays ?? 0) > ATTENTION_RULES.backupCriticalDays;
+        add({
+          actionLabel: 'Открыть настройки резервных копий',
+          actionRoute: '/settings#backups',
+          category: 'BACKUPS',
+          description: lastSuccessfulAt
+            ? `Последняя успешная копия создана ${lastSuccessfulAt.toLocaleString('ru-RU')}.`
+            : 'После первоначального периода работы не создано ни одной исправной копии.',
+          entityId: 'backup-health',
+          entityType: 'Backup',
+          id: 'backup:stale',
+          occurredAt: lastSuccessfulAt?.toISOString(),
+          severity: critical ? 'CRITICAL' : 'WARNING',
+          title: critical ? 'Резервная копия давно не создавалась' : 'Пора создать резервную копию',
+        });
+      }
+      const failures = Number(backupSetting.get('backup.consecutiveFailures')) || 0;
+      if (failures >= ATTENTION_RULES.backupRepeatedFailures)
+        add({
+          actionLabel: 'Открыть настройки резервных копий',
+          actionRoute: '/settings#backups',
+          category: 'BACKUPS',
+          description:
+            backupSetting.get('backup.lastError') ??
+            'Несколько автоматических попыток завершились ошибкой.',
+          entityId: 'backup-automatic',
+          entityType: 'Backup',
+          id: 'backup:automatic-failures',
+          occurredAt: backupSetting.get('backup.lastAttemptAt'),
+          severity: failures >= 3 ? 'CRITICAL' : 'WARNING',
+          title: 'Не удаётся создать автоматическую копию',
+        });
+    }
 
     const todayEnd = new Date(now);
     todayEnd.setHours(23, 59, 59, 999);

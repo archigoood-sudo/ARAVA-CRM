@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ApplicationService,
+  BackupService,
   closeDatabase,
   createDatabaseClient,
   initializeDatabase,
@@ -32,6 +33,9 @@ import {
   type StudentProfileOverview,
   type AttentionItem,
   type AttentionSummary,
+  type BackupEntry,
+  type BackupRestoreSelection,
+  type BackupStatus,
 } from '@arava/shared';
 
 vi.mock('electron', () => ({
@@ -526,5 +530,69 @@ describe('Electron IPC boundary', () => {
     await expect(
       handlers[IPC_CHANNELS.cardRegister]?.(coachSession.token, { barcode: '0000005002' }),
     ).rejects.toThrow(t('domain.authorization.permissionDenied'));
+  });
+
+  it('keeps backup filesystem operations narrow and OWNER-only at the IPC boundary', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!BackupIpc2026',
+    });
+    const databasePath = join(directory, 'ipc.db');
+    const backup = new BackupService(database, service, {
+      databasePath,
+      defaultBackupDirectory: join(directory, 'backups'),
+      externalLogPath: join(directory, 'backup-restore.log'),
+    });
+    await backup.initializePreferences();
+    const restorePicker = { path: undefined as string | undefined };
+    const handlers = createIpcHandlers(database, service, databasePath, {
+      backup,
+      chooseBackupFile: () => Promise.resolve(restorePicker.path),
+      chooseBackupFolder: () => Promise.resolve(join(directory, 'chosen-backups')),
+      chooseExportPath: () => Promise.resolve(join(directory, 'exported.db')),
+      openFolder: vi.fn().mockResolvedValue(undefined),
+      relaunch: vi.fn(),
+    });
+    expect(() => handlers[IPC_CHANNELS.backupSetAutomatic]?.(owner.token, 'да')).toThrow();
+    const created = (await handlers[IPC_CHANNELS.backupCreate]?.(owner.token)) as BackupEntry;
+    expect(created).toMatchObject({ integrity: 'VALID', type: 'MANUAL' });
+    restorePicker.path = created.location;
+    const selected = (await handlers[IPC_CHANNELS.backupSelectRestoreFile]?.(
+      owner.token,
+    )) as BackupRestoreSelection;
+    expect(selected).toMatchObject({ canRestore: true, integrity: 'VALID' });
+    const exported = (await handlers[IPC_CHANNELS.backupExport]?.(owner.token)) as BackupEntry;
+    expect(exported.fileName).toBe('exported.db');
+    await expect(
+      handlers[IPC_CHANNELS.backupValidate]?.(owner.token, '../arava.db'),
+    ).rejects.toThrow();
+    const changed = (await handlers[IPC_CHANNELS.backupSelectFolder]?.(
+      owner.token,
+    )) as BackupStatus;
+    expect(changed.backupDirectory).toBe(join(directory, 'chosen-backups'));
+
+    const branch = await service.createBranch(owner.token, { name: 'IPC резервирование' });
+    const coach = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'coach-backup-ipc@arava.local',
+      fullName: 'Тренер резервирования',
+      password: 'Coach!BackupIpc2026',
+      role: 'COACH',
+    });
+    const coachSession = await service.login({
+      email: coach.email,
+      password: 'Coach!BackupIpc2026',
+    });
+    await service.changePassword(coachSession.token, {
+      currentPassword: 'Coach!BackupIpc2026',
+      newPassword: 'Coach!BackupIpcChanged2026',
+    });
+    await expect(handlers[IPC_CHANNELS.backupStatus]?.(coachSession.token)).rejects.toThrow(
+      'недостаточно прав',
+    );
   });
 });

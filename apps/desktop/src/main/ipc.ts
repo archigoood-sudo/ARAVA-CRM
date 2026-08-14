@@ -8,6 +8,7 @@ import {
   StudioService,
   StudentProfileService,
   AttentionService,
+  BackupService,
   accessibleBranchIds,
   assertCapability,
   type DatabaseClient,
@@ -83,17 +84,28 @@ import {
   type SettingKey,
   type SystemInformation,
 } from '@arava/shared';
-import { app, ipcMain } from 'electron';
+import { app, dialog, ipcMain, shell } from 'electron';
+import { dirname, join } from 'node:path';
 import type { EnrollmentStatus } from '@prisma/client';
 import { z } from 'zod';
 
 type IpcHandler = (...arguments_: unknown[]) => unknown;
 const coachEnrollmentStatuses = ['ACTIVE', 'TRIAL', 'FROZEN'] satisfies EnrollmentStatus[];
 
+export interface BackupIpcDependencies {
+  backup?: BackupService;
+  chooseBackupFile?: () => Promise<string | undefined>;
+  chooseBackupFolder?: () => Promise<string | undefined>;
+  chooseExportPath?: (defaultPath: string) => Promise<string | undefined>;
+  openFolder?: (path: string) => Promise<void>;
+  relaunch?: () => void;
+}
+
 export function createIpcHandlers(
   database: DatabaseClient,
   service: ApplicationService,
   databasePath: string,
+  backupDependencies: BackupIpcDependencies = {},
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
   const finance = new FinanceService(database, service);
@@ -103,6 +115,13 @@ export function createIpcHandlers(
   const search = new GlobalSearchService(database, service);
   const studentProfiles = new StudentProfileService(database, service);
   const attention = new AttentionService(database, service);
+  const backups =
+    backupDependencies.backup ??
+    new BackupService(database, service, {
+      databasePath,
+      defaultBackupDirectory: join(dirname(databasePath), 'backups'),
+      externalLogPath: join(dirname(databasePath), 'backup-restore.log'),
+    });
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
@@ -937,6 +956,94 @@ export function createIpcHandlers(
     [IPC_CHANNELS.attentionSummary]: (unsafeToken): Promise<AttentionSummary> =>
       attention.getSummary(sessionTokenSchema.parse(unsafeToken)),
 
+    [IPC_CHANNELS.backupStatus]: (unsafeToken) =>
+      backups.getStatus(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.backupList]: (unsafeToken) =>
+      backups.listBackups(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.backupCreate]: (unsafeToken) =>
+      backups.createManualBackup(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.backupValidate]: (unsafeToken, unsafeId) =>
+      backups.validateManagedBackup(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.backupSetAutomatic]: (unsafeToken, unsafeEnabled) =>
+      backups.setAutomatic(sessionTokenSchema.parse(unsafeToken), z.boolean().parse(unsafeEnabled)),
+    [IPC_CHANNELS.backupSelectFolder]: async (unsafeToken) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      await backups.getStatus(token);
+      const selected = backupDependencies.chooseBackupFolder
+        ? await backupDependencies.chooseBackupFolder()
+        : (
+            await dialog.showOpenDialog({
+              buttonLabel: 'Выбрать папку',
+              properties: ['openDirectory', 'createDirectory'],
+              title: 'Папка резервных копий',
+            })
+          ).filePaths[0];
+      return selected ? backups.setBackupDirectory(token, selected) : undefined;
+    },
+    [IPC_CHANNELS.backupOpenFolder]: async (unsafeToken): Promise<void> => {
+      const status = await backups.getStatus(sessionTokenSchema.parse(unsafeToken));
+      if (backupDependencies.openFolder)
+        await backupDependencies.openFolder(status.backupDirectory);
+      else {
+        const error = await shell.openPath(status.backupDirectory);
+        if (error) throw new Error(`Не удалось открыть папку: ${error}`);
+      }
+    },
+    [IPC_CHANNELS.backupExport]: async (unsafeToken) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const status = await backups.getStatus(token);
+      const defaultPath = join(status.backupDirectory, 'ARAVA-CRM-backup.db');
+      const selected = backupDependencies.chooseExportPath
+        ? await backupDependencies.chooseExportPath(defaultPath)
+        : (
+            await dialog.showSaveDialog({
+              buttonLabel: 'Сохранить копию',
+              defaultPath,
+              filters: [{ extensions: ['db'], name: 'Резервная копия ARAVA CRM' }],
+              title: 'Сохранить резервную копию как',
+            })
+          ).filePath;
+      return selected ? backups.exportBackup(token, selected) : undefined;
+    },
+    [IPC_CHANNELS.backupSelectManaged]: (unsafeToken, unsafeId) =>
+      backups.selectManagedBackup(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.backupSelectRestoreFile]: async (unsafeToken) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      await backups.getStatus(token);
+      const selected = backupDependencies.chooseBackupFile
+        ? await backupDependencies.chooseBackupFile()
+        : (
+            await dialog.showOpenDialog({
+              buttonLabel: 'Выбрать копию',
+              filters: [{ extensions: ['db'], name: 'Резервная копия ARAVA CRM' }],
+              properties: ['openFile'],
+              title: 'Выберите резервную копию',
+            })
+          ).filePaths[0];
+      return selected ? backups.selectExternalBackup(token, selected) : undefined;
+    },
+    [IPC_CHANNELS.backupRestore]: async (unsafeToken, unsafeSelectionId, unsafeConfirmation) => {
+      const result = await backups.restoreBackup(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeSelectionId),
+        z.string().max(30).parse(unsafeConfirmation),
+      );
+      setTimeout(() => {
+        if (backupDependencies.relaunch) backupDependencies.relaunch();
+        else if (process.env.ARAVA_E2E_NO_RELAUNCH !== '1') {
+          app.relaunch();
+          app.exit(0);
+        }
+      }, 750);
+      return result;
+    },
+
     [IPC_CHANNELS.activityList]: async (unsafeToken): Promise<ActivitySummary[]> => {
       await service.authenticate(sessionTokenSchema.parse(unsafeToken));
       const activity = await database.activityEvent.findMany({
@@ -993,9 +1100,13 @@ export function createIpcHandlers(
   };
 }
 
-export function registerIpcHandlers(database: DatabaseClient, databasePath: string): void {
-  const service = new ApplicationService(database);
-  const handlers = createIpcHandlers(database, service, databasePath);
+export function registerIpcHandlers(
+  database: DatabaseClient,
+  databasePath: string,
+  dependencies: BackupIpcDependencies & { service?: ApplicationService } = {},
+): void {
+  const service = dependencies.service ?? new ApplicationService(database);
+  const handlers = createIpcHandlers(database, service, databasePath, dependencies);
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (_event, ...arguments_: unknown[]) => handler(...arguments_));
   }

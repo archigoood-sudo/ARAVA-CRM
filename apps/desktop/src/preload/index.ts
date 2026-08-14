@@ -95,6 +95,22 @@ const desktopApi: AravaDesktopApi = {
     list: (token, filters) => invoke(IPC_CHANNELS.attentionList, token, filters),
     summary: (token) => invoke(IPC_CHANNELS.attentionSummary, token),
   },
+  backups: {
+    create: (token) => invoke(IPC_CHANNELS.backupCreate, token),
+    export: (token) => invoke(IPC_CHANNELS.backupExport, token),
+    list: (token) => invoke(IPC_CHANNELS.backupList, token),
+    openFolder: async (token) => {
+      await invoke(IPC_CHANNELS.backupOpenFolder, token);
+    },
+    restore: (token, selectionId, confirmation) =>
+      invoke(IPC_CHANNELS.backupRestore, token, selectionId, confirmation),
+    selectFolder: (token) => invoke(IPC_CHANNELS.backupSelectFolder, token),
+    selectManaged: (token, backupId) => invoke(IPC_CHANNELS.backupSelectManaged, token, backupId),
+    selectRestoreFile: (token) => invoke(IPC_CHANNELS.backupSelectRestoreFile, token),
+    setAutomatic: (token, enabled) => invoke(IPC_CHANNELS.backupSetAutomatic, token, enabled),
+    status: (token) => invoke(IPC_CHANNELS.backupStatus, token),
+    validate: (token, backupId) => invoke(IPC_CHANNELS.backupValidate, token, backupId),
+  },
   groups: {
     addEnrollment: (token, groupId, input) =>
       invoke(IPC_CHANNELS.enrollmentAdd, token, groupId, input),

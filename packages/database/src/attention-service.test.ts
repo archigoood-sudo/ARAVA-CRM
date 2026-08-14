@@ -378,4 +378,40 @@ describe('Sprint 4.2B attention center', () => {
       attention.listItems(adminSession.token, { branchId: hidden.branch.id }),
     ).rejects.toThrow();
   });
+
+  it('shows centralized backup health only to OWNER after the initial grace period', async () => {
+    await database.appSetting.createMany({
+      data: [
+        { key: 'backup.initializedAt', value: at(-10).toISOString() },
+        { key: 'backup.lastSuccessfulAt', value: at(-8).toISOString() },
+        { key: 'backup.consecutiveFailures', value: '2' },
+        { key: 'backup.lastError', value: 'Внешний диск недоступен.' },
+      ],
+    });
+    const ownerItems = await attention.listItems(ownerToken, { category: 'BACKUPS' });
+    expect(ownerItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'backup:stale', severity: 'CRITICAL' }),
+        expect.objectContaining({ id: 'backup:automatic-failures', severity: 'WARNING' }),
+      ]),
+    );
+
+    const branch = await application.createBranch(ownerToken, { name: 'Филиал администратора' });
+    const admin = await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'admin-backup-attention@arava.local',
+      fullName: 'Администратор резервных копий',
+      password: 'Admin!BackupAttention2026',
+      role: 'ADMIN',
+    });
+    const adminSession = await application.login({
+      email: admin.email,
+      password: 'Admin!BackupAttention2026',
+    });
+    await application.changePassword(adminSession.token, {
+      currentPassword: 'Admin!BackupAttention2026',
+      newPassword: 'Admin!BackupAttentionChanged2026',
+    });
+    expect(await attention.listItems(adminSession.token, { category: 'BACKUPS' })).toEqual([]);
+  });
 });
