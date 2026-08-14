@@ -7,6 +7,7 @@ import {
   ManagementService,
   StudioService,
   StudentProfileService,
+  AttentionService,
   accessibleBranchIds,
   assertCapability,
   type DatabaseClient,
@@ -18,6 +19,7 @@ import {
   calendarRangeQuerySchema,
   barcodeSchema,
   analyticsQuerySchema,
+  attentionFiltersSchema,
   branchInputSchema,
   cardActionInputSchema,
   cardAssignInputSchema,
@@ -76,6 +78,8 @@ import {
   type ActivitySummary,
   type AuditLogSummary,
   type DashboardStats,
+  type AttentionItem,
+  type AttentionSummary,
   type SettingKey,
   type SystemInformation,
 } from '@arava/shared';
@@ -98,6 +102,7 @@ export function createIpcHandlers(
   const cards = new CardService(database, service);
   const search = new GlobalSearchService(database, service);
   const studentProfiles = new StudentProfileService(database, service);
+  const attention = new AttentionService(database, service);
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
@@ -924,6 +929,13 @@ export function createIpcHandlers(
         users,
       };
     },
+    [IPC_CHANNELS.attentionList]: (unsafeToken, unsafeFilters): Promise<AttentionItem[]> =>
+      attention.listItems(
+        sessionTokenSchema.parse(unsafeToken),
+        attentionFiltersSchema.parse(unsafeFilters),
+      ),
+    [IPC_CHANNELS.attentionSummary]: (unsafeToken): Promise<AttentionSummary> =>
+      attention.getSummary(sessionTokenSchema.parse(unsafeToken)),
 
     [IPC_CHANNELS.activityList]: async (unsafeToken): Promise<ActivitySummary[]> => {
       await service.authenticate(sessionTokenSchema.parse(unsafeToken));

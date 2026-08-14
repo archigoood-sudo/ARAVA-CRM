@@ -48,6 +48,8 @@ Sprint 4.1D global search is an offline, typed main-process service. It limits e
 
 Sprint 4.2A makes `StudentProfileService` the bounded read model for the student workspace. It delegates subscription balances to `FinanceService`, limits recent attendance, payments, lessons, notes, and activity, and returns a reduced TRAINER projection without contacts, cards, notes, or financial data. Existing mutation services remain the only write paths.
 
+Sprint 4.2B adds `AttentionService` as a derived, permission-aware operational read model. It batches active student, subscription, debt, attendance, payroll, card, room, schedule, and substitution state without duplicating those records. Stable item keys support renderer reconciliation, while resolution happens automatically when the source data changes. OWNER sees all branches; ADMIN queries are scoped in SQLite before results cross IPC; COACH cannot call the administrative service. Shared thresholds in `attention-rules.ts` keep student-profile and global subscription warnings aligned. No persistent notification inbox or snooze table is introduced in this sprint.
+
 ## Configuration and observability
 
 Runtime configuration is parsed at startup. `electron-log` writes `arava-crm.log` beneath Electron's standard logs directory and mirrors development messages to the console. Secrets must never be logged or stored in renderer persistence.

@@ -6,6 +6,7 @@ import { ChangePasswordPage } from './features/auth/change-password-page';
 import { ForgotPasswordPage } from './features/auth/forgot-password-page';
 import { BranchesPage } from './features/branches/branches-page';
 import { DashboardPage } from './features/dashboard/dashboard-page';
+import { AttentionPage } from './features/attention/attention-page';
 import { AttendancePage } from './features/attendance/attendance-page';
 import { FinancePage } from './features/finance/finance-page';
 import { ExpensesPage } from './features/expenses/expenses-page';
@@ -53,6 +54,7 @@ export const router = createHashRouter([
         element: <AppLayout />,
         children: [
           { element: <DashboardPage />, path: '/dashboard' },
+          { element: <AttentionPage />, path: '/attention' },
           { element: <BranchesPage />, path: '/branches' },
           { element: <RoomsPage />, path: '/rooms' },
           { element: <GroupsPage />, path: '/groups' },

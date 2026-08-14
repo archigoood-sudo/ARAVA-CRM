@@ -51,6 +51,7 @@ export function AttendancePage() {
         client.invalidateQueries({ queryKey: ['subscriptions'] }),
         client.invalidateQueries({ queryKey: ['students', 'finance'] }),
         client.invalidateQueries({ queryKey: ['dashboard'] }),
+        client.invalidateQueries({ queryKey: ['attention'] }),
       ]);
     },
   });

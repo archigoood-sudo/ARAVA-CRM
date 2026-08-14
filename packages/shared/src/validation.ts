@@ -29,6 +29,7 @@ import {
   type CardReplaceInput,
   type CopyDayInput,
   type AnalyticsQuery,
+  type AttentionFilters,
   type AttendanceEntryInput,
   type EnrollmentInput,
   type CashCorrectionInput,
@@ -762,3 +763,22 @@ export const reportQuerySchema: z.ZodType<ReportQuery> = z
 export const identifierSchema = z.string().min(1).max(100);
 export const sessionTokenSchema = z.string().min(32).max(256);
 export const globalSearchQuerySchema = z.string().trim().min(2).max(120);
+
+export const attentionFiltersSchema: z.ZodType<AttentionFilters> = z.object({
+  branchId: optionalIdentifier,
+  category: z
+    .enum([
+      'STUDENTS',
+      'SUBSCRIPTIONS',
+      'PAYMENTS',
+      'ATTENDANCE',
+      'PAYROLL',
+      'CARDS',
+      'SCHEDULE',
+      'ROOMS',
+      'SUBSTITUTIONS',
+    ])
+    .optional(),
+  relevance: z.enum(['ALL', 'TODAY', 'UPCOMING']).optional(),
+  severity: z.enum(['INFO', 'WARNING', 'CRITICAL']).optional(),
+});

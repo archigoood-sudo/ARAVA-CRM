@@ -10,6 +10,7 @@ import { useAuthStore } from '../stores/auth-store';
 const pageTitles: Record<string, { eyebrow: string; title: string }> = {
   '/about': { eyebrow: t('page.about.eyebrow'), title: t('nav.about') },
   '/dashboard': { eyebrow: t('page.dashboard.eyebrow'), title: t('nav.dashboard') },
+  '/attention': { eyebrow: 'Операционный центр', title: 'Требует внимания' },
   '/branches': { eyebrow: t('page.branches.eyebrow'), title: t('nav.branches') },
   '/cards': { eyebrow: 'Доступ клиентов', title: 'Карты' },
   '/students': { eyebrow: t('page.students.eyebrow'), title: t('nav.students') },
@@ -40,6 +41,7 @@ export function AppLayout() {
             <button
               aria-label={t('layout.fixedSidebar')}
               className="app-no-drag flex size-9 cursor-default items-center justify-center rounded-lg text-muted-foreground"
+              onClick={() => navigate(user?.role === 'COACH' ? '/schedule' : '/attention')}
               type="button"
             >
               <PanelLeftClose className="size-[18px]" />

@@ -1,0 +1,581 @@
+import type {
+  AttentionFilters,
+  AttentionItem,
+  AttentionSeverity,
+  AttentionSummary,
+} from '@arava/shared';
+
+import type { DatabaseClient } from './index';
+import { ATTENTION_RULES, DAY_MS, isExpiringSoon, isLowLessonBalance } from './attention-rules';
+import { accessibleBranchIds, assertBranchAccess } from './permissions';
+import { DomainError } from './security';
+import type { ApplicationService } from './services';
+
+const ACTIVE_ENROLLMENTS = ['ACTIVE', 'TRIAL', 'FROZEN'] as const;
+const ACTIVE_SUBSCRIPTIONS = ['ACTIVE', 'FROZEN'] as const;
+const SEVERITY_ORDER: Record<AttentionSeverity, number> = {
+  CRITICAL: 0,
+  WARNING: 1,
+  INFO: 2,
+};
+
+function fullName(person: {
+  firstName: string;
+  lastName: string;
+  middleName: string | null;
+}): string {
+  return [person.lastName, person.firstName, person.middleName].filter(Boolean).join(' ');
+}
+
+function dateRoute(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function paymentNet(payment: {
+  amount: number;
+  status: string;
+  refunds: { amount: number }[];
+}): number {
+  if (payment.status === 'CANCELLED') return 0;
+  return payment.amount - payment.refunds.reduce((sum, refund) => sum + refund.amount, 0);
+}
+
+export class AttentionService {
+  constructor(
+    private readonly database: DatabaseClient,
+    private readonly application: ApplicationService,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  async listItems(token: string, filters: AttentionFilters = {}): Promise<AttentionItem[]> {
+    const actor = await this.application.authenticate(token);
+    if (actor.role === 'COACH')
+      throw new DomainError('AUTHORIZATION', 'Центр внимания доступен только руководителям.');
+    if (filters.branchId) assertBranchAccess(actor, filters.branchId);
+    const accessible = accessibleBranchIds(actor);
+    const branchIds = filters.branchId ? [filters.branchId] : accessible;
+    const branchScope = branchIds ? { branchId: { in: branchIds } } : {};
+    const now = this.now();
+    const historyStart = new Date(now.getTime() - ATTENTION_RULES.operationalHistoryDays * DAY_MS);
+    const attendanceCutoff = new Date(
+      now.getTime() - ATTENTION_RULES.attendanceGraceMinutes * 60_000,
+    );
+    const horizon = new Date(now.getTime() + ATTENTION_RULES.operationalHorizonDays * DAY_MS);
+    const substitutionHorizon = new Date(
+      now.getTime() + ATTENTION_RULES.substitutionHorizonDays * DAY_MS,
+    );
+
+    const [students, archivedStudents, lessons, closures, scheduleIssues, substitutions, periods] =
+      await Promise.all([
+        this.database.student.findMany({
+          include: {
+            branch: { select: { name: true } },
+            enrollments: {
+              select: { id: true },
+              where: { leftAt: null, status: { in: [...ACTIVE_ENROLLMENTS] } },
+            },
+            membershipCards: {
+              orderBy: { updatedAt: 'desc' },
+              select: { id: true, status: true },
+              take: 1,
+              where: { archivedAt: null },
+            },
+            payments: {
+              orderBy: { paidAt: 'desc' },
+              select: { paidAt: true },
+              take: 1,
+              where: { status: { not: 'CANCELLED' } },
+            },
+            subscriptions: {
+              include: {
+                payments: {
+                  select: {
+                    amount: true,
+                    refunds: { select: { amount: true } },
+                    status: true,
+                  },
+                },
+                tariff: { select: { name: true } },
+              },
+              orderBy: { startsAt: 'desc' },
+            },
+          },
+          where: { ...branchScope, archivedAt: null, status: { not: 'ARCHIVED' } },
+        }),
+        this.database.student.findMany({
+          include: {
+            branch: { select: { name: true } },
+            enrollments: {
+              select: { id: true },
+              where: { leftAt: null, status: { in: [...ACTIVE_ENROLLMENTS] } },
+            },
+          },
+          where: {
+            ...branchScope,
+            OR: [{ archivedAt: { not: null } }, { status: 'ARCHIVED' }],
+            enrollments: { some: { leftAt: null, status: { in: [...ACTIVE_ENROLLMENTS] } } },
+          },
+        }),
+        this.database.lesson.findMany({
+          include: {
+            branch: { select: { name: true } },
+            coach: { select: { fullName: true } },
+            group: { select: { name: true } },
+            roomEntity: { select: { name: true } },
+          },
+          orderBy: { endsAt: 'desc' },
+          where: {
+            ...branchScope,
+            attendanceCompletedAt: null,
+            endsAt: { gte: historyStart, lte: attendanceCutoff },
+            status: { in: ['PLANNED', 'COMPLETED'] },
+          },
+        }),
+        this.database.roomClosure.findMany({
+          include: {
+            room: {
+              include: {
+                branch: { select: { name: true } },
+                lessons: {
+                  select: { endsAt: true, id: true, startsAt: true },
+                  where: {
+                    endsAt: { gt: now },
+                    startsAt: { lt: horizon },
+                    status: { not: 'CANCELLED' },
+                  },
+                },
+                rentals: {
+                  select: { endAt: true, id: true, startAt: true },
+                  where: { endAt: { gt: now }, startAt: { lt: horizon }, status: 'ACTIVE' },
+                },
+              },
+            },
+          },
+          where: {
+            endAt: { gt: now },
+            startAt: { lt: horizon },
+            room: branchIds ? { branchId: { in: branchIds } } : {},
+          },
+        }),
+        this.database.lesson.findMany({
+          include: {
+            branch: { select: { name: true } },
+            group: { select: { name: true } },
+            roomEntity: { select: { archivedAt: true, isActive: true, name: true } },
+          },
+          where: {
+            ...branchScope,
+            startsAt: { gte: now, lte: horizon },
+            status: 'PLANNED',
+            OR: [
+              { roomId: null },
+              { roomEntity: { is: { isActive: false } } },
+              { roomEntity: { is: { archivedAt: { not: null } } } },
+            ],
+          },
+        }),
+        this.database.trainerSubstitution.findMany({
+          include: {
+            lesson: {
+              include: {
+                branch: { select: { name: true } },
+                group: { select: { name: true } },
+                roomEntity: { select: { name: true } },
+              },
+            },
+            originalTrainer: { select: { fullName: true } },
+            substituteTrainer: { select: { fullName: true } },
+          },
+          where: {
+            lesson: {
+              ...(branchIds ? { branchId: { in: branchIds } } : {}),
+              startsAt: { gte: now, lte: substitutionHorizon },
+              status: { not: 'CANCELLED' },
+            },
+          },
+        }),
+        this.database.payrollPeriod.findMany({
+          include: { branch: { select: { name: true } } },
+          where: {
+            status: { in: ['DRAFT', 'CALCULATED'] },
+            ...(branchIds ? { branchId: { in: branchIds } } : {}),
+          },
+        }),
+      ]);
+
+    const items: AttentionItem[] = [];
+    const add = (item: AttentionItem) => items.push(item);
+
+    for (const student of students) {
+      const name = fullName(student);
+      const common = { branchId: student.branchId, branchName: student.branch.name };
+      if (!student.enrollments.length)
+        add({
+          ...common,
+          actionLabel: 'Открыть ученика',
+          actionRoute: `/students/${student.id}`,
+          category: 'STUDENTS',
+          description: `${name} не состоит ни в одной активной группе.`,
+          entityId: student.id,
+          entityType: 'Student',
+          id: `student:no-group:${student.id}`,
+          severity: 'WARNING',
+          title: 'Ученик без группы',
+        });
+
+      const activeSubscriptions = student.subscriptions.filter(
+        (subscription) =>
+          ACTIVE_SUBSCRIPTIONS.includes(
+            subscription.status as (typeof ACTIVE_SUBSCRIPTIONS)[number],
+          ) &&
+          subscription.startsAt <= now &&
+          (!subscription.expiresAt || subscription.expiresAt >= now),
+      );
+      const recentlyExpired = student.subscriptions.find(
+        (subscription) =>
+          subscription.expiresAt &&
+          subscription.expiresAt < now &&
+          subscription.expiresAt >=
+            new Date(now.getTime() - ATTENTION_RULES.recentlyExpiredDays * DAY_MS),
+      );
+      const recentlyUsedUp = student.subscriptions.find(
+        (subscription) =>
+          subscription.status === 'USED_UP' &&
+          subscription.lessonLimit !== null &&
+          subscription.lessonsUsed >= subscription.lessonLimit &&
+          subscription.updatedAt >= historyStart,
+      );
+      if (!activeSubscriptions.length && !recentlyExpired && !recentlyUsedUp)
+        add({
+          ...common,
+          actionLabel: 'Оформить абонемент',
+          actionRoute: `/students/${student.id}?action=subscription`,
+          category: 'SUBSCRIPTIONS',
+          description: `У ${name} нет действующего абонемента.`,
+          entityId: student.id,
+          entityType: 'Student',
+          id: `student:no-subscription:${student.id}`,
+          severity: 'WARNING',
+          title: 'Нет активного абонемента',
+        });
+
+      for (const subscription of [
+        ...activeSubscriptions,
+        ...(recentlyUsedUp ? [recentlyUsedUp] : []),
+      ]) {
+        const remaining =
+          subscription.lessonLimit === null
+            ? undefined
+            : Math.max(0, subscription.lessonLimit - subscription.lessonsUsed);
+        if (remaining === 0)
+          add({
+            ...common,
+            actionLabel: 'Открыть ученика',
+            actionRoute: `/students/${student.id}?section=subscription`,
+            category: 'SUBSCRIPTIONS',
+            description: `В абонементе «${subscription.tariff.name}» не осталось занятий.`,
+            entityId: subscription.id,
+            entityType: 'Subscription',
+            id: `subscription:zero:${subscription.id}`,
+            severity: 'CRITICAL',
+            title: `${name}: занятия закончились`,
+          });
+        else if (isLowLessonBalance(remaining))
+          add({
+            ...common,
+            actionLabel: 'Открыть ученика',
+            actionRoute: `/students/${student.id}?section=subscription`,
+            category: 'SUBSCRIPTIONS',
+            description: `В абонементе «${subscription.tariff.name}» осталось ${String(remaining)} занятия.`,
+            entityId: subscription.id,
+            entityType: 'Subscription',
+            id: `subscription:low:${subscription.id}`,
+            severity: 'WARNING',
+            title: `${name}: мало занятий`,
+          });
+        if (subscription.expiresAt && isExpiringSoon(subscription.expiresAt, now))
+          add({
+            ...common,
+            actionLabel: 'Продлить абонемент',
+            actionRoute: `/students/${student.id}?action=subscription`,
+            category: 'SUBSCRIPTIONS',
+            description: `Абонемент «${subscription.tariff.name}» заканчивается ${subscription.expiresAt.toLocaleDateString('ru-RU')}.`,
+            dueAt: subscription.expiresAt.toISOString(),
+            entityId: subscription.id,
+            entityType: 'Subscription',
+            id: `subscription:expiring:${subscription.id}`,
+            severity: 'WARNING',
+            title: `${name}: абонемент заканчивается`,
+          });
+      }
+
+      if (recentlyExpired) {
+        const expiredOn = recentlyExpired.expiresAt
+          ? recentlyExpired.expiresAt.toLocaleDateString('ru-RU')
+          : 'недавно';
+        add({
+          ...common,
+          actionLabel: 'Оформить абонемент',
+          actionRoute: `/students/${student.id}?action=subscription`,
+          category: 'SUBSCRIPTIONS',
+          description: `Абонемент «${recentlyExpired.tariff.name}» закончился ${expiredOn}.`,
+          dueAt: recentlyExpired.expiresAt?.toISOString(),
+          entityId: recentlyExpired.id,
+          entityType: 'Subscription',
+          id: `subscription:expired:${recentlyExpired.id}`,
+          severity: 'WARNING',
+          title: `${name}: абонемент истёк`,
+        });
+      }
+
+      const debt = student.subscriptions.reduce(
+        (sum, subscription) =>
+          sum +
+          Math.max(
+            0,
+            subscription.salePrice -
+              subscription.payments.reduce((paid, payment) => paid + paymentNet(payment), 0),
+          ),
+        0,
+      );
+      if (debt > 0)
+        add({
+          ...common,
+          actionLabel: 'Принять оплату',
+          actionRoute: `/students/${student.id}?action=payment`,
+          category: 'PAYMENTS',
+          description: `Задолженность ${new Intl.NumberFormat('ru-RU').format(debt / 100)} ₽${student.payments[0] ? `, последняя оплата ${student.payments[0].paidAt.toLocaleDateString('ru-RU')}` : ''}.`,
+          entityId: student.id,
+          entityType: 'Student',
+          id: `student:debt:${student.id}`,
+          occurredAt: student.payments[0]?.paidAt.toISOString(),
+          severity: 'WARNING',
+          title: `${name}: есть задолженность`,
+        });
+
+      const card = student.membershipCards[0];
+      if (card?.status === 'LOST' || card?.status === 'BLOCKED')
+        add({
+          ...common,
+          actionLabel: 'Открыть ученика',
+          actionRoute: `/students/${student.id}?section=card`,
+          category: 'CARDS',
+          description:
+            card.status === 'LOST' ? 'Карта отмечена как утерянная.' : 'Карта заблокирована.',
+          entityId: card.id,
+          entityType: 'MembershipCard',
+          id: `card:${card.status.toLowerCase()}:${card.id}`,
+          severity: 'WARNING',
+          title: `${name}: ${card.status === 'LOST' ? 'карта потеряна' : 'карта заблокирована'}`,
+        });
+    }
+
+    for (const student of archivedStudents)
+      add({
+        actionLabel: 'Открыть ученика',
+        actionRoute: `/students/${student.id}`,
+        branchId: student.branchId,
+        branchName: student.branch.name,
+        category: 'STUDENTS',
+        description: `Архивный профиль ${fullName(student)} остаётся в активной группе.`,
+        entityId: student.id,
+        entityType: 'Student',
+        id: `student:archived-active:${student.id}`,
+        severity: 'CRITICAL',
+        title: 'Архивный ученик в активных данных',
+      });
+
+    for (const lesson of lessons)
+      add({
+        actionLabel: 'Заполнить посещаемость',
+        actionRoute: `/attendance/${lesson.id}`,
+        branchId: lesson.branchId,
+        branchName: lesson.branch.name,
+        category: 'ATTENDANCE',
+        description: `${lesson.group.name} · ${lesson.startsAt.toLocaleString('ru-RU')} · ${lesson.coach?.fullName ?? 'Тренер не назначен'} · ${lesson.roomEntity?.name ?? lesson.room ?? 'Зал не указан'}.`,
+        dueAt: lesson.endsAt.toISOString(),
+        entityId: lesson.id,
+        entityType: 'Lesson',
+        id: `lesson:attendance:${lesson.id}`,
+        severity: 'WARNING',
+        title: 'Не заполнена посещаемость',
+      });
+
+    for (const closure of closures) {
+      const affectedLessons = closure.room.lessons.filter(
+        (lesson) => lesson.startsAt < closure.endAt && lesson.endsAt > closure.startAt,
+      );
+      const affectedRentals = closure.room.rentals.filter(
+        (rental) => rental.startAt < closure.endAt && rental.endAt > closure.startAt,
+      );
+      if (!affectedLessons.length && !affectedRentals.length) continue;
+      const today = closure.startAt.toDateString() === now.toDateString();
+      add({
+        actionLabel: 'Открыть расписание',
+        actionRoute: `/schedule?branchId=${closure.room.branchId}&date=${dateRoute(closure.startAt)}&roomId=${closure.roomId}`,
+        branchId: closure.room.branchId,
+        branchName: closure.room.branch.name,
+        category: 'ROOMS',
+        description: `${closure.room.name}: затронуто занятий — ${String(affectedLessons.length)}, аренд — ${String(affectedRentals.length)}. ${closure.reason}`,
+        dueAt: closure.startAt.toISOString(),
+        entityId: closure.id,
+        entityType: 'RoomClosure',
+        id: `room:closure:${closure.id}`,
+        severity: today ? 'CRITICAL' : 'WARNING',
+        title: 'Зал временно закрыт',
+      });
+    }
+
+    for (const lesson of scheduleIssues)
+      add({
+        actionLabel: 'Открыть занятие',
+        actionRoute: `/lessons/${lesson.id}`,
+        branchId: lesson.branchId,
+        branchName: lesson.branch.name,
+        category: 'SCHEDULE',
+        description: `${lesson.group.name} · ${lesson.startsAt.toLocaleString('ru-RU')}${lesson.roomEntity ? ` · ${lesson.roomEntity.name}` : ''}.`,
+        dueAt: lesson.startsAt.toISOString(),
+        entityId: lesson.id,
+        entityType: 'Lesson',
+        id: `lesson:room:${lesson.id}`,
+        severity: lesson.startsAt.toDateString() === now.toDateString() ? 'CRITICAL' : 'WARNING',
+        title: lesson.roomId ? 'Занятие назначено в неактивный зал' : 'У занятия не указан зал',
+      });
+
+    for (const substitution of substitutions)
+      add({
+        actionLabel: 'Открыть занятие',
+        actionRoute: `/lessons/${substitution.lessonId}`,
+        branchId: substitution.lesson.branchId,
+        branchName: substitution.lesson.branch.name,
+        category: 'SUBSTITUTIONS',
+        description: `${substitution.lesson.group.name} · ${substitution.lesson.startsAt.toLocaleString('ru-RU')} · ${substitution.originalTrainer?.fullName ?? 'Тренер не назначен'} → ${substitution.substituteTrainer.fullName} · ${substitution.lesson.roomEntity?.name ?? substitution.lesson.room ?? 'Зал не указан'}.`,
+        dueAt: substitution.lesson.startsAt.toISOString(),
+        entityId: substitution.id,
+        entityType: 'TrainerSubstitution',
+        id: `substitution:${substitution.id}`,
+        severity: 'INFO',
+        title: 'Запланирована замена тренера',
+      });
+
+    await this.appendPayrollItems(items, periods, branchIds, now);
+
+    const todayEnd = new Date(now);
+    todayEnd.setHours(23, 59, 59, 999);
+    return items
+      .filter((item) => !filters.category || item.category === filters.category)
+      .filter((item) => !filters.severity || item.severity === filters.severity)
+      .filter((item) => {
+        if (!filters.relevance || filters.relevance === 'ALL' || !item.dueAt) return true;
+        const dueAt = new Date(item.dueAt);
+        return filters.relevance === 'TODAY' ? dueAt <= todayEnd : dueAt > todayEnd;
+      })
+      .sort(
+        (left, right) =>
+          SEVERITY_ORDER[left.severity] - SEVERITY_ORDER[right.severity] ||
+          (left.dueAt ?? left.occurredAt ?? '9999').localeCompare(
+            right.dueAt ?? right.occurredAt ?? '9999',
+          ) ||
+          left.title.localeCompare(right.title, 'ru'),
+      );
+  }
+
+  async getSummary(token: string): Promise<AttentionSummary> {
+    const items = await this.listItems(token);
+    const categories = [...new Set(items.map(({ category }) => category))].map((category) => ({
+      category,
+      count: items.filter((item) => item.category === category).length,
+    }));
+    return {
+      categories,
+      criticalCount: items.filter(({ severity }) => severity === 'CRITICAL').length,
+      items: items.slice(0, 5),
+      total: items.length,
+    };
+  }
+
+  private async appendPayrollItems(
+    items: AttentionItem[],
+    periods: {
+      branch: { name: string } | null;
+      branchId: string | null;
+      dateFrom: Date;
+      dateTo: Date;
+      id: string;
+      status: string;
+    }[],
+    branchIds: string[] | undefined,
+    now: Date,
+  ): Promise<void> {
+    if (!periods.length) return;
+    const from = new Date(Math.min(...periods.map(({ dateFrom }) => dateFrom.getTime())));
+    const to = new Date(Math.max(...periods.map(({ dateTo }) => dateTo.getTime())));
+    const [lessons, rules] = await Promise.all([
+      this.database.lesson.findMany({
+        select: { branchId: true, coachId: true, groupId: true, id: true, startsAt: true },
+        where: {
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+          attendanceCompletedAt: null,
+          coachId: { not: null },
+          startsAt: { gte: from, lte: to },
+          status: 'COMPLETED',
+        },
+      }),
+      this.database.payrollRule.findMany({
+        where: {
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+          isActive: true,
+          type: { not: 'FIXED_MONTHLY' },
+          validFrom: { lte: to },
+          OR: [{ validTo: null }, { validTo: { gte: from } }],
+        },
+      }),
+    ]);
+    for (const period of periods) {
+      const pending = lessons.filter(
+        (lesson) =>
+          lesson.startsAt >= period.dateFrom &&
+          lesson.startsAt <= period.dateTo &&
+          (!period.branchId || lesson.branchId === period.branchId) &&
+          rules.some(
+            (rule) =>
+              rule.coachId === lesson.coachId &&
+              rule.branchId === lesson.branchId &&
+              (!rule.groupId || rule.groupId === lesson.groupId) &&
+              rule.validFrom <= lesson.startsAt &&
+              (!rule.validTo || rule.validTo >= lesson.startsAt),
+          ),
+      );
+      if (pending.length)
+        items.push({
+          actionLabel: 'Открыть расчёт зарплаты',
+          actionRoute: `/payroll?periodId=${period.id}`,
+          branchId: period.branchId ?? undefined,
+          branchName: period.branch?.name,
+          category: 'PAYROLL',
+          description: `Посещаемость не завершена для ${String(pending.length)} занятий. Период нельзя утвердить.`,
+          dueAt: period.dateTo.toISOString(),
+          entityId: period.id,
+          entityType: 'PayrollPeriod',
+          id: `payroll:attendance:${period.id}`,
+          severity: 'CRITICAL',
+          title: 'Зарплата заблокирована посещаемостью',
+        });
+      else if (period.status === 'CALCULATED')
+        items.push({
+          actionLabel: 'Открыть расчёт зарплаты',
+          actionRoute: `/payroll?periodId=${period.id}`,
+          branchId: period.branchId ?? undefined,
+          branchName: period.branch?.name,
+          category: 'PAYROLL',
+          description: `Расчёт за ${period.dateFrom.toLocaleDateString('ru-RU')} — ${period.dateTo.toLocaleDateString('ru-RU')} ожидает проверки.`,
+          dueAt: period.dateTo.toISOString(),
+          entityId: period.id,
+          entityType: 'PayrollPeriod',
+          id: `payroll:review:${period.id}`,
+          severity: period.dateTo < now ? 'WARNING' : 'INFO',
+          title: 'Расчёт зарплаты ожидает утверждения',
+        });
+    }
+  }
+}

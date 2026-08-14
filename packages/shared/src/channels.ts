@@ -180,6 +180,8 @@ export const IPC_CHANNELS = {
   contactRemove: 'student-contact:remove',
   contactUpdate: 'student-contact:update',
   dashboardStats: 'dashboard:stats',
+  attentionList: 'attention:list',
+  attentionSummary: 'attention:summary',
   groupArchive: 'group:archive',
   groupCreate: 'group:create',
   groupGet: 'group:get',
@@ -1404,6 +1406,54 @@ export interface DashboardStats {
   subscriptionsExpiringSoon: number;
 }
 
+export type AttentionCategory =
+  | 'STUDENTS'
+  | 'SUBSCRIPTIONS'
+  | 'PAYMENTS'
+  | 'ATTENDANCE'
+  | 'PAYROLL'
+  | 'CARDS'
+  | 'SCHEDULE'
+  | 'ROOMS'
+  | 'SUBSTITUTIONS';
+
+export type AttentionSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
+
+export interface AttentionFilters {
+  branchId?: string | undefined;
+  category?: AttentionCategory | undefined;
+  relevance?: 'ALL' | 'TODAY' | 'UPCOMING' | undefined;
+  severity?: AttentionSeverity | undefined;
+}
+
+export interface AttentionItem {
+  actionLabel: string;
+  actionRoute: string;
+  branchId?: string | undefined;
+  branchName?: string | undefined;
+  category: AttentionCategory;
+  description: string;
+  dueAt?: string | undefined;
+  entityId: string;
+  entityType: string;
+  id: string;
+  occurredAt?: string | undefined;
+  severity: AttentionSeverity;
+  title: string;
+}
+
+export interface AttentionCategoryCount {
+  category: AttentionCategory;
+  count: number;
+}
+
+export interface AttentionSummary {
+  categories: AttentionCategoryCount[];
+  criticalCount: number;
+  items: AttentionItem[];
+  total: number;
+}
+
 export interface ActivitySummary {
   id: string;
   title: string;
@@ -1531,6 +1581,10 @@ export interface AravaDesktopApi {
   };
   dashboard: {
     stats: (token: string) => Promise<DashboardStats>;
+  };
+  attention: {
+    list: (token: string, filters: AttentionFilters) => Promise<AttentionItem[]>;
+    summary: (token: string) => Promise<AttentionSummary>;
   };
   groups: {
     addEnrollment: (

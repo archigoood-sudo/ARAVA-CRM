@@ -27,8 +27,7 @@ import { accessibleBranchIds, assertBranchAccess, assertPermission } from './per
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
 import { addDays, subscriptionStatusAt } from './subscription-ledger';
-
-const DAY_MS = 86_400_000;
+import { DAY_MS, isExpiringSoon, isLowLessonBalance } from './attention-rules';
 
 const subscriptionInclude = {
   branch: { select: { name: true } },
@@ -133,18 +132,14 @@ function subscriptionSummary(
     currency: subscription.tariff.currency,
     debt: Math.max(0, subscription.salePrice - paid),
     expiresAt: subscription.expiresAt?.toISOString(),
-    expiringSoon: Boolean(
-      subscription.expiresAt &&
-      subscription.expiresAt >= now &&
-      subscription.expiresAt.getTime() - now.getTime() <= 5 * DAY_MS,
-    ),
+    expiringSoon: Boolean(subscription.expiresAt && isExpiringSoon(subscription.expiresAt, now)),
     freezeEndsAt: subscription.freezeEndsAt?.toISOString(),
     freezeStartedAt: subscription.freezeStartedAt?.toISOString(),
     frozenDaysUsed: subscription.frozenDaysUsed,
     id: subscription.id,
     lessonLimit: subscription.lessonLimit ?? undefined,
     lessonsUsed: subscription.lessonsUsed,
-    lowBalance: remainingLessons !== undefined && remainingLessons <= 2,
+    lowBalance: isLowLessonBalance(remainingLessons),
     notes: subscription.notes ?? undefined,
     paidAmount: paid,
     purchasedAt: subscription.purchasedAt.toISOString(),

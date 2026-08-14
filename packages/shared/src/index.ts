@@ -7,6 +7,7 @@ export {
   attendanceEntryInputSchema,
   attendanceStatusSchema,
   analyticsQuerySchema,
+  attentionFiltersSchema,
   calendarExceptionInputSchema,
   calendarRangeQuerySchema,
   barcodeSchema,

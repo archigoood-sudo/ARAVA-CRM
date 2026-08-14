@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   barcodeSchema,
+  attentionFiltersSchema,
   cardAssignInputSchema,
   cashTransferInputSchema,
   expenseInputSchema,
@@ -47,6 +48,19 @@ describe('Sprint 4.2A student note validation', () => {
     });
     expect(studentNoteInputSchema.safeParse({ text: ' ' }).success).toBe(false);
     expect(studentNoteInputSchema.safeParse({ text: 'а'.repeat(4001) }).success).toBe(false);
+  });
+});
+
+describe('Sprint 4.2B attention filters', () => {
+  it('accepts supported filters and rejects unknown categories', () => {
+    expect(
+      attentionFiltersSchema.parse({
+        category: 'PAYMENTS',
+        relevance: 'TODAY',
+        severity: 'WARNING',
+      }),
+    ).toEqual({ category: 'PAYMENTS', relevance: 'TODAY', severity: 'WARNING' });
+    expect(attentionFiltersSchema.safeParse({ category: 'LEADS' }).success).toBe(false);
   });
 });
 

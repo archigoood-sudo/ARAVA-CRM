@@ -91,6 +91,10 @@ const desktopApi: AravaDesktopApi = {
     update: (token, id, input) => invoke(IPC_CHANNELS.contactUpdate, token, id, input),
   },
   dashboard: { stats: (token) => invoke(IPC_CHANNELS.dashboardStats, token) },
+  attention: {
+    list: (token, filters) => invoke(IPC_CHANNELS.attentionList, token, filters),
+    summary: (token) => invoke(IPC_CHANNELS.attentionSummary, token),
+  },
   groups: {
     addEnrollment: (token, groupId, input) =>
       invoke(IPC_CHANNELS.enrollmentAdd, token, groupId, input),

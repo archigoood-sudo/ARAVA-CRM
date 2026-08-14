@@ -85,8 +85,11 @@ export function StudentProfilePage() {
   const [noteText, setNoteText] = useState('');
   const [groupDialog, setGroupDialog] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState('');
-  const [financeAction, setFinanceAction] = useState<'payment' | 'subscription'>();
-  const [cardAction, setCardAction] = useState(false);
+  const [financeAction, setFinanceAction] = useState<'payment' | 'subscription' | undefined>(() => {
+    const action = searchParameters.get('action');
+    return action === 'payment' || action === 'subscription' ? action : undefined;
+  });
+  const [cardAction, setCardAction] = useState(searchParameters.get('action') === 'card');
   const [error, setError] = useState<string>();
   const student = useQuery({
     enabled: Boolean(studentId),
@@ -149,6 +152,7 @@ export function StudentProfilePage() {
       queryClient.invalidateQueries({ queryKey: ['student-profile'] }),
       queryClient.invalidateQueries({ queryKey: queryKeys.studentFinance(studentId) }),
       queryClient.invalidateQueries({ queryKey: ['cards', 'student-current', studentId] }),
+      queryClient.invalidateQueries({ queryKey: ['attention'] }),
     ]);
   };
   const saveStudent = async (input: StudentInput) => {

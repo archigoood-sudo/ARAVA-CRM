@@ -1,5 +1,6 @@
 import {
   BadgeInfo,
+  BellRing,
   Building2,
   CalendarDays,
   ChevronRight,
@@ -20,18 +21,38 @@ import {
   UsersRound,
 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 
 import { cn } from '@arava/ui';
 import { t } from '@arava/shared';
 
 import { useAuthStore } from '../stores/auth-store';
+import { getDesktopApi } from '../lib/desktop-api';
+import { queryKeys } from '../lib/query-keys';
+import { getSessionToken } from '../stores/auth-store';
 import { BrandMark } from './brand-mark';
 
 export function Sidebar() {
   const user = useAuthStore((state) => state.user);
   const trainer = user?.role === 'COACH';
+  const attention = useQuery({
+    enabled: Boolean(user && !trainer),
+    queryFn: () => getDesktopApi().attention.summary(getSessionToken()),
+    queryKey: queryKeys.attentionSummary(user?.id),
+    refetchInterval: 60_000,
+  });
   const navigation = [
     { icon: LayoutDashboard, label: t('nav.dashboard'), to: '/dashboard' },
+    ...(!trainer
+      ? [
+          {
+            badge: attention.data?.total,
+            icon: BellRing,
+            label: 'Требует внимания',
+            to: '/attention',
+          },
+        ]
+      : []),
     { icon: UsersRound, label: trainer ? t('nav.myStudents') : t('nav.students'), to: '/students' },
     { icon: Shapes, label: trainer ? t('nav.myGroups') : t('nav.groups'), to: '/groups' },
     {
@@ -80,7 +101,7 @@ export function Sidebar() {
         <p className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-neutral-600">
           {t('nav.workspace')}
         </p>
-        {navigation.map(({ icon: Icon, label, to }) => (
+        {navigation.map(({ badge, icon: Icon, label, to }) => (
           <NavLink
             className={({ isActive }) =>
               cn(
@@ -95,7 +116,13 @@ export function Sidebar() {
               <>
                 <Icon className={cn('size-[18px]', isActive && 'text-accent')} />
                 <span>{label}</span>
-                {isActive ? <span className="ml-auto size-1.5 rounded-full bg-accent" /> : null}
+                {badge ? (
+                  <span className="ml-auto min-w-6 rounded-full bg-accent px-1.5 py-0.5 text-center text-[10px] font-bold text-neutral-950">
+                    {badge > 99 ? '99+' : badge}
+                  </span>
+                ) : isActive ? (
+                  <span className="ml-auto size-1.5 rounded-full bg-accent" />
+                ) : null}
               </>
             )}
           </NavLink>

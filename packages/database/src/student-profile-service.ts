@@ -12,13 +12,12 @@ import { assertBranchAccess, assertPermission } from './permissions';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
 import { FinanceService } from './finance-service';
+import { ATTENTION_RULES, isExpiringSoon, isLowLessonBalance } from './attention-rules';
 
 const ACTIVE_ENROLLMENTS = ['ACTIVE', 'TRIAL', 'FROZEN'] as const;
 const UPCOMING_LIMIT = 5;
 const RECENT_LIMIT = 10;
 const ATTENDANCE_PERIOD_DAYS = 90;
-const EXPIRING_DAYS = 5;
-const LOW_BALANCE = 2;
 const WEEKDAYS = ['', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
 function noteSummary(note: {
@@ -224,22 +223,17 @@ export class StudentProfileService {
         warnings.push({ code: 'DEBT', message: 'Есть задолженность по оплате.', tone: 'danger' });
       if (
         currentSubscription?.remainingLessons !== undefined &&
-        currentSubscription.remainingLessons <= LOW_BALANCE
+        isLowLessonBalance(currentSubscription.remainingLessons)
       )
         warnings.push({
           code: 'LOW_BALANCE',
           message: 'В абонементе осталось не больше двух занятий.',
           tone: 'warning',
         });
-      if (
-        currentSubscription?.expiresAt &&
-        new Date(currentSubscription.expiresAt).getTime() - Date.now() <=
-          EXPIRING_DAYS * 86_400_000 &&
-        new Date(currentSubscription.expiresAt).getTime() >= Date.now()
-      )
+      if (currentSubscription?.expiresAt && isExpiringSoon(new Date(currentSubscription.expiresAt)))
         warnings.push({
           code: 'EXPIRING',
-          message: 'Абонемент заканчивается в ближайшие пять дней.',
+          message: `Абонемент заканчивается в ближайшие ${String(ATTENTION_RULES.expirationDays)} дней.`,
           tone: 'warning',
         });
       if (card?.status === 'BLOCKED' || card?.status === 'LOST')

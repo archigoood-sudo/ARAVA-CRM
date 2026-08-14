@@ -1,6 +1,7 @@
 import { formatDate, t, type StudentListQuery, type StudentStatus } from '@arava/shared';
 import {
   Avatar,
+  AttentionCard,
   Badge,
   Button,
   Card,
@@ -15,6 +16,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowRight,
+  BellRing,
   Building2,
   CalendarDays,
   CreditCard,
@@ -61,6 +63,11 @@ export function DashboardPage() {
   const stats = useQuery({
     queryFn: () => getDesktopApi().dashboard.stats(getSessionToken()),
     queryKey: queryKeys.dashboard,
+  });
+  const attention = useQuery({
+    enabled: user?.role === 'OWNER' || user?.role === 'ADMIN',
+    queryFn: () => getDesktopApi().attention.summary(getSessionToken()),
+    queryKey: queryKeys.attentionSummary(user?.id),
   });
   const recentStudents = useQuery({
     queryFn: () => getDesktopApi().students.list(getSessionToken(), recentStudentsQuery),
@@ -173,6 +180,74 @@ export function DashboardPage() {
         </section>
       )}
 
+      {canAccessFinance && attention.data?.total ? (
+        <Card className="mt-5 overflow-hidden">
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <div>
+              <div className="flex items-center gap-2">
+                <CardTitle>Требует внимания</CardTitle>
+                <Badge className="bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+                  {attention.data.total}
+                </Badge>
+                {attention.data.criticalCount ? (
+                  <Badge className="bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300">
+                    Критично: {attention.data.criticalCount}
+                  </Badge>
+                ) : null}
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Главные операционные задачи на сегодня.
+              </p>
+            </div>
+            <Button onClick={() => navigate('/attention')} size="small" variant="ghost">
+              Показать всё <ArrowRight className="size-4" />
+            </Button>
+          </CardHeader>
+          <CardContent className="px-5 pb-5">
+            <div className="mb-4 flex flex-wrap gap-2">
+              {attention.data.categories.map(({ category, count }) => (
+                <button
+                  className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:border-neutral-400 hover:bg-surface"
+                  key={category}
+                  onClick={() => navigate(`/attention?category=${category}`)}
+                  type="button"
+                >
+                  {attentionCategoryLabel(category)} · {count}
+                </button>
+              ))}
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {attention.data.items.map((item) => (
+                <AttentionCard
+                  action={
+                    <Button
+                      aria-label={item.actionLabel}
+                      onClick={() => navigate(item.actionRoute)}
+                      size="small"
+                      variant="ghost"
+                    >
+                      <ArrowRight className="size-4" />
+                    </Button>
+                  }
+                  description={item.description}
+                  icon={<BellRing className="size-4" />}
+                  key={item.id}
+                  meta={item.branchName}
+                  title={item.title}
+                  tone={
+                    item.severity === 'CRITICAL'
+                      ? 'critical'
+                      : item.severity === 'INFO'
+                        ? 'info'
+                        : 'warning'
+                  }
+                />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <section className="mt-5 grid grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)] gap-5">
         <Card className="overflow-hidden">
           <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -275,6 +350,22 @@ export function DashboardPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+function attentionCategoryLabel(category: string): string {
+  return (
+    {
+      ATTENDANCE: 'Посещаемость',
+      CARDS: 'Карты',
+      PAYMENTS: 'Оплаты',
+      PAYROLL: 'Зарплата',
+      ROOMS: 'Залы',
+      SCHEDULE: 'Расписание',
+      STUDENTS: 'Ученики',
+      SUBSCRIPTIONS: 'Абонементы',
+      SUBSTITUTIONS: 'Замены',
+    }[category] ?? category
   );
 }
 

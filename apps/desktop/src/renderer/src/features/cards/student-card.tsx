@@ -58,6 +58,7 @@ export function StudentCard({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['cards'] }),
       queryClient.invalidateQueries({ queryKey: ['student-profile'] }),
+      queryClient.invalidateQueries({ queryKey: ['attention'] }),
     ]);
   };
   const save = useMutation({

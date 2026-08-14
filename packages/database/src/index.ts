@@ -112,6 +112,8 @@ export { CalendarService } from './calendar-service';
 export { CardService } from './card-service';
 export { GlobalSearchService } from './global-search-service';
 export { StudentProfileService } from './student-profile-service';
+export { AttentionService } from './attention-service';
+export { ATTENTION_RULES, DAY_MS, isExpiringSoon, isLowLessonBalance } from './attention-rules';
 export {
   addDays,
   applyAttendanceWriteOff,

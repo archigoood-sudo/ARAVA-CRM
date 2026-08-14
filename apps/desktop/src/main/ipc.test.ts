@@ -30,6 +30,8 @@ import {
   type CardScanResolution,
   type GlobalSearchResult,
   type StudentProfileOverview,
+  type AttentionItem,
+  type AttentionSummary,
 } from '@arava/shared';
 
 vi.mock('electron', () => ({
@@ -421,6 +423,56 @@ describe('Electron IPC boundary', () => {
       notes: [expect.objectContaining({ text: 'Заметка через IPC' })],
       student: { id: student.id },
     });
+  });
+
+  it('validates attention filters and denies administrative alerts to trainers', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!AttentionIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Внимание IPC' });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Внимательная',
+      status: 'ACTIVE',
+    });
+    const coach = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'coach-attention-ipc@arava.local',
+      fullName: 'Тренер уведомлений',
+      password: 'Coach!AttentionIpc2026',
+      role: 'COACH',
+    });
+    const coachSession = await service.login({
+      email: coach.email,
+      password: 'Coach!AttentionIpc2026',
+    });
+    await service.changePassword(coachSession.token, {
+      currentPassword: 'Coach!AttentionIpc2026',
+      newPassword: 'Coach!AttentionIpcChanged2026',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() =>
+      handlers[IPC_CHANNELS.attentionList]?.(owner.token, { category: 'LEADS' }),
+    ).toThrow();
+    const items = (await handlers[IPC_CHANNELS.attentionList]?.(owner.token, {
+      category: 'STUDENTS',
+    })) as AttentionItem[];
+    expect(items).toEqual([
+      expect.objectContaining({ entityId: student.id, id: `student:no-group:${student.id}` }),
+    ]);
+    const summary = (await handlers[IPC_CHANNELS.attentionSummary]?.(
+      owner.token,
+    )) as AttentionSummary;
+    expect(summary.total).toBeGreaterThan(0);
+    await expect(handlers[IPC_CHANNELS.attentionList]?.(coachSession.token, {})).rejects.toThrow(
+      'Центр внимания доступен только руководителям.',
+    );
   });
 
   it('validates card IPC and keeps card permissions in the service layer', async () => {

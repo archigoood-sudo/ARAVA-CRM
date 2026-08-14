@@ -1,6 +1,7 @@
 export { Badge, type BadgeProps } from './badge';
 export { BalanceIndicator, type BalanceIndicatorProps } from './balance-indicator';
 export { Avatar, type AvatarProps } from './avatar';
+export { AttentionCard } from './attention-card';
 export { Button, type ButtonProps } from './button';
 export { Card, CardContent, CardDescription, CardHeader, CardTitle } from './card';
 export { Checkbox, type CheckboxProps } from './checkbox';
