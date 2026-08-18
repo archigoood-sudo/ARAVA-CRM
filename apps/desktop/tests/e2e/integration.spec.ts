@@ -64,10 +64,14 @@ test('OWNER подключает сайт, выполняет initial/offline sy
 
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const userDataArgument = `--user-data-dir=${testInfo.outputPath('integration-user-data')}`;
+  const launchArguments = [
+    userDataArgument,
+    ...(process.platform === 'linux' ? ['--password-store=basic'] : []),
+  ];
   const application = executablePath
-    ? await electron.launch({ args: [userDataArgument], executablePath })
+    ? await electron.launch({ args: launchArguments, executablePath })
     : await electron.launch({
-        args: ['.', userDataArgument],
+        args: ['.', ...launchArguments],
         cwd: resolve(import.meta.dirname, '../..'),
       });
 
