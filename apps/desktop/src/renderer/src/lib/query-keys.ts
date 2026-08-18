@@ -32,4 +32,6 @@ export const queryKeys = {
   tariffs: (query: TariffListQuery) => ['tariffs', 'list', query] as const,
   staffOptions: ['users', 'staff-options'] as const,
   users: ['users'] as const,
+  trainerProfile: (id: string, month: string, accessKey: string) =>
+    ['trainers', 'profile', id, month, accessKey] as const,
 };

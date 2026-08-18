@@ -137,6 +137,10 @@ describe('Sprint 4.1D global search', () => {
     expect(
       (await search.search(ownerToken, '0000012345')).find(({ type }) => type === 'CARD'),
     ).toMatchObject({ title: '0000012345', type: 'CARD' });
+    const trainerResult = (await search.search(ownerToken, 'Поплавский')).find(
+      ({ type }) => type === 'TRAINER',
+    );
+    expect(trainerResult?.route).toMatch(/^\/trainers\//u);
   });
 
   it('filters ADMIN and COACH results in the service layer', async () => {

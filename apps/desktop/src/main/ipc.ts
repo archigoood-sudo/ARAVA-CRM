@@ -7,6 +7,7 @@ import {
   ManagementService,
   StudioService,
   StudentProfileService,
+  TrainerProfileService,
   AttentionService,
   BackupService,
   accessibleBranchIds,
@@ -135,6 +136,7 @@ export function createIpcHandlers(
   const cards = new CardService(database, service);
   const search = new GlobalSearchService(database, service);
   const studentProfiles = new StudentProfileService(database, service);
+  const trainerProfiles = new TrainerProfileService(database, service);
   const attention = new AttentionService(database, service);
   const backups =
     backupDependencies.backup ??
@@ -773,6 +775,15 @@ export function createIpcHandlers(
       studentProfiles.getOverview(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.trainerProfileGet]: (unsafeToken, unsafeId, unsafeMonth) =>
+      trainerProfiles.getOverview(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        z
+          .string()
+          .regex(/^\d{4}-\d{2}$/u, 'Укажите месяц в формате ГГГГ-ММ.')
+          .parse(unsafeMonth),
       ),
     [IPC_CHANNELS.studentNoteCreate]: (unsafeToken, unsafeStudentId, unsafeInput) =>
       studentProfiles.createNote(

@@ -279,6 +279,7 @@ export const IPC_CHANNELS = {
   studentCreate: 'student:create',
   studentGet: 'student:get',
   studentProfileGet: 'student-profile:get',
+  trainerProfileGet: 'trainer-profile:get',
   studentNoteCreate: 'student-note:create',
   studentNoteUpdate: 'student-note:update',
   studentNoteArchive: 'student-note:archive',
@@ -1091,6 +1092,127 @@ export interface StaffOption {
   role: UserRole;
 }
 
+export interface TrainerProfileLesson {
+  actualTrainerName?: string | undefined;
+  branchId: string;
+  branchName: string;
+  endsAt: string;
+  groupId: string;
+  groupName: string;
+  id: string;
+  isSubstitution: boolean;
+  roomName?: string | undefined;
+  scheduledTrainerName?: string | undefined;
+  startsAt: string;
+  status: LessonStatus;
+}
+
+export interface TrainerProfileGroup {
+  attendancePercentage: number;
+  branchId: string;
+  branchName: string;
+  direction: string;
+  id: string;
+  name: string;
+  nextLesson?: TrainerProfileLesson | undefined;
+  schedule: string[];
+  status: GroupStatus;
+  studentCount: number;
+}
+
+export interface TrainerProfileSchedule {
+  branchId: string;
+  branchName: string;
+  endTime: string;
+  groupId: string;
+  groupName: string;
+  id: string;
+  roomName?: string | undefined;
+  startTime: string;
+  weekday: number;
+}
+
+export interface TrainerProfileSubstitution {
+  branchName: string;
+  createdAt: string;
+  groupName: string;
+  id: string;
+  lessonId: string;
+  originalTrainerName?: string | undefined;
+  reason?: string | undefined;
+  startsAt: string;
+  substituteTrainerName: string;
+}
+
+export interface TrainerProfilePayrollDetail {
+  attendeeCount?: number | undefined;
+  branchName: string;
+  calculatedAmount: number;
+  finalAmount: number;
+  groupName?: string | undefined;
+  id: string;
+  lessonId?: string | undefined;
+  lessonStartsAt?: string | undefined;
+  periodStatus: PayrollPeriodStatus;
+  rate: number;
+  type: PayrollType;
+}
+
+export interface TrainerProfileOverview {
+  activity: {
+    cancelled: number;
+    conducted: number;
+    scheduled: number;
+    substitutionsConducted: number;
+  };
+  attendance: {
+    averagePresent: number;
+    completedLessons: number;
+    percentage: number;
+    presentTotal: number;
+  };
+  attention: {
+    actionRoute: string;
+    code: string;
+    message: string;
+    tone: 'danger' | 'warning' | 'info';
+  }[];
+  groups: TrainerProfileGroup[];
+  historicalGroups: TrainerProfileGroup[];
+  payroll: {
+    accruedAmount: number;
+    approvedAmount: number;
+    details: TrainerProfilePayrollDetail[];
+    lessonsIncluded: number;
+    paidAmount: number;
+    pendingAttendanceCount: number;
+    presentCount: number;
+    statuses: PayrollPeriodStatus[];
+  };
+  period: { dateFrom: string; dateTo: string; month: string };
+  permissions: {
+    canManageTrainer: boolean;
+    canResetPassword: boolean;
+    ownProfile: boolean;
+  };
+  schedule: TrainerProfileSchedule[];
+  substitutions: {
+    incoming: TrainerProfileSubstitution[];
+    outgoing: TrainerProfileSubstitution[];
+  };
+  today: TrainerProfileLesson[];
+  trainer: {
+    branches: { id: string; name: string }[];
+    directions: string[];
+    email: string;
+    fullName: string;
+    id: string;
+    isActive: boolean;
+    phone?: string | undefined;
+  };
+  upcomingLessons: TrainerProfileLesson[];
+}
+
 export interface GroupInput {
   ageFrom?: number | undefined;
   ageTo?: number | undefined;
@@ -1642,6 +1764,9 @@ export interface AravaDesktopApi {
   };
   globalSearch: {
     query: (token: string, query: string) => Promise<GlobalSearchResult[]>;
+  };
+  trainers: {
+    getProfile: (token: string, id: string, month: string) => Promise<TrainerProfileOverview>;
   };
   branches: {
     archive: (token: string, id: string) => Promise<BranchSummary>;

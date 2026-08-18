@@ -26,6 +26,7 @@ import { StudentProfilePage } from './features/students/student-profile-page';
 import { StudentsPage } from './features/students/students-page';
 import { TariffsPage } from './features/tariffs/tariffs-page';
 import { UsersPage } from './features/users/users-page';
+import { TrainerProfilePage } from './features/trainers/trainer-profile-page';
 import { AppLayout } from './layouts/app-layout';
 import {
   AuthenticatedRoute,
@@ -74,6 +75,7 @@ export const router = createHashRouter([
           { element: <AnalyticsPage />, path: '/analytics' },
           { element: <ReportsPage />, path: '/reports' },
           { element: <UsersPage />, path: '/users' },
+          { element: <TrainerProfilePage />, path: '/trainers/:trainerId' },
           { element: <SettingsPage />, path: '/settings' },
           { element: <AboutPage />, path: '/about' },
         ],

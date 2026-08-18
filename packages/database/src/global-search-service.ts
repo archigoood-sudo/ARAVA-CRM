@@ -181,7 +181,7 @@ export class GlobalSearchService {
       })),
       ...trainers.map((trainer): GlobalSearchResult => ({
         id: trainer.id,
-        route: `/users?search=${encodeURIComponent(trainer.fullName)}`,
+        route: `/trainers/${trainer.id}`,
         subtitle: [
           trainer.email,
           trainer.branchAssignments.map(({ branch }) => branch.name).join(', '),

@@ -27,9 +27,18 @@ import {
   TableRow,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { KeyRound, LogOut, Pencil, Plus, Search, ShieldCheck, Users } from 'lucide-react';
+import {
+  ExternalLink,
+  KeyRound,
+  LogOut,
+  Pencil,
+  Plus,
+  Search,
+  ShieldCheck,
+  Users,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
@@ -253,6 +262,15 @@ export function UsersPage() {
                       ) : null}
                     </TableCell>
                     <TableCell className="text-right">
+                      {user.role === 'COACH' ? (
+                        <Link
+                          aria-label={`Открыть профиль тренера ${user.fullName}`}
+                          className="inline-flex size-10 items-center justify-center rounded-xl transition hover:bg-muted"
+                          to={`/trainers/${user.id}`}
+                        >
+                          <ExternalLink className="size-4" />
+                        </Link>
+                      ) : null}
                       <Button
                         aria-label={t('user.action.editLabel', { name: user.fullName })}
                         disabled={protectedOwner}

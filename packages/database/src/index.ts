@@ -112,6 +112,7 @@ export { CalendarService } from './calendar-service';
 export { CardService } from './card-service';
 export { GlobalSearchService } from './global-search-service';
 export { StudentProfileService } from './student-profile-service';
+export { TrainerProfileService } from './trainer-profile-service';
 export { CustomerDisplayService, CUSTOMER_DISPLAY_DEFAULTS } from './customer-display-service';
 export { AttentionService } from './attention-service';
 export { BackupService, type BackupServiceOptions } from './backup-service';

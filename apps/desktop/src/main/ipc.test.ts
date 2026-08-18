@@ -31,6 +31,7 @@ import {
   type CardScanResolution,
   type GlobalSearchResult,
   type StudentProfileOverview,
+  type TrainerProfileOverview,
   type AttentionItem,
   type AttentionSummary,
   type BackupEntry,
@@ -197,6 +198,55 @@ describe('Electron IPC boundary', () => {
     expect(await handlers[IPC_CHANNELS.groupList]?.(owner.token, { search: 'Грац' })).toMatchObject(
       [{ id: group.id }],
     );
+  });
+
+  it('validates trainer profile IPC and returns the permission-aware projection', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!TrainerIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Профильный IPC' });
+    const trainer = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'trainer-profile-ipc@arava.local',
+      fullName: 'Тренер IPC Профиль',
+      password: 'Trainer!Ipc2026',
+      role: 'COACH',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() =>
+      handlers[IPC_CHANNELS.trainerProfileGet]?.(owner.token, trainer.id, 'август'),
+    ).toThrow();
+    const month = new Date().toISOString().slice(0, 7);
+    const profile = (await handlers[IPC_CHANNELS.trainerProfileGet]?.(
+      owner.token,
+      trainer.id,
+      month,
+    )) as TrainerProfileOverview;
+    expect(profile.trainer).toMatchObject({ id: trainer.id, fullName: 'Тренер IPC Профиль' });
+    expect(profile.permissions.canManageTrainer).toBe(true);
+    const otherTrainer = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'other-trainer-profile-ipc@arava.local',
+      fullName: 'Другой тренер IPC',
+      password: 'OtherTrainer!Ipc2026',
+      role: 'COACH',
+    });
+    const trainerSession = await service.login({
+      email: trainer.email,
+      password: 'Trainer!Ipc2026',
+    });
+    await service.changePassword(trainerSession.token, {
+      currentPassword: 'Trainer!Ipc2026',
+      newPassword: 'Trainer!IpcChanged2026',
+    });
+    await expect(
+      handlers[IPC_CHANNELS.trainerProfileGet]?.(trainerSession.token, otherTrainer.id, month),
+    ).rejects.toMatchObject({ code: 'AUTHORIZATION' });
   });
 
   it('validates Sprint 3 payloads and exposes finance only through authorized services', async () => {

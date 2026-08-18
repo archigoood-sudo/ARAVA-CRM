@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Tags,
   UsersRound,
+  UserRound,
 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -43,6 +44,9 @@ export function Sidebar() {
   });
   const navigation = [
     { icon: LayoutDashboard, label: t('nav.dashboard'), to: '/dashboard' },
+    ...(user?.role === 'COACH'
+      ? [{ icon: UserRound, label: 'Мой профиль', to: `/trainers/${user.id}` }]
+      : []),
     ...(!trainer
       ? [
           {

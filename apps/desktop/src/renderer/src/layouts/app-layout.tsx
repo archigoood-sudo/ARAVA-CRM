@@ -25,7 +25,9 @@ export function AppLayout() {
   const user = useAuthStore((state) => state.user);
   const page = location.pathname.startsWith('/students/')
     ? { eyebrow: t('page.profile.eyebrow'), title: t('page.profile.title') }
-    : (pageTitles[location.pathname] ?? pageTitles['/dashboard']);
+    : location.pathname.startsWith('/trainers/')
+      ? { eyebrow: 'Команда ARAVA', title: 'Профиль тренера' }
+      : (pageTitles[location.pathname] ?? pageTitles['/dashboard']);
 
   const handleLogout = async () => {
     await logout();

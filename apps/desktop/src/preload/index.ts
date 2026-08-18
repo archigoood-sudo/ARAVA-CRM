@@ -39,6 +39,9 @@ const desktopApi: AravaDesktopApi = {
   globalSearch: {
     query: (token, query) => invoke(IPC_CHANNELS.globalSearch, token, query),
   },
+  trainers: {
+    getProfile: (token, id, month) => invoke(IPC_CHANNELS.trainerProfileGet, token, id, month),
+  },
   branches: {
     archive: (token, id) => invoke(IPC_CHANNELS.branchArchive, token, id),
     create: (token, input) => invoke(IPC_CHANNELS.branchCreate, token, input),
