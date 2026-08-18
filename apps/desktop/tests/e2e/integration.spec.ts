@@ -157,9 +157,11 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByRole('button', { name: 'Журнал синхронизации' }).click();
     await expect(page.getByRole('cell', { name: 'Синхронизировано' }).first()).toBeVisible();
   } finally {
-    await application.evaluate(({ app }) => {
-      setImmediate(() => app.quit());
-    });
+    if (process.platform === 'darwin') {
+      await application.evaluate(({ app }) => {
+        setImmediate(() => app.quit());
+      });
+    }
     await application.close();
     await stopServer(server);
   }
