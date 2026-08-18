@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { registerIpcHandlers, removeIpcHandlers } from './ipc';
 import { CustomerDisplayManager } from './customer-display-manager';
 import { createMainWindow, getMainWindow } from './window';
-import { ElectronIntegrationCredentialStore, IntegrationManager } from './integration-manager';
+import { createIntegrationCredentialStore, IntegrationManager } from './integration-manager';
 
 const config = createApplicationConfig({
   environment: app.isPackaged ? 'production' : 'development',
@@ -52,7 +52,7 @@ async function bootstrap(): Promise<void> {
     new IntegrationService(
       database,
       service,
-      new ElectronIntegrationCredentialStore(app.getPath('userData')),
+      createIntegrationCredentialStore(app.getPath('userData')),
     ),
   );
   await integration.initialize();

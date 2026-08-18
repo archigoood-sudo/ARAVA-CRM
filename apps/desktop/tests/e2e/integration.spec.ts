@@ -46,7 +46,7 @@ async function closeApplication(application: ElectronApplication): Promise<void>
   } catch {
     // The transport may close as soon as Electron accepts the quit request.
   }
-  if (!(await exited)) await application.close();
+  if (!(await exited)) childProcess.kill();
 }
 
 test('OWNER подключает сайт, выполняет initial/offline sync и видит журнал', async ({
@@ -90,15 +90,17 @@ test('OWNER подключает сайт, выполняет initial/offline sy
 
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const userDataArgument = `--user-data-dir=${testInfo.outputPath('integration-user-data')}`;
-  const launchArguments = [
-    userDataArgument,
-    ...(process.platform === 'linux' ? ['--password-store=basic'] : []),
-  ];
+  const launchArguments = [userDataArgument];
+  const launchEnvironment = {
+    ...process.env,
+    ARAVA_E2E_INTEGRATION_CREDENTIALS: 'memory',
+  };
   const application = executablePath
-    ? await electron.launch({ args: launchArguments, executablePath })
+    ? await electron.launch({ args: launchArguments, env: launchEnvironment, executablePath })
     : await electron.launch({
         args: ['.', ...launchArguments],
         cwd: resolve(import.meta.dirname, '../..'),
+        env: launchEnvironment,
       });
 
   try {

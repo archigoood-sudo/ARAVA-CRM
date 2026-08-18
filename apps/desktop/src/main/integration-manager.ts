@@ -10,6 +10,29 @@ interface StoredCredential {
   encryptedToken?: string;
 }
 
+class EphemeralIntegrationCredentialStore implements IntegrationCredentialStore {
+  private readonly deviceId = randomUUID();
+  private token: string | undefined;
+
+  clearToken(): Promise<void> {
+    this.token = undefined;
+    return Promise.resolve();
+  }
+
+  getDeviceId(): Promise<string> {
+    return Promise.resolve(this.deviceId);
+  }
+
+  getToken(): Promise<string | undefined> {
+    return Promise.resolve(this.token);
+  }
+
+  saveToken(token: string): Promise<void> {
+    this.token = token;
+    return Promise.resolve();
+  }
+}
+
 export class ElectronIntegrationCredentialStore implements IntegrationCredentialStore {
   private readonly filePath: string;
 
@@ -78,6 +101,12 @@ export class ElectronIntegrationCredentialStore implements IntegrationCredential
     const stored = await this.read();
     await this.write({ deviceId: stored.deviceId });
   }
+}
+
+export function createIntegrationCredentialStore(userDataPath: string): IntegrationCredentialStore {
+  return process.env.ARAVA_E2E_INTEGRATION_CREDENTIALS === 'memory'
+    ? new EphemeralIntegrationCredentialStore()
+    : new ElectronIntegrationCredentialStore(userDataPath);
 }
 
 export class IntegrationManager {
