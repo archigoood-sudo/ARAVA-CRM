@@ -16,7 +16,7 @@ export function IntegrationStatusIndicator() {
     refetchInterval: 20_000,
   });
   if (user?.role !== 'OWNER' || !status.data?.enabled) return null;
-  const pending = status.data.pendingCount + status.data.failedCount;
+  const pending = status.data.pendingCount + status.data.failedCount + status.data.conflictCount;
   const healthy = status.data.connectionState === 'CONNECTED' && pending === 0;
   const Icon = healthy
     ? CheckCircle2

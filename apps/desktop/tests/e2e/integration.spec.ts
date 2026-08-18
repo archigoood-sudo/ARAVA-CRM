@@ -131,14 +131,33 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       });
       return;
     }
+    if (request.url?.startsWith('/api/integration/v1/changes')) {
+      respond(response, {
+        apiVersion: 'v1',
+        canonicalCount: 0,
+        changes: [],
+        cursor: 0,
+        hasMore: false,
+      });
+      return;
+    }
+    if (request.url?.endsWith('/devices')) {
+      respond(response, { apiVersion: 'v1', devices: [] });
+      return;
+    }
     const operations = Array.isArray(body.operations) ? body.operations : [];
     receivedOperations += operations.length;
     respond(response, {
       accepted: operations.map((operation) => {
         const value = operation as Record<string, unknown>;
         return {
+          canonicalOperation: value.operation,
+          canonicalPayload: value.payload,
           entityId: value.entityId,
           idempotencyKey: value.idempotencyKey,
+          revision: 1,
+          serverSequence: 1,
+          status: 'ACCEPTED',
           version: value.version,
         };
       }),
@@ -217,6 +236,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       return api.integration.getStatus(persisted.state?.token ?? '');
     });
     expect(finalStatus.pendingCount).toBe(0);
+    expect(finalStatus.failedCount).toBe(0);
 
     await stopServer(server);
     const offlineResult = await page.evaluate(async () => {

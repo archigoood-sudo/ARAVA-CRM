@@ -26,11 +26,14 @@ import { getSessionToken } from '../../stores/auth-store';
 
 const stateLabels: Record<IntegrationConnectionState, string> = {
   AUTH_ERROR: 'Требуется повторное подключение',
+  CONFLICT: 'Требуется согласование изменений',
   CONNECTED: 'Подключено',
   DISABLED: 'Выключено',
   NOT_PAIRED: 'Не подключено',
   OFFLINE: 'Нет соединения',
   PENDING_CHANGES: 'Есть несинхронизированные изменения',
+  RECONCILIATION_REQUIRED: 'Требуется первичное согласование',
+  SYNC_ERROR: 'Ошибка синхронизации',
   VERSION_UNSUPPORTED: 'Требуется обновление',
 };
 const resultLabels: Record<string, string> = {
@@ -42,12 +45,20 @@ const resultLabels: Record<string, string> = {
 };
 const entityLabels: Record<string, string> = {
   BRANCH: 'Филиал',
+  ATTENDANCE: 'Посещаемость',
+  CARD: 'Карта',
   GROUP: 'Группа',
   GROUP_MEMBERSHIP: 'Участник группы',
   LESSON: 'Занятие',
   ROOM: 'Зал',
   SCHEDULE: 'Расписание',
+  STUDENT_CONTACT: 'Контакт ученика',
   STUDENT_IDENTITY: 'Ученик',
+  STUDENT_NOTE: 'Заметка ученика',
+  SUBSCRIPTION: 'Абонемент',
+  SUBSCRIPTION_LEDGER: 'Операция абонемента',
+  SUBSTITUTION: 'Замена тренера',
+  TARIFF: 'Тариф',
   TRAINER: 'Тренер',
 };
 
@@ -178,7 +189,7 @@ export function IntegrationSettings() {
           </Button>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <div className="rounded-2xl bg-muted p-4">
             <p className="text-xs text-muted-foreground">Устройство</p>
             <p className="mt-1 truncate font-mono text-xs">{status.data?.deviceId ?? '—'}</p>
@@ -192,12 +203,52 @@ export function IntegrationSettings() {
             <p className="mt-1 text-xl font-semibold">{status.data?.failedCount ?? 0}</p>
           </div>
           <div className="rounded-2xl bg-muted p-4">
+            <p className="text-xs text-muted-foreground">Конфликты</p>
+            <p className="mt-1 text-xl font-semibold">{status.data?.conflictCount ?? 0}</p>
+          </div>
+          <div className="rounded-2xl bg-muted p-4">
             <p className="text-xs text-muted-foreground">Последняя синхронизация</p>
             <p className="mt-1 text-sm font-semibold">
               {dateTime(status.data?.lastSuccessfulSync)}
             </p>
           </div>
         </div>
+
+        {status.data?.devices.length ? (
+          <div className="overflow-hidden rounded-2xl border border-border">
+            <div className="border-b border-border px-5 py-4">
+              <p className="font-semibold">Подключённые устройства</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Сервер хранит общий порядок изменений и отдельную позицию каждого устройства.
+              </p>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Устройство</TableHead>
+                  <TableHead>Получено</TableHead>
+                  <TableHead>Отправлено</TableHead>
+                  <TableHead>Ожидает</TableHead>
+                  <TableHead>Конфликты</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {status.data.devices.map((device) => (
+                  <TableRow key={device.deviceId}>
+                    <TableCell>
+                      <p className="font-medium">{device.name ?? 'Устройство CRM'}</p>
+                      <p className="font-mono text-xs text-muted-foreground">{device.deviceId}</p>
+                    </TableCell>
+                    <TableCell>{dateTime(device.lastInboundSyncAt)}</TableCell>
+                    <TableCell>{dateTime(device.lastOutboundSyncAt)}</TableCell>
+                    <TableCell>{device.pendingCount}</TableCell>
+                    <TableCell>{device.conflictCount}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : null}
 
         {!status.data?.isPaired ? (
           <div className="rounded-2xl border border-border p-5">
@@ -260,9 +311,16 @@ export function IntegrationSettings() {
               <span>Занятия: {preview.data.lessons}</span>
             </div>
             <p className="mt-3 text-xs text-muted-foreground">
-              Занятия: последние 30 дней и следующие 180 дней. Финансы, пароли, контакты и заметки
-              не отправляются.
+              Занятия: последние 30 дней и следующие 180 дней. Пароли, сессии, аудит, платежи и
+              возвраты не отправляются. Перед объединением двух уже заполненных баз потребуется
+              отдельное согласование.
             </p>
+            {preview.data.requiresReconciliation ? (
+              <p className="mt-3 rounded-xl bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
+                На устройстве уже есть локальные и полученные данные. Проверьте состояние перед
+                первичной синхронизацией.
+              </p>
+            ) : null}
             <Button
               className="mt-4"
               disabled={action.isPending || !status.data?.isPaired}

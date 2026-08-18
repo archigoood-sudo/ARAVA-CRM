@@ -1061,6 +1061,7 @@ model SyncOutbox {
   operation      SyncOperation    @default(UPSERT)
   payloadVersion Int              @default(1)
   payloadJson    String           @default("{}")
+  baseRevision   Int              @default(0)
   idempotencyKey String           @unique
   status         SyncOutboxStatus @default(PENDING)
   attemptCount   Int              @default(0)
@@ -1075,28 +1076,61 @@ model SyncOutbox {
   @@index([entityType, entityId, createdAt])
 }
 
+model SyncEntityState {
+  entityType      String
+  entityId        String
+  revision        Int
+  serverSequence  Int
+  sourceDeviceId  String
+  serverUpdatedAt DateTime
+  updatedAt       DateTime @updatedAt
+
+  @@id([entityType, entityId])
+  @@index([serverSequence])
+}
+
+model SyncConflict {
+  id                   String    @id @default(cuid())
+  serverConflictId     String?   @unique
+  entityType           String
+  entityId             String
+  baseRevision         Int
+  canonicalRevision    Int
+  canonicalOperation   String
+  canonicalPayloadJson String
+  candidateOperation   String
+  candidatePayloadJson String
+  sourceDeviceId       String?
+  status               String    @default("OPEN")
+  createdAt            DateTime  @default(now())
+  resolvedAt           DateTime?
+
+  @@index([status, createdAt])
+  @@index([entityType, entityId, status])
+}
+
 model SyncLog {
-  id             String   @id @default(cuid())
-  outboxId       String?
-  entityType     String?
-  entityId       String?
-  operation      String?
-  result         String
-  attemptCount   Int      @default(0)
-  errorCode      String?
-  message        String?
-  createdAt      DateTime @default(now())
+  id           String   @id @default(cuid())
+  outboxId     String?
+  entityType   String?
+  entityId     String?
+  operation    String?
+  result       String
+  attemptCount Int      @default(0)
+  errorCode    String?
+  message      String?
+  createdAt    DateTime @default(now())
 
   @@index([createdAt])
   @@index([result, createdAt])
 }
 
 model Publication {
-  id               String                  @id @default(cuid())
+  id               String                      @id @default(cuid())
   type             PublicationType
   title            String
   body             String
-  status           PublicationStatus       @default(DRAFT)
+  status           PublicationStatus           @default(DRAFT)
   audienceMode     PublicationAudienceMode
   mediaLocalPath   String?
   mediaFileName    String?
@@ -1107,10 +1141,10 @@ model Publication {
   eventStartsAt    DateTime?
   eventLocation    String?
   createdByUserId  String
-  createdBy        User                    @relation("PublicationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdBy        User                        @relation("PublicationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   targets          PublicationAudienceTarget[]
-  createdAt        DateTime                @default(now())
-  updatedAt        DateTime                @updatedAt
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
   archivedAt       DateTime?
 
   @@index([status, publishAt, createdAt])
@@ -1119,7 +1153,7 @@ model Publication {
 
 model PublicationAudienceTarget {
   publicationId String
-  publication   Publication          @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  publication   Publication           @relation(fields: [publicationId], references: [id], onDelete: Cascade)
   type          PublicationTargetType
   targetId      String
 

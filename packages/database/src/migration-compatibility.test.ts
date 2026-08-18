@@ -304,7 +304,10 @@ describe('Prisma and packaged runtime migration compatibility', () => {
         )`,
       );
       for (const { id } of runtimeMigrations.filter(
-        ({ id }) => id !== '20260818000000_sprint_4_4a' && id !== '20260818020000_sprint_4_4d',
+        ({ id }) =>
+          id !== '20260818000000_sprint_4_4a' &&
+          id !== '20260818020000_sprint_4_4d' &&
+          id !== '20260818030000_sprint_4_5a',
       )) {
         await database.$executeRawUnsafe('INSERT INTO "_AppMigration" ("id") VALUES (?)', id);
       }
@@ -342,6 +345,33 @@ describe('Prisma and packaged runtime migration compatibility', () => {
         where: { id: 'preserved-branch' },
       });
       expect(await database.syncOutbox.count({ where: { entityId: 'preserved-branch' } })).toBe(1);
+      await database.danceGroup.create({
+        data: {
+          branchId: 'preserved-branch',
+          direction: 'Тест',
+          id: 'sync-test-group',
+          name: 'Проверка',
+        },
+      });
+      await database.lesson.create({
+        data: {
+          branchId: 'preserved-branch',
+          endsAt: new Date('2026-08-18T11:00:00.000Z'),
+          groupId: 'sync-test-group',
+          id: 'sync-test-lesson',
+          startsAt: new Date('2026-08-18T10:00:00.000Z'),
+        },
+      });
+      await database.lesson.update({
+        data: { cancellationReason: 'Проверка синхронизации', status: 'CANCELLED' },
+        where: { id: 'sync-test-lesson' },
+      });
+      expect(
+        await database.syncOutbox.findFirstOrThrow({
+          orderBy: { createdAt: 'desc' },
+          where: { entityId: 'sync-test-lesson', entityType: 'LESSON' },
+        }),
+      ).toMatchObject({ operation: 'UPSERT' });
     } finally {
       await closeDatabase(database);
     }

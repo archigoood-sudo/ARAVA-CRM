@@ -2,7 +2,7 @@ const MAX_BARCODE_LENGTH = 128;
 // A packaged renderer can occasionally pause for a frame while React commits a route.
 // Keep the per-character guard tolerant of that pause; the average interval below
 // still prevents ordinary human typing from being classified as a scanner burst.
-const MAX_CHARACTER_GAP_MS = 180;
+const MAX_CHARACTER_GAP_MS = 300;
 const MAX_FAST_SCANNER_INTERVAL_MS = 80;
 // Configured keyboard-wedge scanners can deliberately emit long numeric card codes at
 // 100-120 ms intervals with delivery jitter. Keep that tolerance separate so short

@@ -20,6 +20,7 @@ import {
   type IntegrationCredentialStore,
 } from './integration-service';
 import { ApplicationService } from './services';
+import { StudioService } from './studio-service';
 
 class MemoryCredentials implements IntegrationCredentialStore {
   deviceId = 'e69370b3-70d3-47eb-8d7a-509ba0f27e9d';
@@ -54,9 +55,19 @@ function json(response: ServerResponse, status: number, value: unknown) {
   response.end(JSON.stringify(value));
 }
 
-describe('Sprint 4.4A integration foundation', () => {
+describe('Sprint 4.5A multi-device integration', () => {
   let application: ApplicationService;
   let credentials: MemoryCredentials;
+  let canonical: Map<
+    string,
+    {
+      operation: 'ARCHIVE' | 'UPSERT';
+      payload: Record<string, unknown>;
+      revision: number;
+      sequence: number;
+    }
+  >;
+  let changes: Record<string, unknown>[];
   let database: DatabaseClient;
   let directory: string;
   let integration: IntegrationService;
@@ -82,6 +93,8 @@ describe('Sprint 4.4A integration foundation', () => {
       newPassword: 'Owner!Integration2026',
     });
     credentials = new MemoryCredentials();
+    canonical = new Map();
+    changes = [];
     mode = 'SUCCESS';
     now = new Date('2030-08-18T10:00:00.000Z');
     received = [];
@@ -137,13 +150,84 @@ describe('Sprint 4.4A integration foundation', () => {
         });
         return;
       }
+      if (request.url?.includes('/changes?')) {
+        const after = Number(new URL(request.url, 'http://localhost').searchParams.get('after'));
+        json(response, 200, {
+          apiVersion: 'v1',
+          canonicalCount: canonical.size,
+          changes: changes.filter((change) => Number(change.sequence) > after),
+          cursor: changes.length,
+          hasMore: false,
+        });
+        return;
+      }
+      if (request.url?.endsWith('/devices')) {
+        json(response, 200, { apiVersion: 'v1', devices: [] });
+        return;
+      }
       const operations = Array.isArray(requestBody.operations) ? requestBody.operations : [];
       json(response, 200, {
         accepted: operations.map((operation) => {
           const value = operation as Record<string, unknown>;
+          const key = `${String(value.entityType)}:${String(value.entityId)}`;
+          const previous = canonical.get(key);
+          const payload = value.payload as Record<string, unknown>;
+          const baseRevision = Number(value.baseRevision ?? 0);
+          if (
+            previous &&
+            baseRevision !== previous.revision &&
+            JSON.stringify(payload) !== JSON.stringify(previous.payload)
+          ) {
+            return {
+              canonicalOperation: previous.operation,
+              canonicalPayload: previous.payload,
+              conflictId: `conflict-${String(changes.length + 1)}`,
+              entityId: value.entityId,
+              idempotencyKey: value.idempotencyKey,
+              revision: previous.revision,
+              serverSequence: previous.sequence,
+              status: 'CONFLICT',
+              version: value.version,
+            };
+          }
+          if (previous && JSON.stringify(payload) === JSON.stringify(previous.payload)) {
+            return {
+              canonicalOperation: previous.operation,
+              canonicalPayload: previous.payload,
+              entityId: value.entityId,
+              idempotencyKey: value.idempotencyKey,
+              revision: previous.revision,
+              serverSequence: previous.sequence,
+              status: 'ACCEPTED',
+              version: value.version,
+            };
+          }
+          const revision = (previous?.revision ?? 0) + 1;
+          const sequence = changes.length + 1;
+          canonical.set(key, {
+            operation: value.operation as 'ARCHIVE' | 'UPSERT',
+            payload,
+            revision,
+            sequence,
+          });
+          changes.push({
+            entityId: value.entityId,
+            entityType: value.entityType,
+            operation: value.operation,
+            payload,
+            revision,
+            sequence,
+            serverUpdatedAt: now.toISOString(),
+            sourceDeviceId: request.headers['x-arava-device-id'],
+          });
           return {
+            canonicalOperation: value.operation,
+            canonicalPayload: payload,
             entityId: value.entityId,
             idempotencyKey: value.idempotencyKey,
+            revision,
+            serverSequence: sequence,
+            status: 'ACCEPTED',
             version: value.version,
           };
         }),
@@ -269,6 +353,111 @@ describe('Sprint 4.4A integration foundation', () => {
     expect(await database.syncLog.count({ where: { outboxId: retry.id } })).toBe(2);
   });
 
+  it('synchronizes one entity A to server to B and back without an echo loop', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Устройство А' });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Два устройства',
+      status: 'ACTIVE',
+    });
+    const firstStudio = new StudioService(database, application);
+    const group = await firstStudio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 20,
+      direction: 'Хип-хоп',
+      name: 'Синхронная группа',
+      status: 'ACTIVE',
+    });
+    await integration.processPending();
+
+    const secondDirectory = await mkdtemp(join(tmpdir(), 'arava-integration-device-b-'));
+    const secondDatabase = createDatabaseClient(toSqliteUrl(join(secondDirectory, 'device-b.db')));
+    try {
+      await initializeDatabase(secondDatabase);
+      const secondApplication = new ApplicationService(secondDatabase);
+      const secondStudio = new StudioService(secondDatabase, secondApplication);
+      const secondLogin = await secondApplication.login({
+        email: INITIAL_OWNER_EMAIL,
+        password: INITIAL_OWNER_PASSWORD,
+      });
+      await secondApplication.changePassword(secondLogin.token, {
+        currentPassword: INITIAL_OWNER_PASSWORD,
+        newPassword: 'Owner!DeviceB2026',
+      });
+      const secondCredentials = new MemoryCredentials();
+      secondCredentials.deviceId = '5af6412a-ed81-4a7a-9880-e0fa213f1a9b';
+      const secondIntegration = new IntegrationService(
+        secondDatabase,
+        secondApplication,
+        secondCredentials,
+        new IntegrationApiClient(),
+        () => now,
+      );
+      await secondIntegration.initialize();
+      await secondIntegration.pair(secondLogin.token, {
+        baseUrl: serverUrl,
+        enabled: true,
+        pairingCode: '654321',
+      });
+      await secondIntegration.processPending();
+      expect(await secondDatabase.branch.findUnique({ where: { id: branch.id } })).toMatchObject({
+        name: 'Устройство А',
+      });
+      expect(await secondDatabase.student.findUnique({ where: { id: student.id } })).toMatchObject({
+        firstName: 'Анна',
+      });
+      expect(await secondDatabase.danceGroup.findUnique({ where: { id: group.id } })).toMatchObject(
+        { name: 'Синхронная группа' },
+      );
+      expect(await secondDatabase.syncOutbox.count({ where: { entityId: branch.id } })).toBe(0);
+
+      const membership = await secondStudio.addEnrollment(secondLogin.token, group.id, {
+        joinedAt: '2030-08-18',
+        overrideCapacity: false,
+        status: 'ACTIVE',
+        studentId: student.id,
+      });
+      await secondIntegration.processPending();
+      await integration.processPending();
+      expect(await database.enrollment.findUnique({ where: { id: membership.id } })).toMatchObject({
+        groupId: group.id,
+        studentId: student.id,
+      });
+
+      await application.updateStudent(ownerToken, student.id, {
+        branchId: branch.id,
+        firstName: 'Анна А',
+        lastName: 'Два устройства',
+        status: 'ACTIVE',
+      });
+      await secondApplication.updateStudent(secondLogin.token, student.id, {
+        branchId: branch.id,
+        firstName: 'Анна Б',
+        lastName: 'Два устройства',
+        status: 'ACTIVE',
+      });
+      await integration.processPending();
+      await secondIntegration.processPending();
+      expect(await database.student.findUnique({ where: { id: student.id } })).toMatchObject({
+        firstName: 'Анна А',
+      });
+      expect(await secondDatabase.student.findUnique({ where: { id: student.id } })).toMatchObject({
+        firstName: 'Анна Б',
+      });
+      expect(
+        await secondDatabase.syncConflict.count({
+          where: { entityId: student.id, entityType: 'STUDENT_IDENTITY', status: 'OPEN' },
+        }),
+      ).toBe(1);
+      expect(await database.syncOutbox.count({ where: { entityId: membership.id } })).toBe(0);
+    } finally {
+      await closeDatabase(secondDatabase);
+      await rm(secondDirectory, { force: true, recursive: true });
+    }
+  });
+
   it('retries a chat outbox item with the same client message id and safe CRM user context', async () => {
     await pair();
     const context = {
@@ -343,7 +532,7 @@ describe('Sprint 4.4A integration foundation', () => {
     expect((await integration.systemStatus()).connectionState).toBe('AUTH_ERROR');
   });
 
-  it('prepares bounded initial sync DTOs and excludes credentials, contacts, notes, audit and finance', async () => {
+  it('prepares bounded initial sync DTOs and excludes credentials and security data', async () => {
     const branch = await application.createBranch(ownerToken, { name: 'Главный' });
     const trainer = await application.createUser(ownerToken, {
       branchIds: [branch.id],
@@ -369,9 +558,6 @@ describe('Sprint 4.4A integration foundation', () => {
       'passwordHash',
       'private-trainer@arava.local',
       '+79990000000',
-      'private-student@arava.local',
-      '+79991111111',
-      'Секретная заметка',
       'securityVersion',
       'recoveryCode',
       'payment',

@@ -1774,7 +1774,10 @@ export type IntegrationConnectionState =
   | 'OFFLINE'
   | 'AUTH_ERROR'
   | 'VERSION_UNSUPPORTED'
-  | 'PENDING_CHANGES';
+  | 'PENDING_CHANGES'
+  | 'CONFLICT'
+  | 'RECONCILIATION_REQUIRED'
+  | 'SYNC_ERROR';
 
 export interface IntegrationSettingsInput {
   baseUrl: string;
@@ -1791,11 +1794,28 @@ export interface IntegrationStatus {
   deviceId: string;
   enabled: boolean;
   failedCount: number;
+  conflictCount: number;
   isPaired: boolean;
   lastError?: string;
   lastSuccessfulSync?: string;
+  lastInboundSync?: string;
+  lastOutboundSync?: string;
+  inboundCursor: number;
   pendingCount: number;
   syncInProgress: boolean;
+  devices: IntegrationDeviceSummary[];
+}
+
+export interface IntegrationDeviceSummary {
+  conflictCount: number;
+  deviceId: string;
+  lastInboundCursor: number;
+  lastInboundSyncAt?: string;
+  lastOutboundSyncAt?: string;
+  lastSeenAt?: string;
+  name?: string;
+  pendingCount: number;
+  status: 'ACTIVE' | 'REVOKED';
 }
 
 export interface IntegrationInitialSyncPreview {
@@ -1806,6 +1826,9 @@ export interface IntegrationInitialSyncPreview {
   rooms: number;
   students: number;
   trainers: number;
+  localOperationalEntities: number;
+  remoteEntities: number;
+  requiresReconciliation: boolean;
   windowEndsAt: string;
   windowStartsAt: string;
 }

@@ -74,11 +74,13 @@ async function bootstrap(): Promise<void> {
   await customerDisplay.reopenIfEnabled();
   const mainWindow = createMainWindow();
   mainWindow.on('closed', () => customerDisplay?.closeForMainWindow());
+  mainWindow.on('focus', () => integration?.schedule());
 
   app.on('activate', () => {
     if (!getMainWindow()) {
       const window = createMainWindow();
       window.on('closed', () => customerDisplay?.closeForMainWindow());
+      window.on('focus', () => integration?.schedule());
       void customerDisplay?.reopenIfEnabled();
     }
   });
