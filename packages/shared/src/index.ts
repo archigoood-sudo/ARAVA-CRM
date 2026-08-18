@@ -53,6 +53,7 @@ export {
   payrollPaymentInputSchema,
   payrollPeriodInputSchema,
   payrollRuleInputSchema,
+  publicationInputSchema,
   refundInputSchema,
   reportQuerySchema,
   roomClosureInputSchema,

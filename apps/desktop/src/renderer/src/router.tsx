@@ -14,6 +14,7 @@ import { ExpenseCategoriesPage } from './features/expenses/expense-categories-pa
 import { CashPage } from './features/cash/cash-page';
 import { CardsPage } from './features/cards/cards-page';
 import { ChatsPage } from './features/chats/chats-page';
+import { PublicationsPage } from './features/publications/publications-page';
 import { PayrollPage } from './features/payroll/payroll-page';
 import { AnalyticsPage } from './features/analytics/analytics-page';
 import { ReportsPage } from './features/reports/reports-page';
@@ -68,6 +69,7 @@ export const router = createHashRouter([
           { element: <StudentProfilePage />, path: '/students/:studentId' },
           { element: <CardsPage />, path: '/cards' },
           { element: <ChatsPage />, path: '/chats' },
+          { element: <PublicationsPage />, path: '/publications' },
           { element: <TariffsPage />, path: '/tariffs' },
           { element: <FinancePage />, path: '/finance' },
           { element: <ExpensesPage />, path: '/expenses' },

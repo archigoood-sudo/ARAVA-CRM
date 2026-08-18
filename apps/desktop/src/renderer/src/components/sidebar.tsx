@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Landmark,
   MessageCircle,
+  Newspaper,
   BarChart3,
   CircleDollarSign,
   FileSpreadsheet,
@@ -74,6 +75,7 @@ export function Sidebar() {
       to: '/schedule',
     },
     { badge: chats.data?.totalUnread, icon: MessageCircle, label: 'Чаты', to: '/chats' },
+    ...(!trainer ? [{ icon: Newspaper, label: 'Публикации', to: '/publications' }] : []),
     ...(!trainer ? [{ icon: Tags, label: t('nav.tariffs'), to: '/tariffs' }] : []),
     ...(!trainer ? [{ icon: IdCard, label: 'Карты', to: '/cards' }] : []),
     ...(user?.permissions.canViewPayments

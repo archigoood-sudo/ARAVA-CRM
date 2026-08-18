@@ -798,4 +798,37 @@ describe('Electron IPC boundary', () => {
       'недостаточно прав',
     );
   });
+
+  it('validates publication IPC and queues publication without renderer-controlled scope', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!PublicationIpc2026',
+    });
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'));
+    await expect(
+      handlers[IPC_CHANNELS.publicationCreate]?.(owner.token, {
+        audienceMode: 'ALL_CLIENTS',
+        body: '',
+        targetIds: [],
+        title: '',
+        type: 'NEWS',
+      }),
+    ).rejects.toThrow();
+    const draft = (await handlers[IPC_CHANNELS.publicationCreate]?.(owner.token, {
+      audienceMode: 'ALL_CLIENTS',
+      body: 'Безопасный текст',
+      targetIds: [],
+      title: 'Новость',
+      type: 'NEWS',
+    })) as { id: string; status: string };
+    expect(draft.status).toBe('DRAFT');
+    await handlers[IPC_CHANNELS.publicationPublish]?.(owner.token, draft.id);
+    expect(
+      await database.syncOutbox.count({ where: { entityId: draft.id, entityType: 'PUBLICATION' } }),
+    ).toBe(1);
+  });
 });

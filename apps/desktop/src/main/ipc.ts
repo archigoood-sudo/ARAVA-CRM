@@ -6,6 +6,7 @@ import {
   FinanceService,
   GlobalSearchService,
   ManagementService,
+  PublicationService,
   StudioService,
   StudentProfileService,
   TrainerProfileService,
@@ -54,6 +55,7 @@ import {
   passwordChangeSchema,
   paymentInputSchema,
   paymentListQuerySchema,
+  publicationInputSchema,
   payrollAdjustmentInputSchema,
   payrollPaymentInputSchema,
   payrollPeriodInputSchema,
@@ -89,7 +91,10 @@ import {
   type SystemInformation,
 } from '@arava/shared';
 import { app, dialog, ipcMain, shell } from 'electron';
-import { dirname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import type { EnrollmentStatus } from '@prisma/client';
 import { z } from 'zod';
 import type { CustomerDisplayManager } from './customer-display-manager';
@@ -150,6 +155,7 @@ export function createIpcHandlers(
   const studentProfiles = new StudentProfileService(database, service);
   const trainerProfiles = new TrainerProfileService(database, service);
   const attention = new AttentionService(database, service);
+  const publications = new PublicationService(database, service);
   const backups =
     backupDependencies.backup ??
     new BackupService(database, service, {
@@ -166,6 +172,19 @@ export function createIpcHandlers(
   const requireChats = () => {
     if (!chats) throw new Error('Сервис чатов не инициализирован.');
     return chats;
+  };
+  const publicationMediaDirectory = join(dirname(databasePath), 'media', 'publications');
+  const publicationMedia = (mediaId?: string) => {
+    if (!mediaId) return undefined;
+    if (!/^[\da-f-]+\.(?:jpe?g|png|webp)$/iu.test(mediaId))
+      throw new Error('Некорректное изображение публикации.');
+    const extension = extname(mediaId).toLowerCase();
+    return {
+      contentType:
+        extension === '.png' ? 'image/png' : extension === '.webp' ? 'image/webp' : 'image/jpeg',
+      fileName: mediaId,
+      localPath: join(publicationMediaDirectory, mediaId),
+    };
   };
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
@@ -254,6 +273,66 @@ export function createIpcHandlers(
         identifierSchema.parse(unsafeConversationId),
         chatSendInputSchema.parse(unsafeInput),
       ),
+
+    [IPC_CHANNELS.publicationList]: (unsafeToken) =>
+      publications.list(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.publicationOptions]: (unsafeToken) =>
+      publications.options(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.publicationCreate]: (unsafeToken, unsafeInput) => {
+      const input = publicationInputSchema.parse(unsafeInput);
+      return publications.create(
+        sessionTokenSchema.parse(unsafeToken),
+        input,
+        publicationMedia(input.mediaId),
+      );
+    },
+    [IPC_CHANNELS.publicationUpdate]: (unsafeToken, unsafeId, unsafeInput) => {
+      const input = publicationInputSchema.parse(unsafeInput);
+      return publications.update(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        input,
+        publicationMedia(input.mediaId),
+      );
+    },
+    [IPC_CHANNELS.publicationPublish]: (unsafeToken, unsafeId) =>
+      publications.publish(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.publicationArchive]: (unsafeToken, unsafeId) =>
+      publications.archive(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.publicationRetry]: (unsafeToken, unsafeId) =>
+      publications.retry(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.publicationSelectImage]: async (unsafeToken) => {
+      await publications.options(sessionTokenSchema.parse(unsafeToken));
+      const selection = await dialog.showOpenDialog({
+        filters: [{ extensions: ['jpg', 'jpeg', 'png', 'webp'], name: 'Изображения' }],
+        properties: ['openFile'],
+        title: 'Выберите изображение публикации',
+      });
+      const source = selection.filePaths[0];
+      if (selection.canceled || !source) return undefined;
+      const bytes = await readFile(source);
+      if (!bytes.length || bytes.length > 10 * 1024 * 1024)
+        throw new Error('Изображение должно быть не больше 10 МБ.');
+      const extension = extname(source).toLowerCase();
+      const signatureValid =
+        (extension === '.png' &&
+          bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+        ((extension === '.jpg' || extension === '.jpeg') &&
+          bytes.length >= 3 &&
+          bytes[0] === 255 &&
+          bytes[1] === 216 &&
+          bytes[2] === 255) ||
+        (extension === '.webp' &&
+          bytes.length >= 12 &&
+          bytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+          bytes.subarray(8, 12).toString('ascii') === 'WEBP');
+      if (!signatureValid)
+        throw new Error('Содержимое файла не соответствует формату изображения.');
+      const mediaId = `${randomUUID()}${extension}`;
+      await mkdir(publicationMediaDirectory, { recursive: true });
+      await copyFile(source, join(publicationMediaDirectory, mediaId));
+      return { fileName: basename(source), mediaId };
+    },
 
     [IPC_CHANNELS.integrationGetStatus]: (unsafeToken) =>
       requireIntegration().getStatus(sessionTokenSchema.parse(unsafeToken)),
@@ -1279,6 +1358,10 @@ const SYNC_RELEVANT_MUTATIONS = new Set<string>([
   IPC_CHANNELS.lessonCreate,
   IPC_CHANNELS.lessonGenerate,
   IPC_CHANNELS.lessonUpdate,
+  IPC_CHANNELS.publicationArchive,
+  IPC_CHANNELS.publicationPublish,
+  IPC_CHANNELS.publicationRetry,
+  IPC_CHANNELS.publicationUpdate,
   IPC_CHANNELS.roomArchive,
   IPC_CHANNELS.roomCreate,
   IPC_CHANNELS.roomUpdate,

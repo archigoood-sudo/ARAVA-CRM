@@ -201,6 +201,31 @@ enum SyncOperation {
   ARCHIVE
 }
 
+enum PublicationType {
+  NEWS
+  ANNOUNCEMENT
+  EVENT
+  INFO
+}
+
+enum PublicationStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum PublicationAudienceMode {
+  ALL_CLIENTS
+  BRANCHES
+  GROUPS
+  TRAINERS
+}
+
+enum PublicationTargetType {
+  BRANCH
+  GROUP
+}
+
 model User {
   id                     String                @id @default(cuid())
   email                  String                @unique
@@ -246,6 +271,7 @@ model User {
   createdMembershipCards MembershipCard[]      @relation("CardCreator")
   performedCardEvents    CardEvent[]           @relation("CardEventPerformer")
   cardScans              CardScanEvent[]       @relation("CardScanPerformer")
+  createdPublications    Publication[]         @relation("PublicationCreator")
   studentNotes           StudentNote[]
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt
@@ -1063,4 +1089,40 @@ model SyncLog {
 
   @@index([createdAt])
   @@index([result, createdAt])
+}
+
+model Publication {
+  id               String                  @id @default(cuid())
+  type             PublicationType
+  title            String
+  body             String
+  status           PublicationStatus       @default(DRAFT)
+  audienceMode     PublicationAudienceMode
+  mediaLocalPath   String?
+  mediaFileName    String?
+  mediaContentType String?
+  mediaRef         String?
+  publishAt        DateTime?
+  expiresAt        DateTime?
+  eventStartsAt    DateTime?
+  eventLocation    String?
+  createdByUserId  String
+  createdBy        User                    @relation("PublicationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  targets          PublicationAudienceTarget[]
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  archivedAt       DateTime?
+
+  @@index([status, publishAt, createdAt])
+  @@index([createdByUserId])
+}
+
+model PublicationAudienceTarget {
+  publicationId String
+  publication   Publication          @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  type          PublicationTargetType
+  targetId      String
+
+  @@id([publicationId, type, targetId])
+  @@index([type, targetId])
 }

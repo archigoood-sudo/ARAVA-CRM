@@ -114,6 +114,7 @@ export { GlobalSearchService } from './global-search-service';
 export { StudentProfileService } from './student-profile-service';
 export { TrainerProfileService } from './trainer-profile-service';
 export { ChatService } from './chat-service';
+export { PublicationService, type PublicationMediaInfo } from './publication-service';
 export {
   IntegrationApiClient,
   IntegrationService,

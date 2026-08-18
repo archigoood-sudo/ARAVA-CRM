@@ -15,6 +15,8 @@ import {
   PAYMENT_STATUSES,
   PAYROLL_PERIOD_STATUSES,
   PAYROLL_TYPES,
+  PUBLICATION_AUDIENCES,
+  PUBLICATION_TYPES,
   REPORT_KINDS,
   STUDENT_STATUSES,
   TARIFF_TYPES,
@@ -778,6 +780,48 @@ export const chatSendInputSchema = z.object({
     .regex(/^[A-Za-z0-9_.:-]+$/u),
   text: z.string().trim().min(1, 'Введите сообщение.').max(1200, 'Сообщение слишком длинное.'),
 });
+export const publicationInputSchema = z
+  .object({
+    audienceMode: z.enum(PUBLICATION_AUDIENCES),
+    body: z
+      .string()
+      .trim()
+      .min(1, 'Добавьте текст публикации.')
+      .max(5000, 'Текст не должен превышать 5000 символов.'),
+    eventLocation: optionalText(240),
+    eventStartsAt: z.string().datetime().optional(),
+    expiresAt: z.string().datetime().optional(),
+    mediaId: z.string().min(1).max(100).optional(),
+    publishAt: z.string().datetime().optional(),
+    targetIds: z.array(z.string().min(1).max(100)).max(100),
+    title: z
+      .string()
+      .trim()
+      .min(2, 'Укажите заголовок.')
+      .max(160, 'Заголовок не должен превышать 160 символов.'),
+    type: z.enum(PUBLICATION_TYPES),
+  })
+  .superRefine((input, context) => {
+    const targeted = input.audienceMode === 'BRANCHES' || input.audienceMode === 'GROUPS';
+    if (targeted && input.targetIds.length === 0)
+      context.addIssue({
+        code: 'custom',
+        message: 'Выберите хотя бы одного получателя.',
+        path: ['targetIds'],
+      });
+    if (!targeted && input.targetIds.length > 0)
+      context.addIssue({
+        code: 'custom',
+        message: 'Для выбранной аудитории получатели не требуются.',
+        path: ['targetIds'],
+      });
+    if (input.publishAt && input.expiresAt && input.publishAt >= input.expiresAt)
+      context.addIssue({
+        code: 'custom',
+        message: 'Дата окончания должна быть позже даты публикации.',
+        path: ['expiresAt'],
+      });
+  });
 export const globalSearchQuerySchema = z.string().trim().min(2).max(120);
 
 export const attentionFiltersSchema: z.ZodType<AttentionFilters> = z.object({

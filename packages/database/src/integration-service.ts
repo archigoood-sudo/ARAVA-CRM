@@ -12,6 +12,7 @@ import type {
 } from '@arava/shared';
 import type { SyncOperation } from '@prisma/client';
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 
 import type { DatabaseClient } from './index';
 import { DomainError } from './security';
@@ -42,6 +43,7 @@ export type SyncEntityType =
   | 'GROUP_MEMBERSHIP'
   | 'SCHEDULE'
   | 'LESSON'
+  | 'PUBLICATION'
   | 'CHAT_MESSAGE';
 
 export interface CrmChatRequestContext {
@@ -366,6 +368,55 @@ export class IntegrationApiClient {
     };
   }
 
+  async uploadPublicationMedia(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    input: { bytes: Uint8Array; contentType: string; fileName: string; mediaId: string },
+  ): Promise<string> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await globalThis.fetch(this.endpoint(baseUrl, 'publications/media'), {
+        body: Buffer.from(input.bytes),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': input.contentType,
+          'X-ARAVA-API-Version': INTEGRATION_API_VERSION,
+          'X-ARAVA-Device-ID': deviceId,
+          'X-ARAVA-File-Name': encodeURIComponent(input.fileName),
+          'X-ARAVA-Media-ID': input.mediaId,
+        },
+        method: 'POST',
+        signal: controller.signal,
+      });
+      const payload = (await response.json().catch(() => undefined)) as unknown;
+      if (!response.ok) {
+        const body = isRecord(payload) ? payload : {};
+        throw new IntegrationApiError(
+          optionalString(body.code) ?? `HTTP_${String(response.status)}`,
+          response.status === 429 || response.status >= 500,
+          optionalString(body.message) ?? 'Сервер отклонил изображение публикации.',
+        );
+      }
+      if (!isRecord(payload) || typeof payload.mediaRef !== 'string') {
+        throw new IntegrationApiError(
+          'INVALID_RESPONSE',
+          false,
+          'Сервер не подтвердил загрузку изображения.',
+        );
+      }
+      return payload.mediaRef;
+    } catch (error) {
+      if (error instanceof IntegrationApiError) throw error;
+      if (error instanceof Error && error.name === 'AbortError')
+        throw new IntegrationApiError('TIMEOUT', true, 'Сервер не ответил вовремя.');
+      throw new IntegrationApiError('NETWORK_UNAVAILABLE', true, 'Нет соединения с сайтом.');
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async listChats(
     baseUrl: string,
     deviceId: string,
@@ -502,6 +553,7 @@ const ENTITY_PRIORITY: Record<SyncEntityType, number> = {
   LESSON: 70,
   GROUP_MEMBERSHIP: 80,
   CHAT_MESSAGE: 5,
+  PUBLICATION: 90,
 };
 
 export class IntegrationService {
@@ -933,21 +985,24 @@ export class IntegrationService {
         where: { id: { in: ids }, status: 'PENDING' },
       });
       if (claimed.count !== selected.length) return;
-      const envelopes: SyncEntityEnvelope[] = [];
-      for (const item of selected) {
-        const envelope = await this.buildEnvelope(
-          item.entityType as SyncEntityType,
-          item.entityId,
-          item.operation,
-          item.idempotencyKey,
-        );
-        envelopes.push(envelope);
-        await this.database.syncOutbox.update({
-          data: { payloadJson: JSON.stringify(envelope.payload) },
-          where: { id: item.id },
-        });
-      }
       try {
+        const envelopes: SyncEntityEnvelope[] = [];
+        for (const item of selected) {
+          if (item.entityType === 'PUBLICATION' && item.operation === 'UPSERT') {
+            await this.preparePublicationMedia(baseUrl, deviceId, token, item.entityId);
+          }
+          const envelope = await this.buildEnvelope(
+            item.entityType as SyncEntityType,
+            item.entityId,
+            item.operation,
+            item.idempotencyKey,
+          );
+          envelopes.push(envelope);
+          await this.database.syncOutbox.update({
+            data: { payloadJson: JSON.stringify(envelope.payload) },
+            where: { id: item.id },
+          });
+        }
         const acknowledgement = await this.api.syncBatch(baseUrl, deviceId, token, envelopes);
         if (acknowledgement.deviceToken)
           await this.credentials.saveToken(acknowledgement.deviceToken);
@@ -977,6 +1032,33 @@ export class IntegrationService {
     } finally {
       this.processing = false;
     }
+  }
+
+  private async preparePublicationMedia(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    publicationId: string,
+  ): Promise<void> {
+    const publication = await this.database.publication.findUnique({
+      where: { id: publicationId },
+    });
+    if (!publication?.mediaLocalPath || publication.mediaRef) return;
+    if (!publication.mediaContentType || !publication.mediaFileName) {
+      throw new IntegrationApiError(
+        'INVALID_PAYLOAD',
+        false,
+        'Данные изображения публикации повреждены.',
+      );
+    }
+    const bytes = await readFile(publication.mediaLocalPath);
+    const mediaRef = await this.api.uploadPublicationMedia(baseUrl, deviceId, token, {
+      bytes,
+      contentType: publication.mediaContentType,
+      fileName: publication.mediaFileName,
+      mediaId: `publication-${publication.id}`,
+    });
+    await this.database.publication.update({ data: { mediaRef }, where: { id: publicationId } });
   }
 
   private async processPendingChat(item: {
@@ -1127,7 +1209,7 @@ export class IntegrationService {
       entityType,
       idempotencyKey,
       operation: payload.missing === true ? 'ARCHIVE' : operation,
-      payload,
+      payload: operation === 'ARCHIVE' ? { id: entityId, missing: true } : payload,
       updatedAt,
       version: updatedAt,
     };
@@ -1267,6 +1349,37 @@ export class IntegrationService {
               roomId: row.roomId,
               startsAt: row.startsAt.toISOString(),
               status: row.status,
+              updatedAt: row.updatedAt.toISOString(),
+            }
+          : { id: entityId, missing: true };
+      }
+      case 'PUBLICATION': {
+        const row = await this.database.publication.findUnique({
+          include: {
+            createdBy: { select: { fullName: true, id: true, role: true } },
+            targets: true,
+          },
+          where: { id: entityId },
+        });
+        return row
+          ? {
+              audienceMode: row.audienceMode,
+              author: {
+                id: row.createdBy.id,
+                name: row.createdBy.fullName,
+                role: row.createdBy.role,
+              },
+              body: row.body,
+              eventLocation: row.eventLocation,
+              eventStartsAt: iso(row.eventStartsAt),
+              expiresAt: iso(row.expiresAt),
+              id: row.id,
+              mediaRef: row.mediaRef,
+              publishAt: iso(row.publishAt),
+              status: row.status,
+              targets: row.targets.map((target) => ({ id: target.targetId, type: target.type })),
+              title: row.title,
+              type: row.type,
               updatedAt: row.updatedAt.toISOString(),
             }
           : { id: entityId, missing: true };

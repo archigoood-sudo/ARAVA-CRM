@@ -131,6 +131,12 @@ export const GLOBAL_SEARCH_TYPES = [
   'CARD',
 ] as const;
 export type GlobalSearchType = (typeof GLOBAL_SEARCH_TYPES)[number];
+export const PUBLICATION_TYPES = ['NEWS', 'ANNOUNCEMENT', 'EVENT', 'INFO'] as const;
+export type PublicationType = (typeof PUBLICATION_TYPES)[number];
+export const PUBLICATION_STATUSES = ['DRAFT', 'PUBLISHED', 'ARCHIVED'] as const;
+export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
+export const PUBLICATION_AUDIENCES = ['ALL_CLIENTS', 'BRANCHES', 'GROUPS', 'TRAINERS'] as const;
+export type PublicationAudienceMode = (typeof PUBLICATION_AUDIENCES)[number];
 
 export const IPC_CHANNELS = {
   activityList: 'activity:list',
@@ -224,6 +230,14 @@ export const IPC_CHANNELS = {
   chatMessages: 'chat:messages',
   chatRead: 'chat:read',
   chatSend: 'chat:send',
+  publicationArchive: 'publication:archive',
+  publicationCreate: 'publication:create',
+  publicationList: 'publication:list',
+  publicationOptions: 'publication:options',
+  publicationPublish: 'publication:publish',
+  publicationRetry: 'publication:retry',
+  publicationSelectImage: 'publication:select-image',
+  publicationUpdate: 'publication:update',
   enrollmentAdd: 'enrollment:add',
   enrollmentRemove: 'enrollment:remove',
   scheduleCreate: 'schedule:create',
@@ -1869,6 +1883,40 @@ export interface ChatSendInput {
   text: string;
 }
 
+export interface PublicationInput {
+  audienceMode: PublicationAudienceMode;
+  body: string;
+  eventLocation?: string | undefined;
+  eventStartsAt?: string | undefined;
+  expiresAt?: string | undefined;
+  mediaId?: string | undefined;
+  publishAt?: string | undefined;
+  targetIds: string[];
+  title: string;
+  type: PublicationType;
+}
+
+export interface PublicationSummary extends PublicationInput {
+  archivedAt?: string;
+  authorName: string;
+  createdAt: string;
+  id: string;
+  mediaFileName?: string;
+  status: PublicationStatus;
+  syncState: 'LOCAL' | 'PENDING' | 'SYNCED' | 'ERROR';
+  updatedAt: string;
+}
+
+export interface PublicationOptions {
+  branches: { id: string; name: string }[];
+  groups: { branchId: string; id: string; name: string }[];
+}
+
+export interface PublicationImageSelection {
+  fileName: string;
+  mediaId: string;
+}
+
 export interface SettingUpdate {
   key: SettingKey;
   value: string;
@@ -1911,6 +1959,16 @@ export interface AravaDesktopApi {
     messages: (token: string, conversationId: string, before?: string) => Promise<ChatMessagePage>;
     read: (token: string, conversationId: string) => Promise<void>;
     send: (token: string, conversationId: string, input: ChatSendInput) => Promise<ChatMessage>;
+  };
+  publications: {
+    archive: (token: string, id: string) => Promise<PublicationSummary>;
+    create: (token: string, input: PublicationInput) => Promise<PublicationSummary>;
+    list: (token: string) => Promise<PublicationSummary[]>;
+    options: (token: string) => Promise<PublicationOptions>;
+    publish: (token: string, id: string) => Promise<PublicationSummary>;
+    retry: (token: string, id: string) => Promise<PublicationSummary>;
+    selectImage: (token: string) => Promise<PublicationImageSelection | undefined>;
+    update: (token: string, id: string, input: PublicationInput) => Promise<PublicationSummary>;
   };
   trainers: {
     getProfile: (token: string, id: string, month: string) => Promise<TrainerProfileOverview>;

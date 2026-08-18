@@ -50,6 +50,16 @@ const desktopApi: AravaDesktopApi = {
     send: (token, conversationId, input) =>
       invoke(IPC_CHANNELS.chatSend, token, conversationId, input),
   },
+  publications: {
+    archive: (token, id) => invoke(IPC_CHANNELS.publicationArchive, token, id),
+    create: (token, input) => invoke(IPC_CHANNELS.publicationCreate, token, input),
+    list: (token) => invoke(IPC_CHANNELS.publicationList, token),
+    options: (token) => invoke(IPC_CHANNELS.publicationOptions, token),
+    publish: (token, id) => invoke(IPC_CHANNELS.publicationPublish, token, id),
+    retry: (token, id) => invoke(IPC_CHANNELS.publicationRetry, token, id),
+    selectImage: (token) => invoke(IPC_CHANNELS.publicationSelectImage, token),
+    update: (token, id, input) => invoke(IPC_CHANNELS.publicationUpdate, token, id, input),
+  },
   integration: {
     confirmInitialSync: (token) => invoke(IPC_CHANNELS.integrationConfirmInitialSync, token),
     getStatus: (token) => invoke(IPC_CHANNELS.integrationGetStatus, token),

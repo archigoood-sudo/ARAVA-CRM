@@ -304,7 +304,7 @@ describe('Prisma and packaged runtime migration compatibility', () => {
         )`,
       );
       for (const { id } of runtimeMigrations.filter(
-        ({ id }) => id !== '20260818000000_sprint_4_4a',
+        ({ id }) => id !== '20260818000000_sprint_4_4a' && id !== '20260818020000_sprint_4_4d',
       )) {
         await database.$executeRawUnsafe('INSERT INTO "_AppMigration" ("id") VALUES (?)', id);
       }
@@ -336,6 +336,7 @@ describe('Prisma and packaged runtime migration compatibility', () => {
         await database.appSetting.findUnique({ where: { key: 'customerDisplay.enabled' } }),
       ).toMatchObject({ value: 'true' });
       expect(await database.syncOutbox.count()).toBe(0);
+      expect(await database.publication.count()).toBe(0);
       await database.branch.update({
         data: { name: 'Обновлённый филиал' },
         where: { id: 'preserved-branch' },
