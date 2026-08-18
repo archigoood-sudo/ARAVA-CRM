@@ -3,10 +3,12 @@ const MAX_BARCODE_LENGTH = 128;
 // Keep the per-character guard tolerant of that pause; the average interval below
 // still prevents ordinary human typing from being classified as a scanner burst.
 const MAX_CHARACTER_GAP_MS = 180;
-// Some USB scanners are configured with a deliberate 50-60 ms character delay.
-// Eighty milliseconds still excludes normal deliberate typing while accepting
-// those deterministic scanner bursts in packaged Windows builds.
-const MAX_AVERAGE_INTERVAL_MS = 80;
+const MAX_FAST_SCANNER_INTERVAL_MS = 80;
+// Configured keyboard-wedge scanners can deliberately emit long numeric card codes at
+// 100-120 ms intervals with delivery jitter. Keep that tolerance separate so short
+// manual input is untouched.
+const MAX_CONFIGURED_SCANNER_INTERVAL_MS = 170;
+const MIN_CONFIGURED_SCANNER_LENGTH = 8;
 
 export class BarcodeScannerBuffer {
   private firstAt = 0;
@@ -26,7 +28,12 @@ export class BarcodeScannerBuffer {
     const duration = Math.max(1, this.lastAt - this.firstAt);
     const averageInterval = value.length > 1 ? duration / (value.length - 1) : duration;
     this.reset();
-    return value.length >= minimumLength && averageInterval <= MAX_AVERAGE_INTERVAL_MS
+    const isFastScanner = averageInterval <= MAX_FAST_SCANNER_INTERVAL_MS;
+    const isConfiguredNumericScanner =
+      averageInterval <= MAX_CONFIGURED_SCANNER_INTERVAL_MS &&
+      value.length >= Math.max(minimumLength, MIN_CONFIGURED_SCANNER_LENGTH) &&
+      /^\d+$/u.test(value);
+    return value.length >= minimumLength && (isFastScanner || isConfiguredNumericScanner)
       ? value
       : undefined;
   }

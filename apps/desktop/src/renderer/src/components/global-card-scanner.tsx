@@ -154,7 +154,7 @@ export function GlobalCardScanner() {
         reset();
         return;
       }
-      const now = performance.now();
+      const occurredAt = event.timeStamp;
       if (event.key === 'Enter') {
         const barcode = buffer.current.complete(minimumLength.current);
         const snapshot = editableSnapshot.current;
@@ -172,9 +172,9 @@ export function GlobalCardScanner() {
         reset();
         return;
       }
-      if (buffer.current.shouldRestart(now)) reset();
+      if (buffer.current.shouldRestart(occurredAt)) reset();
       if (buffer.current.isEmpty()) editableSnapshot.current = snapshotEditable(event.target);
-      buffer.current.append(event.key, now);
+      buffer.current.append(event.key, occurredAt);
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => {
