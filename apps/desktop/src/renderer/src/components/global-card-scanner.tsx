@@ -1,22 +1,24 @@
 import type { CardScanResult } from '@arava/shared';
 import { ScanLine } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { getDesktopApi } from '../lib/desktop-api';
 import { getSessionToken } from '../stores/auth-store';
+import { BarcodeScannerBuffer } from './barcode-scanner-buffer';
+import { GLOBAL_SEARCH_CLOSE_EVENT } from './global-search';
 
 export const SCANNER_MIN_LENGTH_KEY = 'arava-scanner-minimum-length';
 export const SCANNER_SETTINGS_EVENT = 'arava-scanner-settings-changed';
 
 const feedback: Record<CardScanResult, string> = {
-  ACCESS_DENIED: 'Нет доступа к клиенту этой карты',
+  ACCESS_DENIED: 'Нет доступа',
   ARCHIVED: 'Карта находится в архиве',
   BLOCKED: 'Карта заблокирована',
-  FREE: 'Карта пока не привязана',
-  LOST: 'Карта отмечена как утерянная',
+  FREE: 'Карта не привязана',
+  LOST: 'Карта потеряна',
   OPENED: 'Клиент открыт',
-  UNKNOWN: 'Карта не зарегистрирована',
+  UNKNOWN: 'Карта не найдена',
 };
 
 function configuredMinimum(): number {
@@ -24,24 +26,80 @@ function configuredMinimum(): number {
   return Number.isInteger(parsed) && parsed >= 4 && parsed <= 64 ? parsed : 6;
 }
 
-function isEditable(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return (
-    target.isContentEditable ||
-    target.tagName === 'INPUT' ||
-    target.tagName === 'TEXTAREA' ||
-    target.tagName === 'SELECT'
-  );
+type EditableElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLElement;
+
+interface EditableSnapshot {
+  element: EditableElement;
+  html?: string | undefined;
+  selectionEnd?: number | null | undefined;
+  selectionStart?: number | null | undefined;
+  value?: string | undefined;
+}
+
+function editableElement(target: EventTarget | null): EditableElement | undefined {
+  if (!(target instanceof HTMLElement)) return undefined;
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  )
+    return target;
+  return target.closest<HTMLElement>('[contenteditable="true"]') ?? undefined;
+}
+
+function snapshotEditable(target: EventTarget | null): EditableSnapshot | undefined {
+  const element = editableElement(target);
+  if (!element) return undefined;
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    return {
+      element,
+      selectionEnd: element.selectionEnd,
+      selectionStart: element.selectionStart,
+      value: element.value,
+    };
+  }
+  if (element instanceof HTMLSelectElement) return { element, value: element.value };
+  return { element, html: element.innerHTML };
+}
+
+function setNativeValue(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  const prototype =
+    element instanceof HTMLInputElement
+      ? HTMLInputElement.prototype
+      : HTMLTextAreaElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, 'value')?.set?.call(element, value);
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function restoreEditable(snapshot: EditableSnapshot | undefined): void {
+  if (!snapshot?.element.isConnected) return;
+  const { element } = snapshot;
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    setNativeValue(element, snapshot.value ?? '');
+    try {
+      element.setSelectionRange(snapshot.selectionStart ?? null, snapshot.selectionEnd ?? null);
+    } catch {
+      // Some input types do not expose a text selection.
+    }
+    return;
+  }
+  if (element instanceof HTMLSelectElement) {
+    element.value = snapshot.value ?? '';
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    return;
+  }
+  element.innerHTML = snapshot.html ?? '';
+  element.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 export function GlobalCardScanner() {
   const navigate = useNavigate();
-  const buffer = useRef('');
-  const firstAt = useRef(0);
-  const lastAt = useRef(0);
+  const buffer = useRef(new BarcodeScannerBuffer());
+  const editableSnapshot = useRef<EditableSnapshot>();
   const minimumLength = useRef(configuredMinimum());
   const [message, setMessage] = useState<string>();
   const hideTimer = useRef<number>();
+  const scanQueue = useRef(Promise.resolve());
 
   useEffect(() => {
     const updateSettings = () => {
@@ -55,16 +113,15 @@ export function GlobalCardScanner() {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const show = (value: string) => {
       setMessage(value);
       if (hideTimer.current) window.clearTimeout(hideTimer.current);
       hideTimer.current = window.setTimeout(() => setMessage(undefined), 2800);
     };
     const reset = () => {
-      buffer.current = '';
-      firstAt.current = 0;
-      lastAt.current = 0;
+      buffer.current.reset();
+      editableSnapshot.current = undefined;
     };
     const scan = async (barcode: string) => {
       try {
@@ -74,26 +131,40 @@ export function GlobalCardScanner() {
             ? `Карта найдена · ${result.studentName}`
             : feedback[result.result],
         );
-        if (result.result === 'OPENED' && result.studentId)
-          await navigate(`/students/${result.studentId}?openedByCard=1`);
+        if (result.result === 'OPENED' && result.studentId) {
+          const profilePath = `/students/${result.studentId}`;
+          const target = `${profilePath}?openedByCard=1`;
+          const activeRoute = window.location.hash.replace(/^#/u, '');
+          if (activeRoute !== target) {
+            await navigate(target, { replace: activeRoute.startsWith('/students/') });
+          }
+        }
       } catch {
         show('Не удалось проверить карту');
       }
     };
+    const enqueueScan = (barcode: string) => {
+      scanQueue.current = scanQueue.current.then(
+        () => scan(barcode),
+        () => scan(barcode),
+      );
+    };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isEditable(event.target) || event.ctrlKey || event.metaKey || event.altKey) {
+      if (event.ctrlKey || event.metaKey || event.altKey) {
         reset();
         return;
       }
       const now = performance.now();
       if (event.key === 'Enter') {
-        const value = buffer.current;
-        const duration = Math.max(1, lastAt.current - firstAt.current);
-        const averageInterval = value.length > 1 ? duration / (value.length - 1) : duration;
-        reset();
-        if (value.length >= minimumLength.current && averageInterval <= 55) {
+        const barcode = buffer.current.complete(minimumLength.current);
+        const snapshot = editableSnapshot.current;
+        editableSnapshot.current = undefined;
+        if (barcode) {
           event.preventDefault();
-          void scan(value);
+          event.stopImmediatePropagation();
+          restoreEditable(snapshot);
+          window.dispatchEvent(new Event(GLOBAL_SEARCH_CLOSE_EVENT));
+          enqueueScan(barcode);
         }
         return;
       }
@@ -101,11 +172,9 @@ export function GlobalCardScanner() {
         reset();
         return;
       }
-      if (lastAt.current && now - lastAt.current > 80) reset();
-      if (!buffer.current) firstAt.current = now;
-      buffer.current += event.key;
-      lastAt.current = now;
-      if (buffer.current.length > 128) reset();
+      if (buffer.current.shouldRestart(now)) reset();
+      if (buffer.current.isEmpty()) editableSnapshot.current = snapshotEditable(event.target);
+      buffer.current.append(event.key, now);
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => {

@@ -1,4 +1,5 @@
 import { _electron as electron, expect, test, type Page } from '@playwright/test';
+import type { AravaDesktopApi } from '@arava/shared';
 import { resolve } from 'node:path';
 
 const ownerEmail = 'owner@arava.local';
@@ -15,7 +16,6 @@ async function login(page: Page) {
 }
 
 async function scan(page: Page, barcode: string) {
-  await page.locator('main').click({ position: { x: 5, y: 5 } });
   await page.keyboard.type(barcode, { delay: 1 });
   await page.keyboard.press('Enter');
 }
@@ -65,19 +65,127 @@ test('регистрация, привязка, сканирование, уте
     await assignDialog.getByLabel('Клиент').selectOption({ label: 'Карточкина Анна' });
     await assignDialog.getByRole('button', { name: 'Привязать' }).click();
 
+    // This is intentionally scanned without moving focus after the assignment dialog.
     await scan(page, '0000001001');
     await expect(page).toHaveURL(/\/students\/[^?]+\?openedByCard=1/u);
     await expect(page.getByText('Открыто по карте')).toBeVisible();
     await expect(page.getByText('0000001001', { exact: true })).toBeVisible();
     await expect(page.getByText('Абонементов пока нет')).toBeVisible();
 
+    const fixtures = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const token = persisted.state?.token ?? '';
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const branch = (await api.branches.list(token)).find(
+        ({ name }) => name === 'Карточный филиал',
+      );
+      if (!branch) throw new Error('Тестовый филиал не найден.');
+      const createStudent = (firstName: string, lastName: string) =>
+        api.students.create(token, {
+          branchId: branch.id,
+          firstName,
+          lastName,
+          status: 'ACTIVE',
+        });
+      const secondStudent = await createStudent('Борис', 'Повторный');
+      const blockedStudent = await createStudent('Блок', 'Карточный');
+      const lostStudent = await createStudent('Потеря', 'Карточная');
+      await api.cards.assign(token, {
+        barcode: '0000001010',
+        registerIfUnknown: true,
+        studentId: secondStudent.id,
+      });
+      const blockedCard = await api.cards.assign(token, {
+        barcode: '0000001020',
+        registerIfUnknown: true,
+        studentId: blockedStudent.id,
+      });
+      const lostCard = await api.cards.assign(token, {
+        barcode: '0000001030',
+        registerIfUnknown: true,
+        studentId: lostStudent.id,
+      });
+      await api.cards.block(token, blockedCard.id, {});
+      await api.cards.markLost(token, lostCard.id, {});
+      await api.cards.register(token, { barcode: '0000001040' });
+      const firstCard = await api.cards.find(token, '0000001001');
+      if (!firstCard?.studentId) throw new Error('Первая карта не привязана.');
+      return {
+        firstStudentId: firstCard.studentId,
+        secondStudentId: secondStudent.id,
+      };
+    });
+
+    for (const pageName of ['Ученики', 'Группы', 'Расписание', 'Финансы', 'Настройки']) {
+      await page.getByRole('link', { name: pageName, exact: true }).click();
+      await scan(page, '0000001001');
+      await expect(page).toHaveURL(
+        new RegExp(`/students/${fixtures.firstStudentId}\\?openedByCard=1$`, 'u'),
+      );
+      await expect(page.getByText('Открыто по карте')).toBeVisible();
+    }
+
+    await scan(page, '0000001010');
+    await expect(page).toHaveURL(
+      new RegExp(`/students/${fixtures.secondStudentId}\\?openedByCard=1$`, 'u'),
+    );
+    await scan(page, '0000001001');
+    await expect(page).toHaveURL(
+      new RegExp(`/students/${fixtures.firstStudentId}\\?openedByCard=1$`, 'u'),
+    );
+    const scanCount = async () =>
+      page.evaluate(async () => {
+        const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+          state?: { token?: string };
+        };
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        return (await api.cards.scanHistory(persisted.state?.token ?? '')).length;
+      });
+    const scansBeforeSameCard = await scanCount();
+    await scan(page, '0000001001');
+    await expect(page.getByText('Открыто по карте')).toBeVisible();
+    await expect.poll(scanCount).toBe(scansBeforeSameCard + 1);
+    await expect(page).toHaveURL(
+      new RegExp(`/students/${fixtures.firstStudentId}\\?openedByCard=1$`, 'u'),
+    );
+
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    const globalSearch = page.getByRole('region', { name: 'Глобальный поиск' });
+    const globalSearchInput = globalSearch.getByLabel('Поиск по приложению');
+    await globalSearchInput.pressSequentially('123456', { delay: 90 });
+    await globalSearchInput.press('Enter');
+    await expect(globalSearchInput).toHaveValue('123456');
+    await globalSearchInput.fill('');
+    await scan(page, '0000001010');
+    await expect(globalSearch).toBeHidden();
+    await expect(page).toHaveURL(
+      new RegExp(`/students/${fixtures.secondStudentId}\\?openedByCard=1$`, 'u'),
+    );
+
+    await page.getByRole('link', { name: 'Главная', exact: true }).click();
+    for (const invalid of [
+      { barcode: '0000001040', message: 'Карта не привязана' },
+      { barcode: '0000001020', message: 'Карта заблокирована' },
+      { barcode: '0000001030', message: 'Карта потеряна' },
+      { barcode: '0000001099', message: 'Карта не найдена' },
+    ]) {
+      const currentUrl = page.url();
+      await scan(page, invalid.barcode);
+      await expect(page.getByText(invalid.message, { exact: true })).toBeVisible();
+      expect(page.url()).toBe(currentUrl);
+    }
+
     page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('link', { name: 'Ученики', exact: true }).click();
+    await page.getByRole('link', { name: 'Карточкина Анна' }).click();
     await page.getByRole('button', { name: 'Карта утеряна' }).click();
     await expect(page.getByText('Утеряна')).toBeVisible();
     await page.getByRole('link', { name: 'Главная', exact: true }).click();
     const dashboardUrl = page.url();
     await scan(page, '0000001001');
-    await expect(page.getByText('Карта отмечена как утерянная')).toBeVisible();
+    await expect(page.getByText('Карта потеряна', { exact: true })).toBeVisible();
     expect(page.url()).toBe(dashboardUrl);
 
     await page.getByRole('link', { name: 'Ученики', exact: true }).click();

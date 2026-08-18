@@ -174,7 +174,7 @@ test('роли, временные пароли, отзыв сессий и ре
     await page.locator('main').click({ position: { x: 5, y: 5 } });
     await page.keyboard.type('0000099999', { delay: 5 });
     await page.keyboard.press('Enter');
-    await expect(page.getByText('Нет доступа к клиенту этой карты')).toBeVisible();
+    await expect(page.getByText('Нет доступа', { exact: true })).toBeVisible();
 
     await signOut(page);
     await login(page, 'admin-e2e@arava.local', adminPassword);

@@ -26,6 +26,7 @@ const icons = {
   TRAINER: UserRound,
 } satisfies Record<GlobalSearchType, typeof Search>;
 const groupOrder: GlobalSearchType[] = ['STUDENT', 'GROUP', 'TRAINER', 'CARD', 'BRANCH', 'ROOM'];
+export const GLOBAL_SEARCH_CLOSE_EVENT = 'arava-global-search-close';
 
 function editableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -62,6 +63,16 @@ export function GlobalSearch() {
   useEffect(() => {
     if (open) window.setTimeout(() => input.current?.focus(), 0);
   }, [open]);
+  useEffect(() => {
+    const closeForScanner = () => {
+      setOpen(false);
+      setQuery('');
+      setDebounced('');
+      setActiveIndex(-1);
+    };
+    window.addEventListener(GLOBAL_SEARCH_CLOSE_EVENT, closeForScanner);
+    return () => window.removeEventListener(GLOBAL_SEARCH_CLOSE_EVENT, closeForScanner);
+  }, []);
 
   const results = useQuery({
     enabled: open && debounced.length >= 2,
