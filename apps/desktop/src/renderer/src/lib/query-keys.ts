@@ -1,4 +1,5 @@
 import type {
+  ChatListQuery,
   GroupListQuery,
   LessonListQuery,
   PaymentListQuery,
@@ -13,6 +14,9 @@ export const queryKeys = {
   attentionSummary: (userId?: string) => ['attention', 'summary', userId] as const,
   backups: ['backups', 'list'] as const,
   backupStatus: ['backups', 'status'] as const,
+  chats: (accessKey: string, query: ChatListQuery) => ['chats', accessKey, 'list', query] as const,
+  chatMessages: (accessKey: string, conversationId: string) =>
+    ['chats', accessKey, 'messages', conversationId] as const,
   branches: (includeArchived = false) => ['branches', { includeArchived }] as const,
   dashboard: ['dashboard', 'stats'] as const,
   group: (id: string) => ['groups', 'detail', id] as const,

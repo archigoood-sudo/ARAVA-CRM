@@ -142,6 +142,69 @@ describe('Electron IPC boundary', () => {
     ).rejects.toThrow('только HTTPS');
   });
 
+  it('exposes chats only through validated, session-aware IPC', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!ChatIpc2026',
+    });
+    const conversation = {
+      branchId: null,
+      crmGroupId: null,
+      id: 'private-ipc',
+      lastMessage: 'Здравствуйте',
+      lastMessageAt: '2026-08-18T12:00:00.000Z',
+      linkedStudents: [],
+      subtitle: 'Личный чат',
+      title: 'Клиент',
+      type: 'PRIVATE_ADMIN' as const,
+      unreadCount: 1,
+      updatedAt: '2026-08-18T12:00:00.000Z',
+    };
+    const integrationService = {
+      getRemoteChat: vi.fn(() => Promise.resolve(conversation)),
+      getRemoteChatMessages: vi.fn(() =>
+        Promise.resolve({
+          conversation,
+          hasMore: false,
+          messages: [],
+          nextCursor: null,
+        }),
+      ),
+      listRemoteChats: vi.fn(() =>
+        Promise.resolve({
+          conversations: [conversation],
+          serverTimestamp: '2026-08-18T12:00:00.000Z',
+          totalUnread: 1,
+        }),
+      ),
+      markRemoteChatRead: vi.fn(() => Promise.resolve()),
+      processPending: vi.fn(() => Promise.resolve()),
+    };
+    const integration = {
+      schedule: vi.fn(),
+      service: integrationService,
+    } as unknown as IntegrationManager;
+    const handlers = createIpcHandlers(database, service, '/test/arava.db', { integration });
+
+    await expect(handlers[IPC_CHANNELS.chatList]?.(owner.token, {})).resolves.toMatchObject({
+      conversations: [{ id: conversation.id }],
+    });
+    expect(() =>
+      handlers[IPC_CHANNELS.chatSend]?.(owner.token, conversation.id, {
+        clientMessageId: '',
+        text: '',
+      }),
+    ).toThrow();
+    expect(integrationService.listRemoteChats).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'OWNER', userId: owner.user.id }),
+      {},
+    );
+  });
+
   it('validates secure user, session, and owner recovery IPC operations', async () => {
     const handlers = createIpcHandlers(database, service, '/test/arava.db');
     const initial = await service.login({

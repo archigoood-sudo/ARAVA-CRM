@@ -6,6 +6,7 @@ import {
   ChevronRight,
   LayoutDashboard,
   Landmark,
+  MessageCircle,
   BarChart3,
   CircleDollarSign,
   FileSpreadsheet,
@@ -42,6 +43,14 @@ export function Sidebar() {
     queryKey: queryKeys.attentionSummary(user?.id),
     refetchInterval: 60_000,
   });
+  const chatAccessKey = `${user?.id ?? ''}:${user?.role ?? ''}:${[...(user?.branchIds ?? [])].sort().join(',')}`;
+  const chats = useQuery({
+    enabled: Boolean(user),
+    queryFn: () => getDesktopApi().chats.list(getSessionToken(), { filter: 'UNREAD' }),
+    queryKey: queryKeys.chats(chatAccessKey, { filter: 'UNREAD' }),
+    refetchInterval: 20_000,
+    retry: false,
+  });
   const navigation = [
     { icon: LayoutDashboard, label: t('nav.dashboard'), to: '/dashboard' },
     ...(user?.role === 'COACH'
@@ -64,6 +73,7 @@ export function Sidebar() {
       label: trainer ? t('nav.mySchedule') : t('nav.schedule'),
       to: '/schedule',
     },
+    { badge: chats.data?.totalUnread, icon: MessageCircle, label: 'Чаты', to: '/chats' },
     ...(!trainer ? [{ icon: Tags, label: t('nav.tariffs'), to: '/tariffs' }] : []),
     ...(!trainer ? [{ icon: IdCard, label: 'Карты', to: '/cards' }] : []),
     ...(user?.permissions.canViewPayments

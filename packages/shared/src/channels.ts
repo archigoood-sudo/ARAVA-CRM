@@ -219,6 +219,11 @@ export const IPC_CHANNELS = {
   integrationSyncNow: 'integration:sync-now',
   integrationTestConnection: 'integration:test-connection',
   integrationUpdateSettings: 'integration:update-settings',
+  chatGet: 'chat:get',
+  chatList: 'chat:list',
+  chatMessages: 'chat:messages',
+  chatRead: 'chat:read',
+  chatSend: 'chat:send',
   enrollmentAdd: 'enrollment:add',
   enrollmentRemove: 'enrollment:remove',
   scheduleCreate: 'schedule:create',
@@ -1803,6 +1808,67 @@ export interface IntegrationLogEntry {
   result: string;
 }
 
+export type ChatType = 'PRIVATE_ADMIN' | 'GROUP';
+export type ChatFilter = 'ALL' | 'PRIVATE_ADMIN' | 'GROUP' | 'UNREAD';
+
+export interface ChatLinkedStudent {
+  branchId: string;
+  firstName: string;
+  lastName: string;
+  studentId: string;
+}
+
+export interface ChatSummary {
+  branchId: string | null;
+  crmGroupId: string | null;
+  id: string;
+  lastMessage: string | null;
+  lastMessageAt: string | null;
+  linkedStudents: ChatLinkedStudent[];
+  subtitle: string;
+  title: string;
+  type: ChatType;
+  unreadCount: number;
+  updatedAt: string;
+}
+
+export interface ChatListQuery {
+  filter?: ChatFilter | undefined;
+  search?: string | undefined;
+  updatedSince?: string | undefined;
+}
+
+export interface ChatListResult {
+  conversations: ChatSummary[];
+  serverTimestamp: string;
+  totalUnread: number;
+}
+
+export type ChatMessageStatus = 'PENDING' | 'SENT' | 'ERROR';
+
+export interface ChatMessage {
+  body: string;
+  createdAt: string;
+  id: string;
+  senderAccountId: string | null;
+  senderName: string;
+  senderRole: string;
+  senderType: string;
+  status: ChatMessageStatus;
+}
+
+export interface ChatMessagePage {
+  conversation: ChatSummary;
+  hasMore: boolean;
+  messages: ChatMessage[];
+  nextCursor: string | null;
+}
+
+export interface ChatSendInput {
+  clientMessageId: string;
+  text: string;
+}
+
 export interface SettingUpdate {
   key: SettingKey;
   value: string;
@@ -1838,6 +1904,13 @@ export interface AravaDesktopApi {
     syncNow: (token: string) => Promise<IntegrationStatus>;
     testConnection: (token: string) => Promise<IntegrationStatus>;
     updateSettings: (token: string, input: IntegrationSettingsInput) => Promise<IntegrationStatus>;
+  };
+  chats: {
+    get: (token: string, conversationId: string) => Promise<ChatSummary>;
+    list: (token: string, query: ChatListQuery) => Promise<ChatListResult>;
+    messages: (token: string, conversationId: string, before?: string) => Promise<ChatMessagePage>;
+    read: (token: string, conversationId: string) => Promise<void>;
+    send: (token: string, conversationId: string, input: ChatSendInput) => Promise<ChatMessage>;
   };
   trainers: {
     getProfile: (token: string, id: string, month: string) => Promise<TrainerProfileOverview>;

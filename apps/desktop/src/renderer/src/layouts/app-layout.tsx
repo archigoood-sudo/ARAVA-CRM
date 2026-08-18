@@ -1,5 +1,6 @@
 import { Bell, ChevronsUpDown, LogOut, PanelLeftClose } from 'lucide-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 
 import { Sidebar } from '../components/sidebar';
 import { GlobalCardScanner } from '../components/global-card-scanner';
@@ -14,6 +15,7 @@ const pageTitles: Record<string, { eyebrow: string; title: string }> = {
   '/attention': { eyebrow: 'Операционный центр', title: 'Требует внимания' },
   '/branches': { eyebrow: t('page.branches.eyebrow'), title: t('nav.branches') },
   '/cards': { eyebrow: 'Доступ клиентов', title: 'Карты' },
+  '/chats': { eyebrow: 'ARAVA ECOSYSTEM', title: 'Чаты' },
   '/students': { eyebrow: t('page.students.eyebrow'), title: t('nav.students') },
   '/users': { eyebrow: t('page.users.eyebrow'), title: t('nav.users') },
   '/settings': { eyebrow: t('page.settings.eyebrow'), title: t('nav.settings') },
@@ -22,6 +24,7 @@ const pageTitles: Record<string, { eyebrow: string; title: string }> = {
 export function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
   const page = location.pathname.startsWith('/students/')
@@ -32,6 +35,7 @@ export function AppLayout() {
 
   const handleLogout = async () => {
     await logout();
+    queryClient.clear();
     await navigate('/login');
   };
 

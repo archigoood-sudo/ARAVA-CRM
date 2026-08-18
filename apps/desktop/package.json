@@ -15,7 +15,7 @@
     "prepackage": "node ../../scripts/prepare-prisma-package.mjs native",
     "prepackage:win": "node ../../scripts/prepare-prisma-package.mjs windows",
     "preview": "electron-vite preview",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --shard=1/2 && playwright test --shard=2/2",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {

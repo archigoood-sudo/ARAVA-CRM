@@ -1,4 +1,9 @@
 import type {
+  ChatListQuery,
+  ChatListResult,
+  ChatMessagePage,
+  ChatSendInput,
+  ChatSummary,
   IntegrationInitialSyncPreview,
   IntegrationLogEntry,
   IntegrationPairInput,
@@ -6,6 +11,7 @@ import type {
   IntegrationStatus,
 } from '@arava/shared';
 import type { SyncOperation } from '@prisma/client';
+import { Buffer } from 'node:buffer';
 
 import type { DatabaseClient } from './index';
 import { DomainError } from './security';
@@ -35,7 +41,15 @@ export type SyncEntityType =
   | 'STUDENT_IDENTITY'
   | 'GROUP_MEMBERSHIP'
   | 'SCHEDULE'
-  | 'LESSON';
+  | 'LESSON'
+  | 'CHAT_MESSAGE';
+
+export interface CrmChatRequestContext {
+  branchIds: string[];
+  name: string;
+  role: 'OWNER' | 'ADMIN' | 'COACH';
+  userId: string;
+}
 
 export interface IntegrationCredentialStore {
   clearToken(): Promise<void>;
@@ -101,6 +115,90 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function invalidChatResponse(): never {
+  throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверные данные чата.');
+}
+
+function parseChatSummary(value: unknown): ChatSummary {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    (value.type !== 'PRIVATE_ADMIN' && value.type !== 'GROUP') ||
+    typeof value.title !== 'string' ||
+    typeof value.subtitle !== 'string' ||
+    typeof value.updatedAt !== 'string' ||
+    typeof value.unreadCount !== 'number' ||
+    !Array.isArray(value.linkedStudents)
+  ) {
+    return invalidChatResponse();
+  }
+  const linkedStudents = value.linkedStudents.map((student) => {
+    if (
+      !isRecord(student) ||
+      typeof student.studentId !== 'string' ||
+      typeof student.branchId !== 'string' ||
+      typeof student.firstName !== 'string' ||
+      typeof student.lastName !== 'string'
+    ) {
+      return invalidChatResponse();
+    }
+    return {
+      branchId: student.branchId,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      studentId: student.studentId,
+    };
+  });
+  return {
+    branchId: typeof value.branchId === 'string' ? value.branchId : null,
+    crmGroupId: typeof value.crmGroupId === 'string' ? value.crmGroupId : null,
+    id: value.id,
+    lastMessage: typeof value.lastMessage === 'string' ? value.lastMessage : null,
+    lastMessageAt: typeof value.lastMessageAt === 'string' ? value.lastMessageAt : null,
+    linkedStudents,
+    subtitle: value.subtitle,
+    title: value.title,
+    type: value.type,
+    unreadCount: value.unreadCount,
+    updatedAt: value.updatedAt,
+  };
+}
+
+function parseChatMessagePage(value: unknown): ChatMessagePage {
+  if (!isRecord(value) || !Array.isArray(value.messages) || typeof value.hasMore !== 'boolean') {
+    return invalidChatResponse();
+  }
+  const messages = value.messages.map((message) => {
+    if (
+      !isRecord(message) ||
+      typeof message.id !== 'string' ||
+      typeof message.body !== 'string' ||
+      typeof message.createdAt !== 'string' ||
+      typeof message.senderName !== 'string' ||
+      typeof message.senderRole !== 'string' ||
+      typeof message.senderType !== 'string'
+    ) {
+      return invalidChatResponse();
+    }
+    return {
+      body: message.body,
+      createdAt: message.createdAt,
+      id: message.id,
+      senderAccountId: typeof message.senderAccountId === 'string' ? message.senderAccountId : null,
+      senderName: message.senderName,
+      senderRole: message.senderRole,
+      senderType: message.senderType,
+      status: 'SENT' as const,
+    };
+  });
+  return {
+    conversation: parseChatSummary(value.conversation),
+    hasMore: value.hasMore,
+    messages,
+    nextCursor: typeof value.nextCursor === 'string' ? value.nextCursor : null,
+  };
+}
+
 export function validateIntegrationBaseUrl(value: string): string {
   let url: URL;
   try {
@@ -140,6 +238,7 @@ export class IntegrationApiClient {
     token: string | undefined,
     method: 'GET' | 'POST',
     body?: unknown,
+    context?: CrmChatRequestContext,
   ): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -150,6 +249,11 @@ export class IntegrationApiClient {
       'X-ARAVA-Device-ID': deviceId,
     };
     if (token) headers.Authorization = `Bearer ${token}`;
+    if (context) {
+      headers['X-ARAVA-CRM-Context'] = Buffer.from(JSON.stringify(context), 'utf8').toString(
+        'base64url',
+      );
+    }
     try {
       const response = await this.fetchImplementation(this.endpoint(baseUrl, path), {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -261,6 +365,123 @@ export class IntegrationApiClient {
       serverTimestamp,
     };
   }
+
+  async listChats(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    query: ChatListQuery,
+  ): Promise<ChatListResult> {
+    const parameters = new URLSearchParams();
+    if (query.filter && query.filter !== 'ALL') parameters.set('filter', query.filter);
+    if (query.search) parameters.set('search', query.search);
+    if (query.updatedSince) parameters.set('updatedSince', query.updatedSince);
+    const suffix = parameters.size ? `?${parameters.toString()}` : '';
+    const payload = await this.request(
+      baseUrl,
+      `chats${suffix}`,
+      deviceId,
+      token,
+      'GET',
+      undefined,
+      context,
+    );
+    if (
+      !isRecord(payload) ||
+      !Array.isArray(payload.conversations) ||
+      typeof payload.serverTimestamp !== 'string' ||
+      typeof payload.totalUnread !== 'number'
+    ) {
+      return invalidChatResponse();
+    }
+    return {
+      conversations: payload.conversations.map(parseChatSummary),
+      serverTimestamp: payload.serverTimestamp,
+      totalUnread: payload.totalUnread,
+    };
+  }
+
+  async getChat(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    conversationId: string,
+  ): Promise<ChatSummary> {
+    const payload = await this.request(
+      baseUrl,
+      `chats/${encodeURIComponent(conversationId)}`,
+      deviceId,
+      token,
+      'GET',
+      undefined,
+      context,
+    );
+    if (!isRecord(payload) || !isRecord(payload.conversation)) {
+      throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверный чат.');
+    }
+    return parseChatSummary(payload.conversation);
+  }
+
+  async chatMessages(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    conversationId: string,
+    before?: string,
+  ): Promise<ChatMessagePage> {
+    const parameters = new URLSearchParams({ limit: '50' });
+    if (before) parameters.set('before', before);
+    const payload = await this.request(
+      baseUrl,
+      `chats/${encodeURIComponent(conversationId)}/messages?${parameters.toString()}`,
+      deviceId,
+      token,
+      'GET',
+      undefined,
+      context,
+    );
+    return parseChatMessagePage(payload);
+  }
+
+  async sendChatMessage(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    conversationId: string,
+    input: ChatSendInput,
+  ): Promise<void> {
+    await this.request(
+      baseUrl,
+      `chats/${encodeURIComponent(conversationId)}/messages`,
+      deviceId,
+      token,
+      'POST',
+      input,
+      context,
+    );
+  }
+
+  async markChatRead(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    conversationId: string,
+  ): Promise<void> {
+    await this.request(
+      baseUrl,
+      `chats/${encodeURIComponent(conversationId)}/read`,
+      deviceId,
+      token,
+      'POST',
+      {},
+      context,
+    );
+  }
 }
 
 function iso(value: Date | null | undefined): string | undefined {
@@ -280,6 +501,7 @@ const ENTITY_PRIORITY: Record<SyncEntityType, number> = {
   SCHEDULE: 60,
   LESSON: 70,
   GROUP_MEMBERSHIP: 80,
+  CHAT_MESSAGE: 5,
 };
 
 export class IntegrationService {
@@ -318,6 +540,77 @@ export class IntegrationService {
       data: { nextAttemptAt: this.now(), status: 'PENDING' },
       where: { lastAttemptAt: { lte: staleBefore }, status: 'PROCESSING' },
     });
+  }
+
+  private async chatConnection(): Promise<{ baseUrl: string; deviceId: string; token: string }> {
+    const [enabled, baseUrl, deviceId, token] = await Promise.all([
+      this.setting(SETTINGS.enabled),
+      this.setting(SETTINGS.baseUrl),
+      this.credentials.getDeviceId(),
+      this.credentials.getToken(),
+    ]);
+    if (enabled !== 'true' || !baseUrl || !token) {
+      throw new DomainError(
+        'VALIDATION',
+        'Сначала подключите CRM к сайту в настройках интеграции.',
+      );
+    }
+    return { baseUrl, deviceId, token };
+  }
+
+  async listRemoteChats(
+    context: CrmChatRequestContext,
+    query: ChatListQuery,
+  ): Promise<ChatListResult> {
+    const connection = await this.chatConnection();
+    return this.api.listChats(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      query,
+    );
+  }
+
+  async getRemoteChat(
+    context: CrmChatRequestContext,
+    conversationId: string,
+  ): Promise<ChatSummary> {
+    const connection = await this.chatConnection();
+    return this.api.getChat(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      conversationId,
+    );
+  }
+
+  async getRemoteChatMessages(
+    context: CrmChatRequestContext,
+    conversationId: string,
+    before?: string,
+  ): Promise<ChatMessagePage> {
+    const connection = await this.chatConnection();
+    return this.api.chatMessages(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      conversationId,
+      before,
+    );
+  }
+
+  async markRemoteChatRead(context: CrmChatRequestContext, conversationId: string): Promise<void> {
+    const connection = await this.chatConnection();
+    await this.api.markChatRead(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      conversationId,
+    );
   }
 
   async getStatus(token: string): Promise<IntegrationStatus> {
@@ -617,6 +910,13 @@ export class IntegrationService {
         take: INTEGRATION_BATCH_SIZE * 4,
         where: { status: 'PENDING' },
       });
+      const pendingChat = candidates.find(
+        (item) => item.entityType === 'CHAT_MESSAGE' && item.nextAttemptAt <= this.now(),
+      );
+      if (pendingChat) {
+        await this.processPendingChat(pendingChat);
+        return;
+      }
       const selected = candidates
         .filter(({ nextAttemptAt }) => nextAttemptAt <= this.now())
         .sort(
@@ -676,6 +976,57 @@ export class IntegrationService {
       }
     } finally {
       this.processing = false;
+    }
+  }
+
+  private async processPendingChat(item: {
+    attemptCount: number;
+    entityId: string;
+    entityType: string;
+    id: string;
+    idempotencyKey: string;
+    operation: SyncOperation;
+    payloadJson: string;
+  }): Promise<void> {
+    const claimed = await this.database.syncOutbox.updateMany({
+      data: { lastAttemptAt: this.now(), status: 'PROCESSING' },
+      where: { id: item.id, status: 'PENDING' },
+    });
+    if (claimed.count !== 1) return;
+    try {
+      const payload = JSON.parse(item.payloadJson) as unknown;
+      if (!isRecord(payload) || !isRecord(payload.context)) {
+        throw new IntegrationApiError('INVALID_PAYLOAD', false, 'Отложенное сообщение повреждено.');
+      }
+      const context = payload.context as unknown as CrmChatRequestContext;
+      const text = optionalString(payload.text);
+      const clientMessageId = optionalString(payload.clientMessageId);
+      if (!text || !clientMessageId) {
+        throw new IntegrationApiError('INVALID_PAYLOAD', false, 'Отложенное сообщение повреждено.');
+      }
+      const connection = await this.chatConnection();
+      await this.api.sendChatMessage(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        context,
+        item.entityId,
+        { clientMessageId, text },
+      );
+      await this.database.$transaction([
+        this.database.syncOutbox.update({
+          data: { lastErrorCode: null, status: 'SYNCED', syncedAt: this.now() },
+          where: { id: item.id },
+        }),
+        this.database.appSetting.upsert({
+          create: { key: SETTINGS.lastState, value: 'CONNECTED' },
+          update: { value: 'CONNECTED' },
+          where: { key: SETTINGS.lastState },
+        }),
+      ]);
+      await this.log(item, 'CHAT_SEND', 'SYNCED', item.attemptCount + 1);
+    } catch (error) {
+      await this.failBatch([item], error);
     }
   }
 
@@ -920,6 +1271,8 @@ export class IntegrationService {
             }
           : { id: entityId, missing: true };
       }
+      case 'CHAT_MESSAGE':
+        return { id: entityId, missing: true };
     }
   }
 }

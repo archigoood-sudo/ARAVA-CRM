@@ -39,6 +39,17 @@ const desktopApi: AravaDesktopApi = {
   globalSearch: {
     query: (token, query) => invoke(IPC_CHANNELS.globalSearch, token, query),
   },
+  chats: {
+    get: (token, conversationId) => invoke(IPC_CHANNELS.chatGet, token, conversationId),
+    list: (token, query) => invoke(IPC_CHANNELS.chatList, token, query),
+    messages: (token, conversationId, before) =>
+      invoke(IPC_CHANNELS.chatMessages, token, conversationId, before),
+    read: async (token, conversationId) => {
+      await invoke(IPC_CHANNELS.chatRead, token, conversationId);
+    },
+    send: (token, conversationId, input) =>
+      invoke(IPC_CHANNELS.chatSend, token, conversationId, input),
+  },
   integration: {
     confirmInitialSync: (token) => invoke(IPC_CHANNELS.integrationConfirmInitialSync, token),
     getStatus: (token) => invoke(IPC_CHANNELS.integrationGetStatus, token),

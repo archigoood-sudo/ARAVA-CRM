@@ -113,6 +113,7 @@ export { CardService } from './card-service';
 export { GlobalSearchService } from './global-search-service';
 export { StudentProfileService } from './student-profile-service';
 export { TrainerProfileService } from './trainer-profile-service';
+export { ChatService } from './chat-service';
 export {
   IntegrationApiClient,
   IntegrationService,
@@ -120,6 +121,7 @@ export {
   validateIntegrationBaseUrl,
   type IntegrationCredentialStore,
   type IntegrationFetch,
+  type CrmChatRequestContext,
   type SyncEntityEnvelope,
   type SyncEntityType,
 } from './integration-service';

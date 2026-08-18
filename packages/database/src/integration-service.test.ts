@@ -269,6 +269,56 @@ describe('Sprint 4.4A integration foundation', () => {
     expect(await database.syncLog.count({ where: { outboxId: retry.id } })).toBe(2);
   });
 
+  it('retries a chat outbox item with the same client message id and safe CRM user context', async () => {
+    await pair();
+    const context = {
+      branchIds: [],
+      name: 'Владелец',
+      role: 'OWNER' as const,
+      userId: 'owner-chat-test',
+    };
+    const row = await database.syncOutbox.create({
+      data: {
+        entityId: 'private-chat',
+        entityType: 'CHAT_MESSAGE',
+        idempotencyKey: 'chat:client-message-retry',
+        nextAttemptAt: now,
+        operation: 'UPSERT',
+        payloadJson: JSON.stringify({
+          clientMessageId: 'client-message-retry',
+          context,
+          text: 'Сообщение с повтором',
+        }),
+      },
+    });
+    mode = 'TEMPORARY';
+    await integration.processPending();
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+      attemptCount: 1,
+      status: 'PENDING',
+    });
+
+    mode = 'SUCCESS';
+    now = new Date(now.getTime() + 60_000);
+    await integration.processPending();
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+      idempotencyKey: 'chat:client-message-retry',
+      status: 'SYNCED',
+    });
+    const requests = received.filter(
+      (entry) => entry.path === '/api/integration/v1/chats/private-chat/messages',
+    );
+    expect(requests).toHaveLength(2);
+    expect(requests.map((entry) => entry.clientMessageId)).toEqual([
+      'client-message-retry',
+      'client-message-retry',
+    ]);
+    const encodedContext = requests[0]?.headers as Record<string, string | undefined>;
+    expect(
+      JSON.parse(Buffer.from(encodedContext['x-arava-crm-context'] ?? '', 'base64url').toString()),
+    ).toEqual(context);
+  });
+
   it('keeps permanent failures visible and disconnects a revoked device without losing work', async () => {
     await pair();
     const branch = await application.createBranch(ownerToken, { name: 'Юг' });

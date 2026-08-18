@@ -21,6 +21,8 @@ export {
   cashRegisterInputSchema,
   cashTransactionQuerySchema,
   cashTransferInputSchema,
+  chatListQuerySchema,
+  chatSendInputSchema,
   copyDayInputSchema,
   enrollmentInputSchema,
   enrollmentStatusSchema,

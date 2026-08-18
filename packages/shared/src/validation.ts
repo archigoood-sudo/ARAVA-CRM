@@ -762,6 +762,22 @@ export const reportQuerySchema: z.ZodType<ReportQuery> = z
 
 export const identifierSchema = z.string().min(1).max(100);
 export const sessionTokenSchema = z.string().min(32).max(256);
+
+export const chatListQuerySchema = z.object({
+  filter: z.enum(['ALL', 'PRIVATE_ADMIN', 'GROUP', 'UNREAD']).optional(),
+  search: z.string().trim().max(120).optional(),
+  updatedSince: z.string().datetime().optional(),
+});
+
+export const chatSendInputSchema = z.object({
+  clientMessageId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(160)
+    .regex(/^[A-Za-z0-9_.:-]+$/u),
+  text: z.string().trim().min(1, 'Введите сообщение.').max(1200, 'Сообщение слишком длинное.'),
+});
 export const globalSearchQuerySchema = z.string().trim().min(2).max(120);
 
 export const attentionFiltersSchema: z.ZodType<AttentionFilters> = z.object({

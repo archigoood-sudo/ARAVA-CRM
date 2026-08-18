@@ -1,5 +1,6 @@
 import {
   ApplicationService,
+  ChatService,
   CalendarService,
   CardService,
   FinanceService,
@@ -17,6 +18,8 @@ import {
 import {
   IPC_CHANNELS,
   attendanceEntriesSchema,
+  chatListQuerySchema,
+  chatSendInputSchema,
   calendarExceptionInputSchema,
   calendarRangeQuerySchema,
   barcodeSchema,
@@ -155,9 +158,14 @@ export function createIpcHandlers(
       externalLogPath: join(dirname(databasePath), 'backup-restore.log'),
     });
   const integration = backupDependencies.integration?.service;
+  const chats = integration ? new ChatService(database, service, integration) : undefined;
   const requireIntegration = () => {
     if (!integration) throw new Error('Сервис интеграции не инициализирован.');
     return integration;
+  };
+  const requireChats = () => {
+    if (!chats) throw new Error('Сервис чатов не инициализирован.');
+    return chats;
   };
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
@@ -167,7 +175,8 @@ export function createIpcHandlers(
     [IPC_CHANNELS.authLogout]: async (unsafeToken) => {
       const token = sessionTokenSchema.parse(unsafeToken);
       await backupDependencies.customerDisplay?.returnToPromo();
-      return service.logout(token);
+      await service.logout(token);
+      chats?.clearAuthorizationCache();
     },
     [IPC_CHANNELS.authChangePassword]: (unsafeToken, unsafeInput) =>
       service.changePassword(
@@ -216,6 +225,34 @@ export function createIpcHandlers(
       search.search(
         sessionTokenSchema.parse(unsafeToken),
         globalSearchQuerySchema.parse(unsafeQuery),
+      ),
+
+    [IPC_CHANNELS.chatList]: (unsafeToken, unsafeQuery) =>
+      requireChats().list(
+        sessionTokenSchema.parse(unsafeToken),
+        chatListQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.chatGet]: (unsafeToken, unsafeConversationId) =>
+      requireChats().get(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeConversationId),
+      ),
+    [IPC_CHANNELS.chatMessages]: (unsafeToken, unsafeConversationId, unsafeBefore) =>
+      requireChats().messages(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeConversationId),
+        unsafeBefore === undefined ? undefined : identifierSchema.parse(unsafeBefore),
+      ),
+    [IPC_CHANNELS.chatRead]: (unsafeToken, unsafeConversationId) =>
+      requireChats().markRead(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeConversationId),
+      ),
+    [IPC_CHANNELS.chatSend]: (unsafeToken, unsafeConversationId, unsafeInput) =>
+      requireChats().send(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeConversationId),
+        chatSendInputSchema.parse(unsafeInput),
       ),
 
     [IPC_CHANNELS.integrationGetStatus]: (unsafeToken) =>

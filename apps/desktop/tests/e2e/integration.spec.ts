@@ -46,7 +46,16 @@ async function closeApplication(application: ElectronApplication): Promise<void>
   } catch {
     // The transport may close as soon as Electron accepts the quit request.
   }
-  if (!(await exited)) childProcess.kill();
+  if (!(await exited)) {
+    const killed = new Promise<void>((resolveExit) =>
+      childProcess.once('exit', () => resolveExit()),
+    );
+    childProcess.kill('SIGKILL');
+    await Promise.race([
+      killed,
+      new Promise<void>((resolveTimeout) => setTimeout(resolveTimeout, 2_000)),
+    ]);
+  }
 }
 
 test('OWNER подключает сайт, выполняет initial/offline sync и видит журнал', async ({
@@ -54,6 +63,20 @@ test('OWNER подключает сайт, выполняет initial/offline sy
 }, testInfo) => {
   test.setTimeout(process.env.CI ? 300_000 : 150_000);
   let receivedOperations = 0;
+  const receivedChatMessages: string[] = [];
+  const chat = {
+    branchId: null,
+    crmGroupId: null,
+    id: 'private-e2e',
+    lastMessage: 'Сообщение клиента',
+    lastMessageAt: '2026-08-18T12:00:00.000Z',
+    linkedStudents: [],
+    subtitle: 'Личный чат',
+    title: 'Анна Клиент',
+    type: 'PRIVATE_ADMIN',
+    unreadCount: 1,
+    updatedAt: '2026-08-18T12:00:00.000Z',
+  };
   const server = createServer(async (request, response) => {
     const body = request.method === 'POST' ? await requestBody(request) : {};
     if (request.url?.endsWith('/pair')) {
@@ -65,6 +88,46 @@ test('OWNER подключает сайт, выполняет initial/offline sy
         apiVersion: 'v1',
         deviceStatus: 'ACTIVE',
         serverTimestamp: new Date().toISOString(),
+      });
+      return;
+    }
+    if (request.url?.startsWith('/api/integration/v1/chats/private-e2e/messages')) {
+      if (request.method === 'POST') {
+        receivedChatMessages.push(typeof body.text === 'string' ? body.text : '');
+        respond(response, { message: { id: body.clientMessageId }, conversation: chat });
+        return;
+      }
+      respond(response, {
+        conversation: chat,
+        hasMore: false,
+        messages: [
+          {
+            body: 'Сообщение клиента',
+            createdAt: '2026-08-18T12:00:00.000Z',
+            id: 'client-message-e2e',
+            senderAccountId: 'client-e2e',
+            senderName: 'Анна Клиент',
+            senderRole: 'CLIENT',
+            senderType: 'client',
+          },
+        ],
+        nextCursor: null,
+      });
+      return;
+    }
+    if (request.url?.startsWith('/api/integration/v1/chats/private-e2e/read')) {
+      respond(response, { ok: true });
+      return;
+    }
+    if (request.url?.startsWith('/api/integration/v1/chats/private-e2e')) {
+      respond(response, { conversation: chat });
+      return;
+    }
+    if (request.url?.startsWith('/api/integration/v1/chats')) {
+      respond(response, {
+        conversations: [chat],
+        serverTimestamp: new Date().toISOString(),
+        totalUnread: 1,
       });
       return;
     }
@@ -120,6 +183,14 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await expect(page.getByText('Устройство подключено к сайту.')).toBeVisible();
     await page.getByRole('button', { name: 'Проверить соединение' }).click();
     await expect(page.getByText('Соединение с сайтом установлено.')).toBeVisible();
+    await page.getByRole('link', { name: 'Чаты' }).click();
+    await expect(page.getByRole('heading', { level: 2, name: 'Чаты' })).toBeVisible();
+    await expect(page.getByText('Анна Клиент', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Сообщение клиента', { exact: true }).last()).toBeVisible();
+    await page.getByLabel('Сообщение').fill('Ответ администратора');
+    await page.getByRole('button', { name: 'Отправить' }).click();
+    await expect.poll(() => receivedChatMessages).toEqual(['Ответ администратора']);
+    await page.getByRole('link', { name: 'Настройки' }).click();
     await page.getByRole('button', { name: 'Первичная синхронизация' }).click();
     await expect(page.getByText('Данные для первичной синхронизации')).toBeVisible();
     page.once('dialog', (dialog) => dialog.accept());
