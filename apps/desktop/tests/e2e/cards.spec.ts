@@ -16,14 +16,15 @@ async function login(page: Page) {
 }
 
 async function scan(page: Page, barcode: string) {
-  await page.keyboard.type(barcode, { delay: 1 });
+  // Mirrors the real USB scanner's configured inter-character delay.
+  await page.keyboard.type(barcode, { delay: 60 });
   await page.keyboard.press('Enter');
 }
 
 test('регистрация, привязка, сканирование, утеря и замена заранее напечатанной карты', async ({
   request: _request,
 }, testInfo) => {
-  test.setTimeout(process.env.CI ? 300_000 : 150_000);
+  test.setTimeout(300_000);
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const userDataArgument = `--user-data-dir=${testInfo.outputPath('cards-user-data')}`;
   const application = executablePath
@@ -53,6 +54,16 @@ test('регистрация, привязка, сканирование, уте
     await page.getByRole('link', { name: 'Карточкина Анна' }).click();
     await expect(page.getByText('Абонементов пока нет')).toBeVisible();
     await expect(page.getByText('Карта не привязана')).toBeVisible();
+    const firstStudentId = /\/students\/([^?]+)/u.exec(page.url())?.[1];
+    if (!firstStudentId) throw new Error('Идентификатор первого ученика не найден.');
+    const attendanceBeforeImmediateScan = await page.evaluate(async (studentId) => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const token = persisted.state?.token ?? '';
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      return (await api.students.getProfile(token, studentId)).attendance;
+    }, firstStudentId);
 
     await page.getByRole('link', { name: 'Карты', exact: true }).click();
     await page.getByRole('button', { name: 'Зарегистрировать карту' }).click();
@@ -112,7 +123,9 @@ test('регистрация, привязка, сканирование, уте
       await api.cards.register(token, { barcode: '0000001040' });
       const firstCard = await api.cards.find(token, '0000001001');
       if (!firstCard?.studentId) throw new Error('Первая карта не привязана.');
+      const secondProfile = await api.students.getProfile(token, secondStudent.id);
       return {
+        secondAttendanceBefore: secondProfile.attendance,
         firstStudentId: firstCard.studentId,
         secondStudentId: secondStudent.id,
       };
@@ -154,7 +167,7 @@ test('регистрация, привязка, сканирование, уте
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     const globalSearch = page.getByRole('region', { name: 'Глобальный поиск' });
     const globalSearchInput = globalSearch.getByLabel('Поиск по приложению');
-    await globalSearchInput.pressSequentially('123456', { delay: 90 });
+    await globalSearchInput.pressSequentially('123456', { delay: 120 });
     await globalSearchInput.press('Enter');
     await expect(globalSearchInput).toHaveValue('123456');
     await globalSearchInput.fill('');
@@ -163,6 +176,29 @@ test('регистрация, привязка, сканирование, уте
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixtures.secondStudentId}\\?openedByCard=1$`, 'u'),
     );
+
+    const attendanceAfterScans = await page.evaluate(
+      async ({ firstStudentId, secondStudentId }) => {
+        const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+          state?: { token?: string };
+        };
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        const token = persisted.state?.token ?? '';
+        const [firstProfile, secondProfile] = await Promise.all([
+          api.students.getProfile(token, firstStudentId),
+          api.students.getProfile(token, secondStudentId),
+        ]);
+        return {
+          first: firstProfile.attendance,
+          second: secondProfile.attendance,
+        };
+      },
+      fixtures,
+    );
+    expect(attendanceAfterScans).toEqual({
+      first: attendanceBeforeImmediateScan,
+      second: fixtures.secondAttendanceBefore,
+    });
 
     await page.getByRole('link', { name: 'Главная', exact: true }).click();
     for (const invalid of [

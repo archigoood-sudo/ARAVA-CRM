@@ -3,7 +3,10 @@ const MAX_BARCODE_LENGTH = 128;
 // Keep the per-character guard tolerant of that pause; the average interval below
 // still prevents ordinary human typing from being classified as a scanner burst.
 const MAX_CHARACTER_GAP_MS = 180;
-const MAX_AVERAGE_INTERVAL_MS = 55;
+// Some USB scanners are configured with a deliberate 50-60 ms character delay.
+// Eighty milliseconds still excludes normal deliberate typing while accepting
+// those deterministic scanner bursts in packaged Windows builds.
+const MAX_AVERAGE_INTERVAL_MS = 80;
 
 export class BarcodeScannerBuffer {
   private firstAt = 0;

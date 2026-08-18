@@ -15,9 +15,15 @@ describe('BarcodeScannerBuffer', () => {
     expect(buffer.complete(6)).toBe('0000001001');
   });
 
+  it('recognizes a scanner configured with a 60 ms character delay', () => {
+    const buffer = new BarcodeScannerBuffer();
+    append(buffer, '0000001001', 0, 60);
+    expect(buffer.complete(6)).toBe('0000001001');
+  });
+
   it('does not classify normal human typing as a scan', () => {
     const buffer = new BarcodeScannerBuffer();
-    append(buffer, '0000001001', 0, 70);
+    append(buffer, '0000001001', 0, 120);
     expect(buffer.complete(6)).toBeUndefined();
   });
 
