@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
@@ -21,6 +21,32 @@ async function stopServer(server: ReturnType<typeof createServer>): Promise<void
   });
   server.closeAllConnections();
   await closed;
+}
+
+async function closeApplication(application: ElectronApplication): Promise<void> {
+  const childProcess = application.process();
+  const hasExited = () => childProcess.exitCode !== null;
+  if (hasExited()) return;
+  const exited = new Promise<boolean>((resolveExit) => {
+    const onExit = () => {
+      clearTimeout(timeout);
+      resolveExit(true);
+    };
+    const timeout = setTimeout(() => {
+      childProcess.off('exit', onExit);
+      resolveExit(false);
+    }, 5_000);
+    childProcess.once('exit', onExit);
+    if (hasExited()) onExit();
+  });
+  try {
+    await application.evaluate(({ app }) => {
+      setImmediate(() => app.quit());
+    });
+  } catch {
+    // The transport may close as soon as Electron accepts the quit request.
+  }
+  if (!(await exited)) await application.close();
 }
 
 test('OWNER подключает сайт, выполняет initial/offline sync и видит журнал', async ({
@@ -157,12 +183,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByRole('button', { name: 'Журнал синхронизации' }).click();
     await expect(page.getByRole('cell', { name: 'Синхронизировано' }).first()).toBeVisible();
   } finally {
-    if (process.platform === 'darwin') {
-      await application.evaluate(({ app }) => {
-        setImmediate(() => app.quit());
-      });
-    }
-    await application.close();
+    await closeApplication(application);
     await stopServer(server);
   }
 });
