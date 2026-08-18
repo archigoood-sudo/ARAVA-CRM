@@ -22,6 +22,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { useThemeStore, type ThemeMode } from '../../stores/theme-store';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { BackupSettings } from './backup-settings';
+import { CustomerDisplaySettings } from './customer-display-settings';
 
 const settingsSchema = z.object({
   workspaceName: z.string().trim().min(2, t('validation.workspaceName')).max(80),
@@ -195,6 +196,7 @@ export function SettingsPage() {
         ) : null}
 
         {user?.role === 'OWNER' ? <BackupSettings /> : null}
+        {user?.role === 'OWNER' ? <CustomerDisplaySettings /> : null}
 
         <Card>
           <CardHeader>

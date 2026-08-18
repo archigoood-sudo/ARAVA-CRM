@@ -7,6 +7,7 @@ import { router } from './router';
 import { SessionRestorer } from './session-restorer';
 import { ThemeSynchronizer } from './theme-synchronizer';
 import './styles/index.css';
+import { CustomerDisplayApp } from './features/customer-display/customer-display-app';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -23,11 +24,15 @@ if (!root) throw new Error('Не найден корневой элемент и
 
 createRoot(root).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <SessionRestorer>
-        <ThemeSynchronizer />
-        <RouterProvider router={router} />
-      </SessionRestorer>
-    </QueryClientProvider>
+    {window.customerDisplayView ? (
+      <CustomerDisplayApp />
+    ) : (
+      <QueryClientProvider client={queryClient}>
+        <SessionRestorer>
+          <ThemeSynchronizer />
+          <RouterProvider router={router} />
+        </SessionRestorer>
+      </QueryClientProvider>
+    )}
   </StrictMode>,
 );

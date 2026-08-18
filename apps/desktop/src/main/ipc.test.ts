@@ -44,6 +44,7 @@ vi.mock('electron', () => ({
 }));
 
 import { createIpcHandlers } from './ipc';
+import type { CustomerDisplayManager } from './customer-display-manager';
 
 describe('Electron IPC boundary', () => {
   let database: DatabaseClient;
@@ -510,7 +511,13 @@ describe('Electron IPC boundary', () => {
       currentPassword: 'Coach!CardsIpc2026',
       newPassword: 'Coach!ChangedCardsIpc2026',
     });
-    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    const returnToPromo = vi.fn().mockResolvedValue(undefined);
+    const showStudentForScan = vi.fn().mockResolvedValue(undefined);
+    const customerDisplay = {
+      returnToPromo,
+      showStudentForScan,
+    } as unknown as CustomerDisplayManager;
+    const handlers = createIpcHandlers(database, service, '/test/arava.db', { customerDisplay });
     expect(() => handlers[IPC_CHANNELS.cardRegister]?.(owner.token, { barcode: '001' })).toThrow();
     const card = (await handlers[IPC_CHANNELS.cardRegister]?.(owner.token, {
       barcode: '0000005001',
@@ -527,6 +534,22 @@ describe('Electron IPC boundary', () => {
       '0000005001',
     )) as CardScanResolution;
     expect(scan).toMatchObject({ result: 'OPENED', studentId: student.id });
+    expect(showStudentForScan).toHaveBeenCalledWith(owner.token, student.id);
+    expect(await database.attendance.count()).toBe(0);
+    await handlers[IPC_CHANNELS.cardResolveScan]?.(owner.token, '9999999999');
+    await handlers[IPC_CHANNELS.cardRegister]?.(owner.token, { barcode: '0000005002' });
+    await handlers[IPC_CHANNELS.cardResolveScan]?.(owner.token, '0000005002');
+    await handlers[IPC_CHANNELS.cardBlock]?.(owner.token, assigned.id, {});
+    await handlers[IPC_CHANNELS.cardResolveScan]?.(owner.token, assigned.barcode);
+    await handlers[IPC_CHANNELS.cardReactivate]?.(owner.token, assigned.id, {});
+    await handlers[IPC_CHANNELS.cardMarkLost]?.(owner.token, assigned.id, {});
+    await handlers[IPC_CHANNELS.cardResolveScan]?.(owner.token, assigned.barcode);
+    await handlers[IPC_CHANNELS.cardArchive]?.(owner.token, assigned.id, {});
+    await handlers[IPC_CHANNELS.cardResolveScan]?.(owner.token, assigned.barcode);
+    expect(showStudentForScan).toHaveBeenCalledTimes(1);
+    expect(await database.attendance.count()).toBe(0);
+    await handlers[IPC_CHANNELS.authLogout]?.(owner.token);
+    expect(returnToPromo).toHaveBeenCalledOnce();
     await expect(
       handlers[IPC_CHANNELS.cardRegister]?.(coachSession.token, { barcode: '0000005002' }),
     ).rejects.toThrow(t('domain.authorization.permissionDenied'));

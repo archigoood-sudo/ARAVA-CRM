@@ -174,6 +174,18 @@ export const IPC_CHANNELS = {
   cardScanHistory: 'card:scan-history',
   cardStudentCurrent: 'card:student-current',
   cardUnassign: 'card:unassign',
+  customerDisplayClose: 'customer-display:close',
+  customerDisplayDeleteSlide: 'customer-display:delete-slide',
+  customerDisplayGetState: 'customer-display:get-state',
+  customerDisplayGetStatus: 'customer-display:get-status',
+  customerDisplayMoveSlide: 'customer-display:move-slide',
+  customerDisplayOpen: 'customer-display:open',
+  customerDisplayPreview: 'customer-display:preview',
+  customerDisplayReturnToPromo: 'customer-display:return-to-promo',
+  customerDisplaySaveSlide: 'customer-display:save-slide',
+  customerDisplaySelectImage: 'customer-display:select-image',
+  customerDisplayStateChanged: 'customer-display:state-changed',
+  customerDisplayUpdateSettings: 'customer-display:update-settings',
   lessonCopyDay: 'lesson:copy-day',
   substitutionAssign: 'substitution:assign',
   contactCreate: 'student-contact:create',
@@ -1523,6 +1535,76 @@ export interface BackupValidationResult {
   migrationLevel?: string | undefined;
 }
 
+export interface CustomerDisplaySettings {
+  customerSeconds: number;
+  displayId?: string | undefined;
+  enabled: boolean;
+  fullscreen: boolean;
+  showLastName: boolean;
+  slideSeconds: number;
+}
+
+export interface CustomerDisplayMonitor {
+  height: number;
+  id: string;
+  isPrimary: boolean;
+  label: string;
+  scaleFactor: number;
+  width: number;
+}
+
+export interface CustomerDisplaySlide {
+  displaySeconds?: number | undefined;
+  id: string;
+  imageUrl?: string | undefined;
+  isActive: boolean;
+  mediaId?: string | undefined;
+  sortOrder: number;
+  text?: string | undefined;
+  title: string;
+}
+
+export interface CustomerDisplaySlideInput {
+  displaySeconds?: number | undefined;
+  id?: string | undefined;
+  isActive: boolean;
+  mediaId?: string | undefined;
+  text?: string | undefined;
+  title: string;
+}
+
+export interface CustomerDisplayStudent {
+  firstName: string;
+  groups: string[];
+  lastNameInitial?: string | undefined;
+  nextLesson?: { groupName: string; roomName?: string | undefined; startsAt: string } | undefined;
+  remainingLessons?: number | undefined;
+  subscriptionExpiresAt?: string | undefined;
+  subscriptionStatus: 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'NONE';
+}
+
+export interface CustomerDisplayState {
+  mode: 'PROMO' | 'STUDENT';
+  settings: Pick<CustomerDisplaySettings, 'showLastName' | 'slideSeconds'>;
+  slides: CustomerDisplaySlide[];
+  student?: CustomerDisplayStudent | undefined;
+}
+
+export interface CustomerDisplayStatus {
+  displays: CustomerDisplayMonitor[];
+  preview: boolean;
+  secondDisplayAvailable: boolean;
+  selectedDisplayPresent: boolean;
+  settings: CustomerDisplaySettings;
+  slides: CustomerDisplaySlide[];
+  windowOpen: boolean;
+}
+
+export interface CustomerDisplayViewApi {
+  getState: () => Promise<CustomerDisplayState>;
+  subscribe: (listener: (state: CustomerDisplayState) => void) => () => void;
+}
+
 export interface BackupRestoreSelection extends BackupValidationResult {
   displayPath: string;
   selectionId: string;
@@ -1589,6 +1671,25 @@ export interface AravaDesktopApi {
       studentId: string,
     ) => Promise<MembershipCardSummary | undefined>;
     unassign: (token: string, id: string, input: CardActionInput) => Promise<MembershipCardSummary>;
+  };
+  customerDisplay: {
+    close: (token: string) => Promise<CustomerDisplayStatus>;
+    deleteSlide: (token: string, id: string) => Promise<CustomerDisplayStatus>;
+    getStatus: (token: string) => Promise<CustomerDisplayStatus>;
+    moveSlide: (
+      token: string,
+      id: string,
+      direction: 'UP' | 'DOWN',
+    ) => Promise<CustomerDisplayStatus>;
+    open: (token: string) => Promise<CustomerDisplayStatus>;
+    preview: (token: string) => Promise<CustomerDisplayStatus>;
+    returnToPromo: (token: string) => Promise<CustomerDisplayStatus>;
+    saveSlide: (token: string, input: CustomerDisplaySlideInput) => Promise<CustomerDisplayStatus>;
+    selectImage: (token: string) => Promise<{ mediaId: string } | undefined>;
+    updateSettings: (
+      token: string,
+      settings: CustomerDisplaySettings,
+    ) => Promise<CustomerDisplayStatus>;
   };
   rooms: {
     archive: (token: string, id: string) => Promise<RoomSummary>;

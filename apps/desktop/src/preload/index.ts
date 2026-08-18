@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-import { IPC_CHANNELS, type AravaDesktopApi } from '@arava/shared/channels';
+import {
+  IPC_CHANNELS,
+  type AravaDesktopApi,
+  type CustomerDisplayState,
+  type CustomerDisplayViewApi,
+} from '@arava/shared/channels';
 
 const invoke = async <Result>(channel: string, ...arguments_: unknown[]): Promise<Result> => {
   try {
@@ -55,6 +60,20 @@ const desktopApi: AravaDesktopApi = {
     scanHistory: (token, cardId) => invoke(IPC_CHANNELS.cardScanHistory, token, cardId),
     studentCurrent: (token, studentId) => invoke(IPC_CHANNELS.cardStudentCurrent, token, studentId),
     unassign: (token, id, input) => invoke(IPC_CHANNELS.cardUnassign, token, id, input),
+  },
+  customerDisplay: {
+    close: (token) => invoke(IPC_CHANNELS.customerDisplayClose, token),
+    deleteSlide: (token, id) => invoke(IPC_CHANNELS.customerDisplayDeleteSlide, token, id),
+    getStatus: (token) => invoke(IPC_CHANNELS.customerDisplayGetStatus, token),
+    moveSlide: (token, id, direction) =>
+      invoke(IPC_CHANNELS.customerDisplayMoveSlide, token, id, direction),
+    open: (token) => invoke(IPC_CHANNELS.customerDisplayOpen, token),
+    preview: (token) => invoke(IPC_CHANNELS.customerDisplayPreview, token),
+    returnToPromo: (token) => invoke(IPC_CHANNELS.customerDisplayReturnToPromo, token),
+    saveSlide: (token, input) => invoke(IPC_CHANNELS.customerDisplaySaveSlide, token, input),
+    selectImage: (token) => invoke(IPC_CHANNELS.customerDisplaySelectImage, token),
+    updateSettings: (token, settings) =>
+      invoke(IPC_CHANNELS.customerDisplayUpdateSettings, token, settings),
   },
   rooms: {
     archive: (token, id) => invoke(IPC_CHANNELS.roomArchive, token, id),
@@ -256,4 +275,22 @@ const desktopApi: AravaDesktopApi = {
   },
 };
 
-contextBridge.exposeInMainWorld('arava', desktopApi);
+const customerDisplay = process.argv.includes('--arava-customer-display');
+if (customerDisplay) {
+  const secretArgument = process.argv.find((argument) =>
+    argument.startsWith('--arava-customer-secret='),
+  );
+  const secret = secretArgument?.slice('--arava-customer-secret='.length) ?? '';
+  const viewApi: CustomerDisplayViewApi = {
+    getState: () => invoke(IPC_CHANNELS.customerDisplayGetState, secret),
+    subscribe: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: CustomerDisplayState) =>
+        listener(state);
+      ipcRenderer.on(IPC_CHANNELS.customerDisplayStateChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.customerDisplayStateChanged, handler);
+    },
+  };
+  contextBridge.exposeInMainWorld('customerDisplayView', viewApi);
+} else {
+  contextBridge.exposeInMainWorld('arava', desktopApi);
+}

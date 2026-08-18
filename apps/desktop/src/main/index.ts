@@ -8,12 +8,13 @@ import {
   toSqliteUrl,
   type DatabaseClient,
 } from '@arava/database';
-import { app, BrowserWindow } from 'electron';
+import { app } from 'electron';
 import log from 'electron-log/main';
 import { join } from 'node:path';
 
 import { registerIpcHandlers, removeIpcHandlers } from './ipc';
-import { createMainWindow } from './window';
+import { CustomerDisplayManager } from './customer-display-manager';
+import { createMainWindow, getMainWindow } from './window';
 
 const config = createApplicationConfig({
   environment: app.isPackaged ? 'production' : 'development',
@@ -21,6 +22,7 @@ const config = createApplicationConfig({
 });
 
 let database: DatabaseClient | undefined;
+let customerDisplay: CustomerDisplayManager | undefined;
 
 function configureLogging(): void {
   log.initialize();
@@ -50,16 +52,25 @@ async function bootstrap(): Promise<void> {
   });
   const automaticBackup = await backups.runAutomaticBackup();
   if (automaticBackup) log.info('Automatic backup created', { file: automaticBackup.fileName });
-  registerIpcHandlers(database, databasePath, { backup: backups, service });
-  createMainWindow();
+  customerDisplay = new CustomerDisplayManager(database, service);
+  await customerDisplay.initialize();
+  registerIpcHandlers(database, databasePath, { backup: backups, customerDisplay, service });
+  await customerDisplay.reopenIfEnabled();
+  const mainWindow = createMainWindow();
+  mainWindow.on('closed', () => customerDisplay?.closeForMainWindow());
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+    if (!getMainWindow()) {
+      const window = createMainWindow();
+      window.on('closed', () => customerDisplay?.closeForMainWindow());
+      void customerDisplay?.reopenIfEnabled();
+    }
   });
 }
 
 async function shutdown(): Promise<void> {
   removeIpcHandlers();
+  customerDisplay?.shutdown();
   if (database) await closeDatabase(database);
 }
 
@@ -70,7 +81,7 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    const mainWindow = BrowserWindow.getAllWindows()[0];
+    const mainWindow = getMainWindow();
     if (!mainWindow) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();

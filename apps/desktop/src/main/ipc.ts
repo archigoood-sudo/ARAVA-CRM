@@ -88,9 +88,29 @@ import { app, dialog, ipcMain, shell } from 'electron';
 import { dirname, join } from 'node:path';
 import type { EnrollmentStatus } from '@prisma/client';
 import { z } from 'zod';
+import type { CustomerDisplayManager } from './customer-display-manager';
 
 type IpcHandler = (...arguments_: unknown[]) => unknown;
 const coachEnrollmentStatuses = ['ACTIVE', 'TRIAL', 'FROZEN'] satisfies EnrollmentStatus[];
+const customerDisplaySettingsSchema = z.object({
+  customerSeconds: z.number().int().min(3).max(300),
+  displayId: z.string().trim().min(1).optional(),
+  enabled: z.boolean(),
+  fullscreen: z.boolean(),
+  showLastName: z.boolean(),
+  slideSeconds: z.number().int().min(3).max(300),
+});
+const customerDisplaySlideSchema = z.object({
+  displaySeconds: z.number().int().min(3).max(300).optional(),
+  id: z.string().min(1).optional(),
+  isActive: z.boolean(),
+  mediaId: z
+    .string()
+    .regex(/^[\da-f-]+\.(?:jpe?g|png|webp)$/iu)
+    .optional(),
+  text: z.string().trim().max(500).optional(),
+  title: z.string().trim().min(1).max(120),
+});
 
 export interface BackupIpcDependencies {
   backup?: BackupService;
@@ -99,6 +119,7 @@ export interface BackupIpcDependencies {
   chooseExportPath?: (defaultPath: string) => Promise<string | undefined>;
   openFolder?: (path: string) => Promise<void>;
   relaunch?: () => void;
+  customerDisplay?: CustomerDisplayManager;
 }
 
 export function createIpcHandlers(
@@ -127,8 +148,11 @@ export function createIpcHandlers(
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
     [IPC_CHANNELS.authRestore]: (unsafeToken) =>
       service.restoreSession(sessionTokenSchema.parse(unsafeToken)),
-    [IPC_CHANNELS.authLogout]: (unsafeToken) =>
-      service.logout(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.authLogout]: async (unsafeToken) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      await backupDependencies.customerDisplay?.returnToPromo();
+      return service.logout(token);
+    },
     [IPC_CHANNELS.authChangePassword]: (unsafeToken, unsafeInput) =>
       service.changePassword(
         sessionTokenSchema.parse(unsafeToken),
@@ -230,8 +254,48 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         cardReplaceInputSchema.parse(unsafeInput),
       ),
-    [IPC_CHANNELS.cardResolveScan]: (unsafeToken, unsafeBarcode) =>
-      cards.resolveScan(sessionTokenSchema.parse(unsafeToken), barcodeSchema.parse(unsafeBarcode)),
+    [IPC_CHANNELS.cardResolveScan]: async (unsafeToken, unsafeBarcode) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const result = await cards.resolveScan(token, barcodeSchema.parse(unsafeBarcode));
+      if (result.result === 'OPENED' && result.studentId)
+        await backupDependencies.customerDisplay?.showStudentForScan(token, result.studentId);
+      return result;
+    },
+    [IPC_CHANNELS.customerDisplayGetStatus]: (unsafeToken) =>
+      backupDependencies.customerDisplay?.getStatus(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.customerDisplayUpdateSettings]: (unsafeToken, unsafeSettings) =>
+      backupDependencies.customerDisplay?.updateSettings(
+        sessionTokenSchema.parse(unsafeToken),
+        customerDisplaySettingsSchema.parse(unsafeSettings),
+      ),
+    [IPC_CHANNELS.customerDisplayOpen]: (unsafeToken) =>
+      backupDependencies.customerDisplay?.open(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.customerDisplayClose]: (unsafeToken) =>
+      backupDependencies.customerDisplay?.close(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.customerDisplayPreview]: (unsafeToken) =>
+      backupDependencies.customerDisplay?.openPreview(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.customerDisplayReturnToPromo]: (unsafeToken) =>
+      backupDependencies.customerDisplay?.returnToPromo(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.customerDisplaySelectImage]: (unsafeToken) =>
+      backupDependencies.customerDisplay?.selectImage(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.customerDisplaySaveSlide]: (unsafeToken, unsafeInput) =>
+      backupDependencies.customerDisplay?.saveSlide(
+        sessionTokenSchema.parse(unsafeToken),
+        customerDisplaySlideSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.customerDisplayDeleteSlide]: (unsafeToken, unsafeId) =>
+      backupDependencies.customerDisplay?.deleteSlide(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.customerDisplayMoveSlide]: (unsafeToken, unsafeId, unsafeDirection) =>
+      backupDependencies.customerDisplay?.moveSlide(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        z.enum(['UP', 'DOWN']).parse(unsafeDirection),
+      ),
+    [IPC_CHANNELS.customerDisplayGetState]: (unsafeSecret) =>
+      backupDependencies.customerDisplay?.getDisplayState(z.string().uuid().parse(unsafeSecret)),
     [IPC_CHANNELS.cardHistory]: (unsafeToken, unsafeId) =>
       cards.cardHistory(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
     [IPC_CHANNELS.cardScanHistory]: (unsafeToken, unsafeId) =>

@@ -2,11 +2,17 @@ import { APP_NAME } from '@arava/config';
 import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'node:path';
 
+let mainWindow: BrowserWindow | undefined;
+
+export function getMainWindow(): BrowserWindow | undefined {
+  return mainWindow?.isDestroyed() ? undefined : mainWindow;
+}
+
 export function createMainWindow(): BrowserWindow {
   const icon = app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
     : join(import.meta.dirname, '../../build/icon.png');
-  const mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     autoHideMenuBar: true,
     backgroundColor: '#F7F8FA',
     height: 900,
@@ -25,13 +31,17 @@ export function createMainWindow(): BrowserWindow {
     width: 1440,
   });
 
-  mainWindow.setMenuBarVisibility(false);
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
+  mainWindow = window;
+  window.setMenuBarVisibility(false);
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = undefined;
   });
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  window.once('ready-to-show', () => {
+    window.show();
+  });
+
+  window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {
       void shell.openExternal(url);
     }
@@ -39,17 +49,17 @@ export function createMainWindow(): BrowserWindow {
     return { action: 'deny' };
   });
 
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    const currentUrl = mainWindow.webContents.getURL();
+  window.webContents.on('will-navigate', (event, url) => {
+    const currentUrl = window.webContents.getURL();
     if (url !== currentUrl) event.preventDefault();
   });
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
   if (rendererUrl) {
-    void mainWindow.loadURL(rendererUrl);
+    void window.loadURL(rendererUrl);
   } else {
-    void mainWindow.loadFile(join(import.meta.dirname, '../renderer/index.html'));
+    void window.loadFile(join(import.meta.dirname, '../renderer/index.html'));
   }
 
-  return mainWindow;
+  return window;
 }
