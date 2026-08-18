@@ -4,6 +4,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from '../components/sidebar';
 import { GlobalCardScanner } from '../components/global-card-scanner';
 import { GlobalSearch } from '../components/global-search';
+import { IntegrationStatusIndicator } from '../components/integration-status-indicator';
 import { t } from '@arava/shared';
 import { useAuthStore } from '../stores/auth-store';
 
@@ -58,6 +59,7 @@ export function AppLayout() {
 
           <div className="app-no-drag flex items-center gap-2.5">
             <GlobalSearch />
+            <IntegrationStatusIndicator />
             <button
               aria-label={t('layout.notifications')}
               className="flex size-10 items-center justify-center rounded-xl border border-border bg-surface text-muted-foreground transition hover:text-foreground"

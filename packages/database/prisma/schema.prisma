@@ -189,6 +189,18 @@ enum CardScanResult {
   ACCESS_DENIED
 }
 
+enum SyncOutboxStatus {
+  PENDING
+  PROCESSING
+  SYNCED
+  FAILED
+}
+
+enum SyncOperation {
+  UPSERT
+  ARCHIVE
+}
+
 model User {
   id                     String                @id @default(cuid())
   email                  String                @unique
@@ -1014,4 +1026,41 @@ model AppSetting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+model SyncOutbox {
+  id             String           @id @default(cuid())
+  entityType     String
+  entityId       String
+  operation      SyncOperation    @default(UPSERT)
+  payloadVersion Int              @default(1)
+  payloadJson    String           @default("{}")
+  idempotencyKey String           @unique
+  status         SyncOutboxStatus @default(PENDING)
+  attemptCount   Int              @default(0)
+  nextAttemptAt  DateTime         @default(now())
+  lastAttemptAt  DateTime?
+  lastErrorCode  String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  syncedAt       DateTime?
+
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([entityType, entityId, createdAt])
+}
+
+model SyncLog {
+  id             String   @id @default(cuid())
+  outboxId       String?
+  entityType     String?
+  entityId       String?
+  operation      String?
+  result         String
+  attemptCount   Int      @default(0)
+  errorCode      String?
+  message        String?
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([result, createdAt])
 }

@@ -2,6 +2,7 @@ import { APP_ID, createApplicationConfig } from '@arava/config';
 import {
   ApplicationService,
   BackupService,
+  IntegrationService,
   closeDatabase,
   createDatabaseClient,
   initializeDatabase,
@@ -15,6 +16,7 @@ import { join } from 'node:path';
 import { registerIpcHandlers, removeIpcHandlers } from './ipc';
 import { CustomerDisplayManager } from './customer-display-manager';
 import { createMainWindow, getMainWindow } from './window';
+import { ElectronIntegrationCredentialStore, IntegrationManager } from './integration-manager';
 
 const config = createApplicationConfig({
   environment: app.isPackaged ? 'production' : 'development',
@@ -23,6 +25,7 @@ const config = createApplicationConfig({
 
 let database: DatabaseClient | undefined;
 let customerDisplay: CustomerDisplayManager | undefined;
+let integration: IntegrationManager | undefined;
 
 function configureLogging(): void {
   log.initialize();
@@ -45,6 +48,14 @@ async function bootstrap(): Promise<void> {
 
   await initializeDatabase(database);
   const service = new ApplicationService(database);
+  integration = new IntegrationManager(
+    new IntegrationService(
+      database,
+      service,
+      new ElectronIntegrationCredentialStore(app.getPath('userData')),
+    ),
+  );
+  await integration.initialize();
   const backups = new BackupService(database, service, {
     databasePath,
     defaultBackupDirectory: join(app.getPath('userData'), 'backups'),
@@ -54,7 +65,12 @@ async function bootstrap(): Promise<void> {
   if (automaticBackup) log.info('Automatic backup created', { file: automaticBackup.fileName });
   customerDisplay = new CustomerDisplayManager(database, service);
   await customerDisplay.initialize();
-  registerIpcHandlers(database, databasePath, { backup: backups, customerDisplay, service });
+  registerIpcHandlers(database, databasePath, {
+    backup: backups,
+    customerDisplay,
+    integration,
+    service,
+  });
   await customerDisplay.reopenIfEnabled();
   const mainWindow = createMainWindow();
   mainWindow.on('closed', () => customerDisplay?.closeForMainWindow());
@@ -71,6 +87,7 @@ async function bootstrap(): Promise<void> {
 async function shutdown(): Promise<void> {
   removeIpcHandlers();
   customerDisplay?.shutdown();
+  integration?.shutdown();
   if (database) await closeDatabase(database);
 }
 
@@ -92,6 +109,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('will-quit', () => {
+    app.releaseSingleInstanceLock();
     void shutdown().catch((error: unknown) => {
       log.error('Failed to close application services', error);
     });

@@ -168,6 +168,23 @@ describe('Sprint 4.2B attention center', () => {
     expect(payment.amount).toBe(4_000);
   });
 
+  it('shows serious integration failures only to OWNER', async () => {
+    await database.appSetting.createMany({
+      data: [
+        { key: 'integration.enabled', value: 'true' },
+        { key: 'integration.lastState', value: 'AUTH_ERROR' },
+      ],
+    });
+    const items = await attention.listItems(ownerToken);
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        category: 'INTEGRATION',
+        id: 'integration:AUTH_ERROR',
+        severity: 'CRITICAL',
+      }),
+    );
+  });
+
   it('flags only past incomplete attendance and preserves zero-PRESENT completion semantics', async () => {
     const { branch, coach, student } = await branchFoundation('Посещаемость');
     const group = await database.danceGroup.create({

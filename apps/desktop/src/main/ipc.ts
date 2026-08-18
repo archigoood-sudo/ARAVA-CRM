@@ -90,6 +90,7 @@ import { dirname, join } from 'node:path';
 import type { EnrollmentStatus } from '@prisma/client';
 import { z } from 'zod';
 import type { CustomerDisplayManager } from './customer-display-manager';
+import type { IntegrationManager } from './integration-manager';
 
 type IpcHandler = (...arguments_: unknown[]) => unknown;
 const coachEnrollmentStatuses = ['ACTIVE', 'TRIAL', 'FROZEN'] satisfies EnrollmentStatus[];
@@ -112,6 +113,13 @@ const customerDisplaySlideSchema = z.object({
   text: z.string().trim().max(500).optional(),
   title: z.string().trim().min(1).max(120),
 });
+const integrationSettingsSchema = z.object({
+  baseUrl: z.string().trim().max(500),
+  enabled: z.boolean(),
+});
+const integrationPairSchema = integrationSettingsSchema.extend({
+  pairingCode: z.string().trim().min(6).max(128),
+});
 
 export interface BackupIpcDependencies {
   backup?: BackupService;
@@ -121,6 +129,7 @@ export interface BackupIpcDependencies {
   openFolder?: (path: string) => Promise<void>;
   relaunch?: () => void;
   customerDisplay?: CustomerDisplayManager;
+  integration?: IntegrationManager;
 }
 
 export function createIpcHandlers(
@@ -145,6 +154,11 @@ export function createIpcHandlers(
       defaultBackupDirectory: join(dirname(databasePath), 'backups'),
       externalLogPath: join(dirname(databasePath), 'backup-restore.log'),
     });
+  const integration = backupDependencies.integration?.service;
+  const requireIntegration = () => {
+    if (!integration) throw new Error('Сервис интеграции не инициализирован.');
+    return integration;
+  };
   return {
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
@@ -203,6 +217,29 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         globalSearchQuerySchema.parse(unsafeQuery),
       ),
+
+    [IPC_CHANNELS.integrationGetStatus]: (unsafeToken) =>
+      requireIntegration().getStatus(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationUpdateSettings]: (unsafeToken, unsafeInput) =>
+      requireIntegration().updateSettings(
+        sessionTokenSchema.parse(unsafeToken),
+        integrationSettingsSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.integrationPair]: (unsafeToken, unsafeInput) =>
+      requireIntegration().pair(
+        sessionTokenSchema.parse(unsafeToken),
+        integrationPairSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.integrationTestConnection]: (unsafeToken) =>
+      requireIntegration().testConnection(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationSyncNow]: (unsafeToken) =>
+      requireIntegration().syncNow(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationListLog]: (unsafeToken) =>
+      requireIntegration().listLog(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationPrepareInitialSync]: (unsafeToken) =>
+      requireIntegration().prepareInitialSync(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationConfirmInitialSync]: (unsafeToken) =>
+      requireIntegration().confirmInitialSync(sessionTokenSchema.parse(unsafeToken)),
 
     [IPC_CHANNELS.cardList]: (unsafeToken, unsafeQuery) =>
       cards.listCards(
@@ -1183,9 +1220,41 @@ export function registerIpcHandlers(
   const service = dependencies.service ?? new ApplicationService(database);
   const handlers = createIpcHandlers(database, service, databasePath, dependencies);
   for (const [channel, handler] of Object.entries(handlers)) {
-    ipcMain.handle(channel, (_event, ...arguments_: unknown[]) => handler(...arguments_));
+    ipcMain.handle(channel, async (_event, ...arguments_: unknown[]) => {
+      const result = await handler(...arguments_);
+      if (SYNC_RELEVANT_MUTATIONS.has(channel)) dependencies.integration?.schedule();
+      return result;
+    });
   }
 }
+
+const SYNC_RELEVANT_MUTATIONS = new Set<string>([
+  IPC_CHANNELS.branchArchive,
+  IPC_CHANNELS.branchCreate,
+  IPC_CHANNELS.branchUpdate,
+  IPC_CHANNELS.enrollmentAdd,
+  IPC_CHANNELS.enrollmentRemove,
+  IPC_CHANNELS.groupArchive,
+  IPC_CHANNELS.groupCreate,
+  IPC_CHANNELS.groupUpdate,
+  IPC_CHANNELS.lessonCancel,
+  IPC_CHANNELS.lessonCopyDay,
+  IPC_CHANNELS.lessonCreate,
+  IPC_CHANNELS.lessonGenerate,
+  IPC_CHANNELS.lessonUpdate,
+  IPC_CHANNELS.roomArchive,
+  IPC_CHANNELS.roomCreate,
+  IPC_CHANNELS.roomUpdate,
+  IPC_CHANNELS.scheduleCreate,
+  IPC_CHANNELS.scheduleDeactivate,
+  IPC_CHANNELS.scheduleUpdate,
+  IPC_CHANNELS.studentArchive,
+  IPC_CHANNELS.studentCreate,
+  IPC_CHANNELS.studentUpdate,
+  IPC_CHANNELS.substitutionAssign,
+  IPC_CHANNELS.userCreate,
+  IPC_CHANNELS.userUpdate,
+]);
 
 export function removeIpcHandlers(): void {
   for (const channel of Object.values(IPC_CHANNELS)) ipcMain.removeHandler(channel);

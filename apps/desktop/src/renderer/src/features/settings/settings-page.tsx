@@ -23,6 +23,7 @@ import { useThemeStore, type ThemeMode } from '../../stores/theme-store';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { BackupSettings } from './backup-settings';
 import { CustomerDisplaySettings } from './customer-display-settings';
+import { IntegrationSettings } from './integration-settings';
 
 const settingsSchema = z.object({
   workspaceName: z.string().trim().min(2, t('validation.workspaceName')).max(80),
@@ -105,9 +106,10 @@ export function SettingsPage() {
   }, [reset, workspaceQuery.data]);
 
   useEffect(() => {
-    if (window.location.hash !== '#backups') return;
+    const target = window.location.hash;
+    if (target !== '#backups' && target !== '#integration') return;
     const frame = window.requestAnimationFrame(() =>
-      document.querySelector('#backups')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      document.querySelector(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
     );
     return () => window.cancelAnimationFrame(frame);
   }, []);
@@ -197,6 +199,7 @@ export function SettingsPage() {
 
         {user?.role === 'OWNER' ? <BackupSettings /> : null}
         {user?.role === 'OWNER' ? <CustomerDisplaySettings /> : null}
+        {user?.role === 'OWNER' ? <IntegrationSettings /> : null}
 
         <Card>
           <CardHeader>

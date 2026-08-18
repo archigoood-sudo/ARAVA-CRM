@@ -515,6 +515,56 @@ export class AttentionService {
           severity: failures >= 3 ? 'CRITICAL' : 'WARNING',
           title: 'Не удаётся создать автоматическую копию',
         });
+
+      const [integrationSettings, failedSync, oldestPending, pendingCount] = await Promise.all([
+        this.database.appSetting.findMany({ where: { key: { startsWith: 'integration.' } } }),
+        this.database.syncOutbox.count({ where: { status: 'FAILED' } }),
+        this.database.syncOutbox.findFirst({
+          orderBy: { createdAt: 'asc' },
+          select: { createdAt: true },
+          where: { status: { in: ['PENDING', 'PROCESSING'] } },
+        }),
+        this.database.syncOutbox.count({ where: { status: { in: ['PENDING', 'PROCESSING'] } } }),
+      ]);
+      const integrationSetting = new Map(integrationSettings.map(({ key, value }) => [key, value]));
+      if (integrationSetting.get('integration.enabled') === 'true') {
+        const state = integrationSetting.get('integration.lastState');
+        const oldestHours = oldestPending
+          ? (now.getTime() - oldestPending.createdAt.getTime()) / (60 * 60 * 1000)
+          : 0;
+        if (state === 'AUTH_ERROR' || state === 'VERSION_UNSUPPORTED')
+          add({
+            actionLabel: 'Открыть настройки интеграции',
+            actionRoute: '/settings#integration',
+            category: 'INTEGRATION',
+            description:
+              state === 'AUTH_ERROR'
+                ? 'Сервер отозвал доступ устройства. Требуется повторное подключение владельцем.'
+                : 'Сайт не поддерживает текущую версию API интеграции.',
+            entityId: 'integration-device',
+            entityType: 'Integration',
+            id: `integration:${state}`,
+            severity: 'CRITICAL',
+            title:
+              state === 'AUTH_ERROR'
+                ? 'Интеграция отключена сервером'
+                : 'Требуется обновление интеграции',
+          });
+        else if (failedSync >= 3 || pendingCount >= 100 || oldestHours >= 24)
+          add({
+            actionLabel: 'Открыть журнал синхронизации',
+            actionRoute: '/settings#integration',
+            category: 'INTEGRATION',
+            description: `Ожидают отправки: ${String(pendingCount)}. Ошибок: ${String(failedSync)}.`,
+            entityId: 'integration-queue',
+            entityType: 'Integration',
+            id: 'integration:queue-health',
+            occurredAt: oldestPending?.createdAt.toISOString(),
+            severity:
+              failedSync >= 10 || pendingCount >= 500 || oldestHours >= 72 ? 'CRITICAL' : 'WARNING',
+            title: 'Проблема синхронизации с сайтом',
+          });
+      }
     }
 
     const todayEnd = new Date(now);

@@ -211,6 +211,14 @@ export const IPC_CHANNELS = {
   groupList: 'group:list',
   groupUpdate: 'group:update',
   globalSearch: 'global-search:query',
+  integrationConfirmInitialSync: 'integration:confirm-initial-sync',
+  integrationGetStatus: 'integration:get-status',
+  integrationListLog: 'integration:list-log',
+  integrationPair: 'integration:pair',
+  integrationPrepareInitialSync: 'integration:prepare-initial-sync',
+  integrationSyncNow: 'integration:sync-now',
+  integrationTestConnection: 'integration:test-connection',
+  integrationUpdateSettings: 'integration:update-settings',
   enrollmentAdd: 'enrollment:add',
   enrollmentRemove: 'enrollment:remove',
   scheduleCreate: 'schedule:create',
@@ -1561,7 +1569,8 @@ export type AttentionCategory =
   | 'SCHEDULE'
   | 'ROOMS'
   | 'SUBSTITUTIONS'
-  | 'BACKUPS';
+  | 'BACKUPS'
+  | 'INTEGRATION';
 
 export type AttentionSeverity = 'INFO' | 'WARNING' | 'CRITICAL';
 
@@ -1739,6 +1748,61 @@ export interface BackupRestoreResult {
 
 export type SettingKey = 'appearance.theme' | 'general.workspaceName';
 
+export type IntegrationConnectionState =
+  | 'DISABLED'
+  | 'NOT_PAIRED'
+  | 'CONNECTED'
+  | 'OFFLINE'
+  | 'AUTH_ERROR'
+  | 'VERSION_UNSUPPORTED'
+  | 'PENDING_CHANGES';
+
+export interface IntegrationSettingsInput {
+  baseUrl: string;
+  enabled: boolean;
+}
+
+export interface IntegrationPairInput extends IntegrationSettingsInput {
+  pairingCode: string;
+}
+
+export interface IntegrationStatus {
+  baseUrl: string;
+  connectionState: IntegrationConnectionState;
+  deviceId: string;
+  enabled: boolean;
+  failedCount: number;
+  isPaired: boolean;
+  lastError?: string;
+  lastSuccessfulSync?: string;
+  pendingCount: number;
+  syncInProgress: boolean;
+}
+
+export interface IntegrationInitialSyncPreview {
+  branches: number;
+  groups: number;
+  lessons: number;
+  memberships: number;
+  rooms: number;
+  students: number;
+  trainers: number;
+  windowEndsAt: string;
+  windowStartsAt: string;
+}
+
+export interface IntegrationLogEntry {
+  attemptCount: number;
+  createdAt: string;
+  entityId?: string;
+  entityType?: string;
+  errorCode?: string;
+  id: string;
+  message?: string;
+  operation?: string;
+  result: string;
+}
+
 export interface SettingUpdate {
   key: SettingKey;
   value: string;
@@ -1764,6 +1828,16 @@ export interface AravaDesktopApi {
   };
   globalSearch: {
     query: (token: string, query: string) => Promise<GlobalSearchResult[]>;
+  };
+  integration: {
+    confirmInitialSync: (token: string) => Promise<IntegrationStatus>;
+    getStatus: (token: string) => Promise<IntegrationStatus>;
+    listLog: (token: string) => Promise<IntegrationLogEntry[]>;
+    pair: (token: string, input: IntegrationPairInput) => Promise<IntegrationStatus>;
+    prepareInitialSync: (token: string) => Promise<IntegrationInitialSyncPreview>;
+    syncNow: (token: string) => Promise<IntegrationStatus>;
+    testConnection: (token: string) => Promise<IntegrationStatus>;
+    updateSettings: (token: string, input: IntegrationSettingsInput) => Promise<IntegrationStatus>;
   };
   trainers: {
     getProfile: (token: string, id: string, month: string) => Promise<TrainerProfileOverview>;

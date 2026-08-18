@@ -28,6 +28,7 @@ import {
   HardDrive,
   IdCard,
   RefreshCw,
+  CloudCog,
   UserRoundCog,
   UsersRound,
 } from 'lucide-react';
@@ -49,6 +50,7 @@ const categories: { icon: typeof BellRing; label: string; value: AttentionCatego
   { icon: DoorClosed, label: 'Залы', value: 'ROOMS' },
   { icon: UserRoundCog, label: 'Замены', value: 'SUBSTITUTIONS' },
   { icon: HardDrive, label: 'Резервные копии', value: 'BACKUPS' },
+  { icon: CloudCog, label: 'Интеграция', value: 'INTEGRATION' },
 ];
 
 const severityLabels: Record<AttentionSeverity, string> = {

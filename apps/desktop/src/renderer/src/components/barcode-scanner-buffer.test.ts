@@ -21,6 +21,15 @@ describe('BarcodeScannerBuffer', () => {
     expect(buffer.complete(6)).toBeUndefined();
   });
 
+  it('tolerates one renderer pause inside an otherwise rapid scanner burst', () => {
+    const buffer = new BarcodeScannerBuffer();
+    const occurredAt = [0, 3, 6, 9, 12, 132, 135, 138, 141, 144];
+    for (const [index, timestamp] of occurredAt.entries()) {
+      buffer.append('0000001010'.charAt(index), timestamp);
+    }
+    expect(buffer.complete(6)).toBe('0000001010');
+  });
+
   it('resets after every completed and interrupted attempt', () => {
     const buffer = new BarcodeScannerBuffer();
     for (const barcode of ['0000001001', '0000001002', '0000001001']) {

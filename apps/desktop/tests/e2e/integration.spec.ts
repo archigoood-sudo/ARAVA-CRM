@@ -1,0 +1,162 @@
+import { _electron as electron, expect, test } from '@playwright/test';
+import type { AravaDesktopApi } from '@arava/shared';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { resolve } from 'node:path';
+
+async function requestBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk as Uint8Array));
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+}
+
+function respond(response: ServerResponse, value: unknown) {
+  response.writeHead(200, { 'Content-Type': 'application/json' });
+  response.end(JSON.stringify(value));
+}
+
+async function stopServer(server: ReturnType<typeof createServer>): Promise<void> {
+  if (!server.listening) return;
+  const closed = new Promise<void>((resolveClose, rejectClose) => {
+    server.close((error) => (error ? rejectClose(error) : resolveClose()));
+  });
+  server.closeAllConnections();
+  await closed;
+}
+
+test('OWNER подключает сайт, выполняет initial/offline sync и видит журнал', async ({
+  request: _request,
+}, testInfo) => {
+  test.setTimeout(process.env.CI ? 300_000 : 150_000);
+  let receivedOperations = 0;
+  const server = createServer(async (request, response) => {
+    const body = request.method === 'POST' ? await requestBody(request) : {};
+    if (request.url?.endsWith('/pair')) {
+      respond(response, { apiVersion: 'v1', deviceStatus: 'ACTIVE', deviceToken: 'e2e-token' });
+      return;
+    }
+    if (request.url?.endsWith('/health')) {
+      respond(response, {
+        apiVersion: 'v1',
+        deviceStatus: 'ACTIVE',
+        serverTimestamp: new Date().toISOString(),
+      });
+      return;
+    }
+    const operations = Array.isArray(body.operations) ? body.operations : [];
+    receivedOperations += operations.length;
+    respond(response, {
+      accepted: operations.map((operation) => {
+        const value = operation as Record<string, unknown>;
+        return {
+          entityId: value.entityId,
+          idempotencyKey: value.idempotencyKey,
+          version: value.version,
+        };
+      }),
+      apiVersion: 'v1',
+      serverTimestamp: new Date().toISOString(),
+    });
+  });
+  await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('mock server unavailable');
+  const serverUrl = `http://127.0.0.1:${String(address.port)}`;
+
+  const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
+  const userDataArgument = `--user-data-dir=${testInfo.outputPath('integration-user-data')}`;
+  const application = executablePath
+    ? await electron.launch({ args: [userDataArgument], executablePath })
+    : await electron.launch({
+        args: ['.', userDataArgument],
+        cwd: resolve(import.meta.dirname, '../..'),
+      });
+
+  try {
+    const page = await application.firstWindow();
+    await page.getByLabel('Электронная почта').fill('owner@arava.local');
+    await page.getByLabel('Пароль', { exact: true }).fill('Arava!ChangeMe1');
+    await page.getByRole('button', { name: 'Войти в рабочее пространство' }).click();
+    await page.getByLabel('Новый пароль', { exact: true }).fill('Owner!IntegrationE2E2026');
+    await page.getByLabel('Повторите новый пароль').fill('Owner!IntegrationE2E2026');
+    await page.getByRole('button', { name: 'Сохранить пароль и продолжить' }).click();
+    await page.getByRole('link', { name: 'Настройки' }).click();
+    await expect(page.getByText('Интеграция с сайтом', { exact: true })).toBeVisible();
+    await page.getByLabel('Адрес API сайта').fill(serverUrl);
+    await page.getByText('Включить интеграцию', { exact: true }).click();
+    await page.getByLabel('Код подключения').fill('123456');
+    await page.getByRole('button', { name: 'Подключить' }).click();
+    await expect(page.getByText('Устройство подключено к сайту.')).toBeVisible();
+    await page.getByRole('button', { name: 'Проверить соединение' }).click();
+    await expect(page.getByText('Соединение с сайтом установлено.')).toBeVisible();
+    await page.getByRole('button', { name: 'Первичная синхронизация' }).click();
+    await expect(page.getByText('Данные для первичной синхронизации')).toBeVisible();
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: 'Подтвердить первичную синхронизацию' }).click();
+    await expect(page.getByText('Первичная синхронизация поставлена в очередь.')).toBeVisible();
+
+    const pendingAfterLocalChange = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const token = persisted.state?.token ?? '';
+      await api.branches.create(token, { name: 'Интеграционный филиал' });
+      return (await api.integration.getStatus(token)).pendingCount;
+    });
+    expect(pendingAfterLocalChange).toBeGreaterThan(0);
+    await page.getByRole('button', { name: /Синхронизировать сейчас/u }).click();
+    await expect.poll(() => receivedOperations).toBeGreaterThan(0);
+    const finalStatus = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      return api.integration.getStatus(persisted.state?.token ?? '');
+    });
+    expect(finalStatus.pendingCount).toBe(0);
+
+    await stopServer(server);
+    const offlineResult = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const token = persisted.state?.token ?? '';
+      const branch = await api.branches.create(token, { name: 'Офлайн-филиал' });
+      try {
+        await api.integration.syncNow(token);
+      } catch {
+        // The local mutation must remain successful while the server is offline.
+      }
+      return {
+        branchExists: (await api.branches.list(token)).some(({ id }) => id === branch.id),
+        pending: (await api.integration.getStatus(token)).pendingCount,
+      };
+    });
+    expect(offlineResult.branchExists).toBe(true);
+    expect(offlineResult.pending).toBeGreaterThan(0);
+    await new Promise<void>((resolveListen) =>
+      server.listen(address.port, '127.0.0.1', resolveListen),
+    );
+    await page.getByRole('button', { name: /Синхронизировать сейчас/u }).click();
+    await expect
+      .poll(async () =>
+        page.evaluate(async () => {
+          const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+            state?: { token?: string };
+          };
+          const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+          return (await api.integration.getStatus(persisted.state?.token ?? '')).pendingCount;
+        }),
+      )
+      .toBe(0);
+    await page.getByRole('button', { name: 'Журнал синхронизации' }).click();
+    await expect(page.getByRole('cell', { name: 'Синхронизировано' }).first()).toBeVisible();
+  } finally {
+    await application.evaluate(({ app }) => {
+      setImmediate(() => app.quit());
+    });
+    await application.close();
+    await stopServer(server);
+  }
+});

@@ -12,6 +12,8 @@ External navigation is denied inside ARAVA and delegated to the operating system
 
 ## Persistence
 
+Website integration uses a transactional SQLite outbox, one isolated main-process worker and a versioned HTTPS API. Device identity and its encrypted credential live outside the database in Electron user data. React receives status and journal DTOs only; networking and secrets never enter the renderer. The server contract is documented in [integration-api-v1.md](./integration-api-v1.md).
+
 SQLite is stored in Electron's per-user data directory. Prisma provides the typed query layer. The checked-in Prisma migration is the schema source of truth for development and deployment tooling. Local passwords use salted scrypt hashes with a memory cost of 64 MiB; only opaque session tokens reach the renderer and only their SHA-256 digests are persisted.
 
 Packaged desktop software cannot assume that a Prisma CLI exists on an end user's machine, so startup also runs ordered, idempotently recorded SQL migrations through the Prisma connection. Every runtime migration has a stable identifier stored in `_AppMigration`. New schema changes must add both a Prisma migration and its equivalent runtime migration in the same change set.

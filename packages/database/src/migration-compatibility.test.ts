@@ -10,6 +10,7 @@ import {
   toSqliteUrl,
   type DatabaseClient,
 } from './index';
+import { runtimeMigrations } from './runtime-migrations';
 
 interface SqliteColumn {
   cid: bigint;
@@ -45,6 +46,10 @@ interface SqliteIndexStructure {
 interface SqliteName {
   name: string;
 }
+interface SqliteTrigger {
+  name: string;
+  sql: string;
+}
 
 function singleConnectionSqliteUrl(databasePath: string): string {
   return `${toSqliteUrl(databasePath)}?connection_limit=1`;
@@ -62,9 +67,8 @@ async function applyCheckedInMigrations(
     .sort();
   for (const directory of directories) {
     const sql = await readFile(join(migrationsPath, directory, 'migration.sql'), 'utf8');
-    for (const statement of sql
-      .split(';')
-      .map((value) => value.trim())
+    for (const statement of (sql.match(/\s*CREATE\s+TRIGGER[\s\S]*?END;|[^;]+;/giu) ?? [])
+      .map((value) => value.trim().replace(/;$/u, ''))
       .filter(Boolean)) {
       await database.$executeRawUnsafe(statement);
     }
@@ -120,6 +124,13 @@ async function structure(database: DatabaseClient) {
       indexes: indexStructures,
     };
   }
+  const triggers = await database.$queryRawUnsafe<SqliteTrigger[]>(
+    `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name`,
+  );
+  result.__triggers = triggers.map(({ name, sql }) => ({
+    name,
+    sql: sql.replaceAll(/\s+/gu, ' ').trim(),
+  }));
   return result;
 }
 
@@ -240,6 +251,7 @@ describe('Prisma and packaged runtime migration compatibility', () => {
       const upgraded = await database.user.findUniqueOrThrow({
         where: { id: 'legacy-manager' },
       });
+
       expect(upgraded).toMatchObject({
         email: 'legacy@arava.local',
         failedLoginAttempts: 0,
@@ -272,6 +284,63 @@ describe('Prisma and packaged runtime migration compatibility', () => {
       expect(await database.$queryRawUnsafe(`PRAGMA integrity_check`)).toEqual([
         { integrity_check: 'ok' },
       ]);
+    } finally {
+      await closeDatabase(database);
+    }
+  }, 30_000);
+
+  it('upgrades the current production schema in place and preserves operational and device settings data', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'arava-integration-upgrade-'));
+    directories.push(directory);
+    const database = createDatabaseClient(
+      singleConnectionSqliteUrl(join(directory, 'database.db')),
+    );
+    try {
+      await applyCheckedInMigrations(database, '20260811010000_sprint_4_2a');
+      await database.$executeRawUnsafe(
+        `CREATE TABLE "_AppMigration" (
+          "id" TEXT NOT NULL PRIMARY KEY,
+          "appliedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )`,
+      );
+      for (const { id } of runtimeMigrations.filter(
+        ({ id }) => id !== '20260818000000_sprint_4_4a',
+      )) {
+        await database.$executeRawUnsafe('INSERT INTO "_AppMigration" ("id") VALUES (?)', id);
+      }
+      await database.$executeRawUnsafe(
+        `INSERT INTO "Branch" (
+          "id", "name", "address", "phone", "isActive", "createdAt", "updatedAt"
+        ) VALUES (
+          'preserved-branch', 'Сохранённый филиал', '', '', true,
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )`,
+      );
+      await database.$executeRawUnsafe(
+        `INSERT INTO "Student" (
+          "id", "firstName", "lastName", "status", "branchId", "createdAt", "updatedAt"
+        ) VALUES (
+          'preserved-student', 'Ирина', 'Сохранённая', 'ACTIVE', 'preserved-branch',
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )`,
+      );
+      await database.$executeRawUnsafe(
+        `INSERT INTO "AppSetting" ("key", "value", "updatedAt")
+         VALUES ('customerDisplay.enabled', 'true', CURRENT_TIMESTAMP)`,
+      );
+      await initializeDatabase(database);
+      expect(
+        await database.student.findUnique({ where: { id: 'preserved-student' } }),
+      ).toMatchObject({ firstName: 'Ирина' });
+      expect(
+        await database.appSetting.findUnique({ where: { key: 'customerDisplay.enabled' } }),
+      ).toMatchObject({ value: 'true' });
+      expect(await database.syncOutbox.count()).toBe(0);
+      await database.branch.update({
+        data: { name: 'Обновлённый филиал' },
+        where: { id: 'preserved-branch' },
+      });
+      expect(await database.syncOutbox.count({ where: { entityId: 'preserved-branch' } })).toBe(1);
     } finally {
       await closeDatabase(database);
     }

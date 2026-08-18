@@ -11,6 +11,8 @@ import {
   initializeDatabase,
   INITIAL_OWNER_EMAIL,
   INITIAL_OWNER_PASSWORD,
+  IntegrationService,
+  type IntegrationCredentialStore,
   toSqliteUrl,
   type DatabaseClient,
 } from '@arava/database';
@@ -46,6 +48,25 @@ vi.mock('electron', () => ({
 
 import { createIpcHandlers } from './ipc';
 import type { CustomerDisplayManager } from './customer-display-manager';
+import type { IntegrationManager } from './integration-manager';
+
+class IpcTestCredentials implements IntegrationCredentialStore {
+  token: string | undefined;
+  clearToken() {
+    this.token = undefined;
+    return Promise.resolve();
+  }
+  getDeviceId() {
+    return Promise.resolve('6b1a6fe4-329b-428d-adfc-282325257ba4');
+  }
+  getToken() {
+    return Promise.resolve(this.token);
+  }
+  saveToken(token: string) {
+    this.token = token;
+    return Promise.resolve();
+  }
+}
 
 describe('Electron IPC boundary', () => {
   let database: DatabaseClient;
@@ -73,6 +94,52 @@ describe('Electron IPC boundary', () => {
     })) as AuthSession;
     expect(session.user.role).toBe('OWNER');
     expect(session.user).not.toHaveProperty('passwordHash');
+  });
+
+  it('keeps integration IPC OWNER-only and never returns device credentials', async () => {
+    const initial = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(initial.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!IntegrationIpc2026',
+    });
+    const branch = await service.createBranch(initial.token, { name: 'IPC' });
+    await service.createUser(initial.token, {
+      branchIds: [branch.id],
+      email: 'integration-admin@arava.local',
+      fullName: 'Администратор',
+      password: 'Admin!IntegrationIpc2026',
+      role: 'ADMIN',
+    });
+    const admin = await service.login({
+      email: 'integration-admin@arava.local',
+      password: 'Admin!IntegrationIpc2026',
+    });
+    await service.changePassword(admin.token, {
+      currentPassword: 'Admin!IntegrationIpc2026',
+      newPassword: 'Admin!ChangedIpc2026',
+    });
+    const credentials = new IpcTestCredentials();
+    credentials.token = 'never-return-this-secret';
+    const integrationService = new IntegrationService(database, service, credentials);
+    const integration = {
+      schedule: vi.fn(),
+      service: integrationService,
+    } as unknown as IntegrationManager;
+    const handlers = createIpcHandlers(database, service, '/test/arava.db', { integration });
+    const ownerStatus = await handlers[IPC_CHANNELS.integrationGetStatus]?.(initial.token);
+    expect(JSON.stringify(ownerStatus)).not.toContain(credentials.token);
+    await expect(handlers[IPC_CHANNELS.integrationGetStatus]?.(admin.token)).rejects.toThrow(
+      'только владелец',
+    );
+    await expect(
+      handlers[IPC_CHANNELS.integrationUpdateSettings]?.(initial.token, {
+        baseUrl: 'file:///tmp/arava',
+        enabled: true,
+      }),
+    ).rejects.toThrow('только HTTPS');
   });
 
   it('validates secure user, session, and owner recovery IPC operations', async () => {

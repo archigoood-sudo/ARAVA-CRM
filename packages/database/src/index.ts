@@ -113,6 +113,16 @@ export { CardService } from './card-service';
 export { GlobalSearchService } from './global-search-service';
 export { StudentProfileService } from './student-profile-service';
 export { TrainerProfileService } from './trainer-profile-service';
+export {
+  IntegrationApiClient,
+  IntegrationService,
+  INTEGRATION_API_VERSION,
+  validateIntegrationBaseUrl,
+  type IntegrationCredentialStore,
+  type IntegrationFetch,
+  type SyncEntityEnvelope,
+  type SyncEntityType,
+} from './integration-service';
 export { CustomerDisplayService, CUSTOMER_DISPLAY_DEFAULTS } from './customer-display-service';
 export { AttentionService } from './attention-service';
 export { BackupService, type BackupServiceOptions } from './backup-service';
