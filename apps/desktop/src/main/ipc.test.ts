@@ -809,7 +809,7 @@ describe('Electron IPC boundary', () => {
       newPassword: 'Owner!PublicationIpc2026',
     });
     const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'));
-    await expect(
+    expect(() =>
       handlers[IPC_CHANNELS.publicationCreate]?.(owner.token, {
         audienceMode: 'ALL_CLIENTS',
         body: '',
@@ -817,7 +817,7 @@ describe('Electron IPC boundary', () => {
         title: '',
         type: 'NEWS',
       }),
-    ).rejects.toThrow();
+    ).toThrow();
     const draft = (await handlers[IPC_CHANNELS.publicationCreate]?.(owner.token, {
       audienceMode: 'ALL_CLIENTS',
       body: 'Безопасный текст',
