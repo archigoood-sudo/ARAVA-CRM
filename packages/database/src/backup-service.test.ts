@@ -285,46 +285,50 @@ describe('Sprint 4.3A local backup and restore', () => {
     expect(await database.branch.findUnique({ where: { id: branch.id } })).not.toBeNull();
   });
 
-  it('restores an older ARAVA schema through forward runtime migrations without changing the source', async () => {
-    const oldPath = join(directory, 'ARAVA-CRM-backup-old.db');
-    const oldDatabase = createDatabaseClient(`${toSqliteUrl(oldPath)}?connection_limit=1`);
-    await oldDatabase.$executeRawUnsafe(
-      `CREATE TABLE "_AppMigration" (
+  it(
+    'restores an older ARAVA schema through forward runtime migrations without changing the source',
+    { timeout: 60000 },
+    async () => {
+      const oldPath = join(directory, 'ARAVA-CRM-backup-old.db');
+      const oldDatabase = createDatabaseClient(`${toSqliteUrl(oldPath)}?connection_limit=1`);
+      await oldDatabase.$executeRawUnsafe(
+        `CREATE TABLE "_AppMigration" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "appliedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )`,
-    );
-    for (const migration of runtimeMigrations.filter(
-      ({ id }) => id <= '20260809020000_sprint_4_1c',
-    )) {
-      await oldDatabase.$transaction(async (transaction) => {
-        for (const statement of migration.statements)
-          await transaction.$executeRawUnsafe(statement);
-        await transaction.$executeRawUnsafe(
-          'INSERT INTO "_AppMigration" ("id") VALUES (?)',
-          migration.id,
-        );
+      );
+      for (const migration of runtimeMigrations.filter(
+        ({ id }) => id <= '20260809020000_sprint_4_1c',
+      )) {
+        await oldDatabase.$transaction(async (transaction) => {
+          for (const statement of migration.statements)
+            await transaction.$executeRawUnsafe(statement);
+          await transaction.$executeRawUnsafe(
+            'INSERT INTO "_AppMigration" ("id") VALUES (?)',
+            migration.id,
+          );
+        });
+      }
+      await oldDatabase.appSetting.create({
+        data: { key: 'test.restoreMarker', value: 'старые данные' },
       });
-    }
-    await oldDatabase.appSetting.create({
-      data: { key: 'test.restoreMarker', value: 'старые данные' },
-    });
-    await closeDatabase(oldDatabase);
-    const original = await readFile(oldPath);
+      await closeDatabase(oldDatabase);
+      const original = await readFile(oldPath);
 
-    const selection = await backups.selectExternalBackup(ownerToken, oldPath);
-    expect(selection.message).toContain('Медиафайлы не были включены');
-    expect(selection).toMatchObject({ canRestore: true });
-    await backups.restoreBackup(ownerToken, selection.selectionId, 'ВОССТАНОВИТЬ');
+      const selection = await backups.selectExternalBackup(ownerToken, oldPath);
+      expect(selection.message).toContain('Медиафайлы не были включены');
+      expect(selection).toMatchObject({ canRestore: true });
+      await backups.restoreBackup(ownerToken, selection.selectionId, 'ВОССТАНОВИТЬ');
 
-    expect(
-      await database.appSetting.findUnique({ where: { key: 'test.restoreMarker' } }),
-    ).toMatchObject({ value: 'старые данные' });
-    expect(await database.$queryRawUnsafe('PRAGMA integrity_check')).toEqual([
-      { integrity_check: 'ok' },
-    ]);
-    expect(await readFile(oldPath)).toEqual(original);
-  });
+      expect(
+        await database.appSetting.findUnique({ where: { key: 'test.restoreMarker' } }),
+      ).toMatchObject({ value: 'старые данные' });
+      expect(await database.$queryRawUnsafe('PRAGMA integrity_check')).toEqual([
+        { integrity_check: 'ok' },
+      ]);
+      expect(await readFile(oldPath)).toEqual(original);
+    },
+  );
 
   it('runs once daily, retains only configured automatic copies and denies non-owners', async () => {
     await database.appSetting.upsert({

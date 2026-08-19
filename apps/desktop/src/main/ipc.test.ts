@@ -144,6 +144,55 @@ describe('Electron IPC boundary', () => {
         enabled: true,
       }),
     ).rejects.toThrow('только HTTPS');
+
+    await expect(
+      handlers[IPC_CHANNELS.integrationRenameDevice]?.(admin.token, 'foreign-device', {
+        displayName: 'Попытка переименовать',
+      }),
+    ).rejects.toThrow('только владелец');
+  });
+
+  it('renames integration devices through OWNER-only IPC handler', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!IntegrationRenameIpc2026',
+    });
+    const renameDevice = vi.fn().mockResolvedValue({
+      connectionState: 'CONNECTED',
+      connectionError: undefined,
+      conflictCount: 0,
+      devices: [],
+      enabled: false,
+      failedCount: 0,
+      isPaired: false,
+      lastSuccessfulSync: null,
+      pendingCount: 0,
+      deviceId: 'rename-origin',
+      baseUrl: 'https://local.integration',
+    });
+    const integration = {
+      service: {
+        renameDevice,
+      } as Pick<IntegrationService, 'renameDevice'>,
+    } as unknown as IntegrationManager;
+    const handlers = createIpcHandlers(database, service, '/test/arava.db', { integration });
+    await expect(
+      handlers[IPC_CHANNELS.integrationRenameDevice]?.(owner.token, 'rename-from-ipc', {
+        deviceId: 'rename-from-ipc',
+        displayName: 'Ресепшен',
+      }),
+    ).resolves.toBeDefined();
+    expect(renameDevice).toHaveBeenCalledWith(
+      owner.token,
+      expect.objectContaining({
+        deviceId: 'rename-from-ipc',
+        displayName: 'Ресепшен',
+      }),
+    );
   });
 
   it('returns application version and build metadata from system information', async () => {

@@ -222,6 +222,7 @@ export const IPC_CHANNELS = {
   integrationListLog: 'integration:list-log',
   integrationPair: 'integration:pair',
   integrationPrepareInitialSync: 'integration:prepare-initial-sync',
+  integrationRenameDevice: 'integration:rename-device',
   integrationSyncNow: 'integration:sync-now',
   integrationTestConnection: 'integration:test-connection',
   integrationUpdateSettings: 'integration:update-settings',
@@ -1790,6 +1791,11 @@ export interface IntegrationPairInput extends IntegrationSettingsInput {
   pairingCode: string;
 }
 
+export interface IntegrationDeviceRenameInput {
+  deviceId: string;
+  displayName: string;
+}
+
 export interface IntegrationStatus {
   baseUrl: string;
   connectionState: IntegrationConnectionState;
@@ -1817,6 +1823,7 @@ export interface IntegrationDeviceSummary {
   lastSeenAt?: string;
   name?: string;
   pendingCount: number;
+  displayName?: string;
   status: 'ACTIVE' | 'REVOKED';
 }
 
@@ -1974,6 +1981,11 @@ export interface AravaDesktopApi {
     listLog: (token: string) => Promise<IntegrationLogEntry[]>;
     pair: (token: string, input: IntegrationPairInput) => Promise<IntegrationStatus>;
     prepareInitialSync: (token: string) => Promise<IntegrationInitialSyncPreview>;
+    renameDevice: (
+      token: string,
+      deviceId: string,
+      input: IntegrationDeviceRenameInput,
+    ) => Promise<IntegrationStatus>;
     syncNow: (token: string) => Promise<IntegrationStatus>;
     testConnection: (token: string) => Promise<IntegrationStatus>;
     updateSettings: (token: string, input: IntegrationSettingsInput) => Promise<IntegrationStatus>;

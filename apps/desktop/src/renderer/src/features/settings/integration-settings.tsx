@@ -7,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
   Checkbox,
+  Dialog,
   Input,
   Label,
   Table,
@@ -17,7 +18,7 @@ import {
   TableRow,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Cable, CloudCog, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Cable, CloudCog, Pencil, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -83,6 +84,8 @@ export function IntegrationSettings() {
   const [pairingCode, setPairingCode] = useState('');
   const [notice, setNotice] = useState<string>();
   const [showLog, setShowLog] = useState(false);
+  const [editingDeviceId, setEditingDeviceId] = useState<string>();
+  const [editingDisplayName, setEditingDisplayName] = useState('');
   const status = useQuery({
     queryFn: () => getDesktopApi().integration.getStatus(getSessionToken()),
     queryKey: queryKeys.integrationStatus,
@@ -112,6 +115,7 @@ export function IntegrationSettings() {
       queryClient.invalidateQueries({ queryKey: ['attention'] }),
     ]);
   };
+
   const action = useMutation({
     mutationFn: async (kind: 'save' | 'pair' | 'test' | 'sync' | 'initial') => {
       if (kind === 'save')
@@ -144,9 +148,41 @@ export function IntegrationSettings() {
     },
   });
 
+  const rename = useMutation({
+    mutationFn: () =>
+      getDesktopApi().integration.renameDevice(getSessionToken(), editingDeviceId ?? '', {
+        deviceId: editingDeviceId ?? '',
+        displayName: editingDisplayName.trim(),
+      }),
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: async () => {
+      setNotice('Имя устройства обновлено.');
+      setEditingDeviceId(undefined);
+      setEditingDisplayName('');
+      await refresh();
+    },
+  });
+
   const prepare = async () => {
     setNotice(undefined);
     await preview.refetch();
+  };
+
+  const formatShortDeviceId = (deviceId: string) => {
+    if (deviceId.length <= 18) return deviceId;
+    return `${deviceId.slice(0, 8)}…${deviceId.slice(-4)}`;
+  };
+
+  const startRename = (deviceId: string, currentName: string) => {
+    setEditingDeviceId(deviceId);
+    setEditingDisplayName(currentName);
+    setNotice(undefined);
+  };
+
+  const stopRename = () => {
+    setEditingDeviceId(undefined);
+    setEditingDisplayName('');
+    setNotice(undefined);
   };
 
   return (
@@ -230,25 +266,91 @@ export function IntegrationSettings() {
                   <TableHead>Отправлено</TableHead>
                   <TableHead>Ожидает</TableHead>
                   <TableHead>Конфликты</TableHead>
+                  <TableHead>Действия</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {status.data.devices.map((device) => (
                   <TableRow key={device.deviceId}>
                     <TableCell>
-                      <p className="font-medium">{device.name ?? 'Устройство CRM'}</p>
-                      <p className="font-mono text-xs text-muted-foreground">{device.deviceId}</p>
+                      <p className="font-medium text-lg">
+                        {device.displayName ?? device.name ?? 'Устройство CRM'}
+                      </p>
+                      <p className="font-mono text-xs text-muted-foreground">
+                        ID: {formatShortDeviceId(device.deviceId)}
+                      </p>
                     </TableCell>
                     <TableCell>{dateTime(device.lastInboundSyncAt)}</TableCell>
                     <TableCell>{dateTime(device.lastOutboundSyncAt)}</TableCell>
                     <TableCell>{device.pendingCount}</TableCell>
                     <TableCell>{device.conflictCount}</TableCell>
+                    <TableCell>
+                      <Button
+                        onClick={() =>
+                          startRename(
+                            device.deviceId,
+                            device.displayName ?? device.name ?? 'Устройство CRM',
+                          )
+                        }
+                        size="small"
+                        variant="outline"
+                      >
+                        <Pencil className="mr-2 size-4" />
+                        Переименовать устройство
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </div>
         ) : null}
+
+        <Dialog
+          closeLabel="Закрыть"
+          description="Введите имя для отображения этого устройства."
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => stopRename()} variant="outline">
+                Отмена
+              </Button>
+              <Button
+                disabled={
+                  rename.isPending ||
+                  !editingDeviceId ||
+                  !editingDisplayName.trim() ||
+                  editingDisplayName.trim().length > 64
+                }
+                onClick={() => rename.mutate()}
+              >
+                Сохранить
+              </Button>
+            </div>
+          }
+          onClose={stopRename}
+          open={Boolean(editingDeviceId)}
+          title="Переименовать устройство"
+        >
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Новый человекочитаемый текст будет показываться в списке устройств на всех CRM после
+              синхронизации.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="device-display-name">Новое имя</Label>
+              <Input
+                aria-label="Новое имя устройства"
+                id="device-display-name"
+                maxLength={64}
+                onChange={(event) => setEditingDisplayName(event.target.value)}
+                placeholder="Например: Ресепшен"
+                value={editingDisplayName}
+              />
+            </div>
+          </div>
+        </Dialog>
+
+        {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
 
         {!status.data?.isPaired ? (
           <div className="rounded-2xl border border-border p-5">
@@ -321,61 +423,49 @@ export function IntegrationSettings() {
                 первичной синхронизацией.
               </p>
             ) : null}
-            <Button
-              className="mt-4"
-              disabled={action.isPending || !status.data?.isPaired}
-              onClick={() => {
-                if (window.confirm('Поставить выбранные данные в очередь первичной синхронизации?'))
-                  action.mutate('initial');
-              }}
-            >
+            <Button className="mt-4" onClick={() => action.mutate('initial')} variant="outline">
               Подтвердить первичную синхронизацию
             </Button>
           </div>
         ) : null}
 
-        {notice || status.data?.lastError ? (
-          <p className="rounded-xl bg-muted px-4 py-3 text-sm">
-            {notice ?? status.data?.lastError}
-          </p>
-        ) : null}
-
-        {showLog ? (
-          <div className="overflow-hidden rounded-2xl border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Время</TableHead>
-                  <TableHead>Объект</TableHead>
-                  <TableHead>Результат</TableHead>
-                  <TableHead>Попытка</TableHead>
-                  <TableHead>Сообщение</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(log.data ?? []).map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell>{dateTime(entry.createdAt)}</TableCell>
-                    <TableCell>
-                      {entry.entityType
-                        ? (entityLabels[entry.entityType] ?? 'Объект')
-                        : entry.operation === 'HEALTH'
-                          ? 'Проверка соединения'
-                          : entry.operation === 'PAIR'
-                            ? 'Подключение устройства'
-                            : entry.operation === 'INITIAL_SYNC'
-                              ? 'Первичная синхронизация'
-                              : 'Система'}
-                    </TableCell>
-                    <TableCell>{resultLabels[entry.result] ?? 'Неизвестный результат'}</TableCell>
-                    <TableCell>{entry.attemptCount}</TableCell>
-                    <TableCell className="max-w-xs truncate">
-                      {entry.message ?? entry.errorCode ?? '—'}
-                    </TableCell>
+        {log.data?.length ? (
+          <div className="space-y-3">
+            <h3 className="font-semibold">Журнал событий</h3>
+            <div className="overflow-hidden rounded-2xl border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Дата</TableHead>
+                    <TableHead>Операция</TableHead>
+                    <TableHead>Результат</TableHead>
+                    <TableHead>Детали</TableHead>
+                    <TableHead>Сущность</TableHead>
+                    <TableHead>Кол-во</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {log.data.map((entry) => {
+                    const resultLabel = resultLabels[entry.result] ?? entry.result;
+                    const entityType = entry.entityType ?? 'общая';
+                    const operationLabel =
+                      entityLabels[entityType] ?? `${entityType}: ${entry.entityId ?? ''}`;
+                    return (
+                      <TableRow key={entry.id}>
+                        <TableCell>{dateTime(entry.createdAt)}</TableCell>
+                        <TableCell>{entry.operation}</TableCell>
+                        <TableCell>{resultLabel}</TableCell>
+                        <TableCell className="max-w-xs truncate" title={entry.message ?? ''}>
+                          {entry.message}
+                        </TableCell>
+                        <TableCell>{operationLabel}</TableCell>
+                        <TableCell>{entry.attemptCount}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         ) : null}
       </CardContent>

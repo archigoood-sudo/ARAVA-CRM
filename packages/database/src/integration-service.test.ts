@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -68,6 +68,7 @@ describe('Sprint 4.5A multi-device integration', () => {
     }
   >;
   let changes: Record<string, unknown>[];
+  let deviceList: Record<string, unknown>[];
   let database: DatabaseClient;
   let directory: string;
   let integration: IntegrationService;
@@ -95,12 +96,20 @@ describe('Sprint 4.5A multi-device integration', () => {
     credentials = new MemoryCredentials();
     canonical = new Map();
     changes = [];
+    deviceList = [];
     mode = 'SUCCESS';
     now = new Date('2030-08-18T10:00:00.000Z');
     received = [];
     server = createServer(async (request, response) => {
-      const requestBody = request.method === 'POST' ? await body(request) : {};
-      received.push({ headers: request.headers, path: request.url, ...requestBody });
+      const methodWithBody =
+        request.method === 'POST' || request.method === 'PATCH' || request.method === 'PUT';
+      const requestBody = methodWithBody ? await body(request) : {};
+      received.push({
+        headers: request.headers,
+        method: request.method,
+        path: request.url,
+        ...requestBody,
+      });
       if (request.url?.endsWith('/pair')) {
         json(response, 200, {
           apiVersion: 'v1',
@@ -162,7 +171,34 @@ describe('Sprint 4.5A multi-device integration', () => {
         return;
       }
       if (request.url?.endsWith('/devices')) {
-        json(response, 200, { apiVersion: 'v1', devices: [] });
+        json(response, 200, { apiVersion: 'v1', devices: deviceList });
+        return;
+      }
+      if (request.method === 'PATCH' && request.url?.startsWith('/api/integration/v1/devices/')) {
+        const [path] = request.url.replace(/^\/api\/integration\/v1\/devices\//u, '').split('?');
+        const targetDeviceId = decodeURIComponent(path ?? '');
+        const displayName =
+          typeof requestBody.displayName === 'string' ? requestBody.displayName : undefined;
+        if (targetDeviceId) {
+          const existing = deviceList.find((device) => device.deviceId === targetDeviceId);
+          if (existing && displayName && !existing.displayName) {
+            existing.displayName = displayName;
+          } else if (displayName) {
+            if (existing) {
+              existing.displayName = displayName;
+            } else {
+              deviceList.push({
+                conflictCount: 0,
+                deviceId: targetDeviceId,
+                displayName,
+                lastInboundCursor: 0,
+                pendingCount: 0,
+                status: 'ACTIVE',
+              });
+            }
+          }
+        }
+        json(response, 200, { apiVersion: 'v1' });
         return;
       }
       const operations = Array.isArray(requestBody.operations) ? requestBody.operations : [];
@@ -319,6 +355,65 @@ describe('Sprint 4.5A multi-device integration', () => {
       'x-arava-api-version': 'v1',
       'x-arava-device-id': credentials.deviceId,
     });
+  });
+
+  it('sends default display name on pair and allows renaming connected devices', async () => {
+    await pair();
+    const pairRequest = received.find((entry) => entry.path === '/api/integration/v1/pair');
+    expect(pairRequest?.displayName).toBe(hostname().trim() || 'Устройство CRM');
+
+    const targetDeviceId = credentials.deviceId;
+    deviceList = [
+      {
+        conflictCount: 0,
+        deviceId: targetDeviceId,
+        displayName: hostname().trim() || 'Устройство CRM',
+        lastInboundCursor: 0,
+        pendingCount: 0,
+        status: 'ACTIVE',
+      },
+    ];
+    const statusBeforeRename = await integration.getStatus(ownerToken);
+    const targetBefore = statusBeforeRename.devices.find(
+      (device) => device.deviceId === targetDeviceId,
+    );
+    expect(targetBefore?.displayName).toBe(hostname().trim() || 'Устройство CRM');
+
+    await integration.renameDevice(ownerToken, {
+      deviceId: targetDeviceId,
+      displayName: 'Ресепшен',
+    });
+    const patched = received.find((entry) => entry.method === 'PATCH');
+    expect(patched).toMatchObject({
+      method: 'PATCH',
+      path: `/api/integration/v1/devices/${encodeURIComponent(targetDeviceId)}`,
+    });
+    expect(patched?.displayName).toBe('Ресепшен');
+
+    const statusAfterRename = await integration.getStatus(ownerToken);
+    const targetAfter = statusAfterRename.devices.find(
+      (device) => device.deviceId === targetDeviceId,
+    );
+    expect(targetAfter?.displayName).toBe('Ресепшен');
+  });
+
+  it('falls back to server-provided legacy name when display name is not set', async () => {
+    await pair();
+    const targetDeviceId = credentials.deviceId;
+    deviceList = [
+      {
+        conflictCount: 0,
+        deviceId: targetDeviceId,
+        lastInboundCursor: 0,
+        name: 'Старый сервер',
+        pendingCount: 0,
+        status: 'ACTIVE',
+      },
+    ];
+    const status = await integration.getStatus(ownerToken);
+    const device = status.devices.find((item) => item.deviceId === targetDeviceId);
+    expect(device?.displayName).toBeUndefined();
+    expect(device?.name).toBe('Старый сервер');
   });
 
   it('rolls back the outbox marker when the local entity transaction rolls back', async () => {

@@ -129,6 +129,10 @@ const integrationSettingsSchema = z.object({
 const integrationPairSchema = integrationSettingsSchema.extend({
   pairingCode: z.string().trim().min(6).max(128),
 });
+const integrationRenameSchema = z.object({
+  deviceId: z.string().trim().min(1),
+  displayName: z.string().trim().min(1).max(64),
+});
 
 export interface BackupIpcDependencies {
   backup?: BackupService;
@@ -346,6 +350,14 @@ export function createIpcHandlers(
       requireIntegration().pair(
         sessionTokenSchema.parse(unsafeToken),
         integrationPairSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.integrationRenameDevice]: (unsafeToken, unsafeId, unsafeInput) =>
+      requireIntegration().renameDevice(
+        sessionTokenSchema.parse(unsafeToken),
+        integrationRenameSchema.parse({
+          ...(typeof unsafeInput === 'object' && unsafeInput ? unsafeInput : {}),
+          deviceId: String(unsafeId),
+        }),
       ),
     [IPC_CHANNELS.integrationTestConnection]: (unsafeToken) =>
       requireIntegration().testConnection(sessionTokenSchema.parse(unsafeToken)),

@@ -8,6 +8,7 @@ import type {
   IntegrationDeviceSummary,
   IntegrationLogEntry,
   IntegrationPairInput,
+  IntegrationDeviceRenameInput,
   IntegrationSettingsInput,
   IntegrationStatus,
 } from '@arava/shared';
@@ -64,6 +65,32 @@ export interface CrmChatRequestContext {
   name: string;
   role: 'OWNER' | 'ADMIN' | 'COACH';
   userId: string;
+}
+
+function sanitizeDisplayName(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new DomainError('VALIDATION', 'Укажите имя устройства.');
+  if (trimmed.length > 64)
+    throw new DomainError('VALIDATION', 'Имя устройства не может быть длиннее 64 символов.');
+  if (/[<>]/u.test(trimmed) || /[\r\n\t]/u.test(trimmed)) {
+    throw new DomainError('VALIDATION', 'Имя устройства должно быть обычным текстом.');
+  }
+  const containsControlCharacter = (() => {
+    for (const character of trimmed) {
+      const code = character.codePointAt(0);
+      if (code !== undefined && (code < 0x20 || code === 0x7f)) return true;
+    }
+    return false;
+  })();
+  if (containsControlCharacter) {
+    throw new DomainError('VALIDATION', 'Имя устройства должно быть обычным текстом.');
+  }
+  return trimmed;
+}
+
+function initialDisplayNameFromHost(): string {
+  const currentHost = hostname().trim();
+  return currentHost || 'Устройство CRM';
 }
 
 export interface IntegrationCredentialStore {
@@ -362,7 +389,7 @@ export class IntegrationApiClient {
     path: string,
     deviceId: string,
     token: string | undefined,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'PATCH' | 'POST',
     body?: unknown,
     context?: CrmChatRequestContext,
   ): Promise<unknown> {
@@ -415,11 +442,17 @@ export class IntegrationApiClient {
     }
   }
 
-  async pair(baseUrl: string, deviceId: string, pairingCode: string): Promise<string> {
+  async pair(
+    baseUrl: string,
+    deviceId: string,
+    pairingCode: string,
+    displayName?: string,
+  ): Promise<string> {
     const payload = await this.request(baseUrl, 'pair', deviceId, undefined, 'POST', {
       apiVersion: INTEGRATION_API_VERSION,
       deviceId,
       pairingCode,
+      ...(displayName ? { displayName } : {}),
     });
     if (!isRecord(payload) || payload.apiVersion !== INTEGRATION_API_VERSION) {
       throw new IntegrationApiError(
@@ -582,12 +615,29 @@ export class IntegrationApiClient {
             ? { lastOutboundSyncAt: entry.lastOutboundSyncAt }
             : {}),
           ...(typeof entry.lastSeenAt === 'string' ? { lastSeenAt: entry.lastSeenAt } : {}),
+          ...(typeof entry.displayName === 'string' ? { displayName: entry.displayName } : {}),
           ...(typeof entry.name === 'string' ? { name: entry.name } : {}),
           pendingCount: entry.pendingCount,
           status: entry.status,
         },
       ];
     });
+  }
+
+  async renameDevice(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    input: Pick<IntegrationDeviceRenameInput, 'displayName'>,
+  ): Promise<void> {
+    await this.request(
+      baseUrl,
+      `devices/${encodeURIComponent(deviceId)}`,
+      deviceId,
+      token,
+      'PATCH',
+      input,
+    );
   }
 
   async uploadPublicationMedia(
@@ -1005,7 +1055,12 @@ export class IntegrationService {
     }
     const deviceId = await this.credentials.getDeviceId();
     try {
-      const deviceToken = await this.api.pair(baseUrl, deviceId, pairingCode);
+      const deviceToken = await this.api.pair(
+        baseUrl,
+        deviceId,
+        pairingCode,
+        initialDisplayNameFromHost(),
+      );
       await this.credentials.saveToken(deviceToken);
       await this.database.$transaction([
         this.database.appSetting.upsert({
@@ -1031,6 +1086,27 @@ export class IntegrationService {
       await this.recordConnectionError(error);
       throw error;
     }
+  }
+
+  async renameDevice(
+    token: string,
+    input: IntegrationDeviceRenameInput,
+  ): Promise<IntegrationStatus> {
+    await this.assertOwner(token);
+    const displayName = sanitizeDisplayName(input.displayName);
+    const [baseUrl, tokenValue, enabledValue] = await Promise.all([
+      this.setting(SETTINGS.baseUrl),
+      this.credentials.getToken(),
+      this.setting(SETTINGS.enabled),
+    ]);
+    if (enabledValue !== 'true' || !baseUrl || !tokenValue) {
+      throw new DomainError(
+        'VALIDATION',
+        'Сначала подключите CRM к сайту в настройках интеграции.',
+      );
+    }
+    await this.api.renameDevice(baseUrl, input.deviceId, tokenValue, { displayName });
+    return this.systemStatus();
   }
 
   async testConnection(token: string): Promise<IntegrationStatus> {
