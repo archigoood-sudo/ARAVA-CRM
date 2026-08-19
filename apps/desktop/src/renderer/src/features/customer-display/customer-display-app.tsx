@@ -12,10 +12,13 @@ const statusLabels: Record<
 };
 
 function PromoSlide({ slide }: { slide: CustomerDisplaySlide | undefined }) {
-  if (!slide)
+  if (!slide) {
     return (
-      <div className="flex h-full flex-col items-center justify-center text-center">
-        <div className="mb-8 flex size-28 items-center justify-center rounded-[2rem] bg-[#155EEF] text-6xl font-black text-white shadow-2xl shadow-blue-900/20">
+      <div
+        data-testid="promo-slide"
+        className="flex h-full w-full flex-col items-center justify-center bg-[#f6f2ea] text-center"
+      >
+        <div className="mb-8 flex size-28 items-center justify-center bg-[#155EEF] text-6xl font-black text-white">
           A
         </div>
         <h1 className="text-[clamp(4rem,10vw,9rem)] font-black leading-none tracking-[-0.07em] text-[#171717]">
@@ -26,30 +29,47 @@ function PromoSlide({ slide }: { slide: CustomerDisplaySlide | undefined }) {
         </p>
       </div>
     );
-  return (
-    <div className="grid h-full min-h-0 grid-cols-1 overflow-hidden rounded-[clamp(2rem,4vw,4.5rem)] bg-white shadow-[0_35px_100px_rgba(17,24,39,0.12)] landscape:grid-cols-[1.3fr_0.7fr]">
-      <div className="min-h-0 overflow-hidden bg-[#e8edf7]">
-        {slide.imageUrl ? (
-          <img alt="" className="h-full w-full object-cover" src={slide.imageUrl} />
-        ) : (
-          <div className="flex h-full items-center justify-center text-[clamp(7rem,18vw,15rem)] font-black text-[#155EEF]">
-            A
+  }
+
+  if (slide.imageUrl) {
+    return (
+      <div
+        data-testid="promo-slide"
+        className="relative flex h-full w-full items-center justify-center overflow-hidden bg-[#f6f2ea]"
+      >
+        <img
+          data-testid="promo-image"
+          alt={slide.title ? `${slide.title} — ARAVA` : 'Рекламный баннер ARAVA'}
+          className="h-auto w-auto max-h-full max-w-full object-contain"
+          src={slide.imageUrl}
+        />
+        {(slide.title || slide.text) && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#0f172a]/65 via-[#0f172a]/18 to-transparent px-[clamp(1rem,4vw,4rem)] pb-[clamp(1.2rem,4vw,5rem)] pt-[clamp(4rem,10vw,9rem)] text-white">
+            {slide.title ? <h1 className="text-4xl font-black">{slide.title}</h1> : null}
+            {slide.text ? (
+              <p className="mt-3 max-w-4xl text-lg text-white/95">{slide.text}</p>
+            ) : null}
           </div>
         )}
       </div>
-      <div className="flex flex-col justify-center p-[clamp(2.5rem,6vw,7rem)]">
-        <p className="text-[clamp(0.9rem,1.6vw,1.4rem)] font-bold uppercase tracking-[0.28em] text-[#155EEF]">
-          ARAVA
-        </p>
-        <h1 className="mt-6 text-[clamp(2.8rem,6vw,6rem)] font-black leading-[0.95] tracking-[-0.055em] text-[#171717]">
+    );
+  }
+
+  return (
+    <div
+      data-testid="promo-slide"
+      className="flex h-full w-full flex-col items-center justify-center gap-8 bg-[#f6f2ea] px-[clamp(1rem,3vw,3rem)] text-center"
+    >
+      {slide.title ? (
+        <h1 className="text-[clamp(3rem,9vw,6.5rem)] font-black leading-none tracking-[-0.06em] text-[#171717]">
           {slide.title}
         </h1>
-        {slide.text ? (
-          <p className="mt-8 max-w-2xl text-[clamp(1.2rem,2.2vw,2rem)] leading-relaxed text-[#5f6570]">
-            {slide.text}
-          </p>
-        ) : null}
-      </div>
+      ) : null}
+      {slide.text ? (
+        <p className="max-w-4xl text-[clamp(1.2rem,2vw,2.2rem)] leading-relaxed text-[#5f6570]">
+          {slide.text}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -149,7 +169,11 @@ export function CustomerDisplayApp() {
     [slide, state],
   );
   return (
-    <main className="h-screen w-screen overflow-hidden bg-[#f6f2ea] p-[clamp(1rem,3vw,3rem)] text-[#171717] antialiased">
+    <main
+      data-mode={state?.mode === 'STUDENT' ? 'student' : 'promo'}
+      data-testid="customer-display-root"
+      className="fixed inset-0 h-full w-full overflow-hidden bg-[#f6f2ea] text-[#171717] antialiased"
+    >
       {content}
     </main>
   );
