@@ -12,6 +12,7 @@ release/
 *.db-journal
 *.db-shm
 *.db-wal
+apps/desktop/build/app-metadata.json
 .DS_Store
 .env
 .env.*

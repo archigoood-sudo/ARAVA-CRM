@@ -97,6 +97,7 @@ import { randomUUID } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import type { EnrollmentStatus } from '@prisma/client';
 import { z } from 'zod';
+import { getBuildMetadata } from './build-metadata';
 import type { CustomerDisplayManager } from './customer-display-manager';
 import type { IntegrationManager } from './integration-manager';
 
@@ -1323,7 +1324,7 @@ export function createIpcHandlers(
     },
     [IPC_CHANNELS.systemInformation]: async (unsafeToken): Promise<SystemInformation> => {
       await service.authenticate(sessionTokenSchema.parse(unsafeToken));
-      return { appVersion: app.getVersion(), databasePath, platform: process.platform };
+      return { ...getBuildMetadata(), databasePath, platform: process.platform };
     },
   };
 }

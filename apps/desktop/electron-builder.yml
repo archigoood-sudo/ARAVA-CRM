@@ -17,6 +17,8 @@ files:
     filter:
       - '**/*'
 extraResources:
+  - from: build/app-metadata.json
+    to: app-metadata.json
   - from: build/icon.png
     to: icon.png
 win:
@@ -30,7 +32,7 @@ win:
 linux:
   executableName: arava-crm
 nsis:
-  artifactName: ARAVA-CRM-Setup-${version}-${arch}.${ext}
+  artifactName: ARAVA-CRM-${version}-${arch}.${ext}
   oneClick: false
   perMachine: false
   allowElevation: true

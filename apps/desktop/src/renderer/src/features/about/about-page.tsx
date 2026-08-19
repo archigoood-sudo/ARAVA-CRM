@@ -18,6 +18,14 @@ export function AboutPage() {
     queryFn: () => getDesktopApi().system.information(getSessionToken()),
     queryKey: queryKeys.system,
   });
+  const buildCommit = system.data?.buildCommit ?? '—';
+  const buildDate = system.data?.buildDate
+    ? new Date(system.data.buildDate).toLocaleDateString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      })
+    : '—';
   return (
     <main className="mx-auto w-full max-w-5xl p-9 pb-14">
       <PageHeader description={t('about.description')} title={t('about.title')} />
@@ -30,6 +38,17 @@ export function AboutPage() {
           </div>
         </div>
         <CardContent className="p-8">
+          <div className="mb-6 rounded-2xl border border-border bg-sidebar p-5 text-white">
+            <p className="text-lg">
+              {t('about.version')} {system.data?.appVersion ?? '—'}
+            </p>
+            <p className="mt-2 text-sm text-neutral-300">
+              {t('about.build')} {buildCommit}
+            </p>
+            <p className="mt-1 text-sm text-neutral-300">
+              {t('about.buildDate')} {buildDate}
+            </p>
+          </div>
           <div className="grid grid-cols-2 gap-4">
             {details.map(({ icon: Icon, text }) => (
               <div className="rounded-2xl border border-border bg-background p-5" key={text}>

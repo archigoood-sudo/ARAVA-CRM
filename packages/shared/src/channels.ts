@@ -1647,6 +1647,8 @@ export interface AuditLogSummary {
 
 export interface SystemInformation {
   appVersion: string;
+  buildCommit: string;
+  buildDate: string;
   databasePath: string;
   platform: NodeJS.Platform;
 }

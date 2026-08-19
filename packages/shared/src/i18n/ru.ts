@@ -1,5 +1,7 @@
 export const ru = {
   'about.architecture': 'Локальное приложение на Electron, React, TypeScript, Prisma и SQLite.',
+  'about.build': 'Сборка',
+  'about.buildDate': 'Сборка от',
   'about.copyright': '© 2026 ARAVA. Все права защищены.',
   'about.description':
     'Надёжная CRM-система для управления школой и отношениями с семьями учеников.',

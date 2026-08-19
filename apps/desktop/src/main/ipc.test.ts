@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,7 +42,11 @@ import {
 } from '@arava/shared';
 
 vi.mock('electron', () => ({
-  app: { getVersion: () => 'test' },
+  app: {
+    getAppPath: () => process.cwd(),
+    getPath: () => '/tmp/arava-test',
+    getVersion: () => 'test',
+  },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
 }));
 
@@ -140,6 +144,51 @@ describe('Electron IPC boundary', () => {
         enabled: true,
       }),
     ).rejects.toThrow('только HTTPS');
+  });
+
+  it('returns application version and build metadata from system information', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!VersionMeta2026',
+    });
+    const metadataFile = join(directory, 'app-metadata.json');
+    await writeFile(
+      metadataFile,
+      `${JSON.stringify(
+        {
+          appVersion: '0.4.5',
+          buildCommit: '7e42d97',
+          buildDate: '2026-08-19',
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+    const previousMetadataPath = process.env.ARAVA_BUILD_METADATA_PATH;
+    process.env.ARAVA_BUILD_METADATA_PATH = metadataFile;
+
+    try {
+      const handlers = createIpcHandlers(database, service, '/test/arava.db');
+      const system = (await handlers[IPC_CHANNELS.systemInformation]?.(owner.token)) as {
+        appVersion: string;
+        buildCommit: string;
+        buildDate: string;
+        databasePath: string;
+      };
+      expect(system).toMatchObject({
+        appVersion: '0.4.5',
+        buildCommit: '7e42d97',
+        buildDate: '2026-08-19',
+      });
+    } finally {
+      if (previousMetadataPath === undefined) delete process.env.ARAVA_BUILD_METADATA_PATH;
+      else process.env.ARAVA_BUILD_METADATA_PATH = previousMetadataPath;
+    }
   });
 
   it('exposes chats only through validated, session-aware IPC', async () => {
