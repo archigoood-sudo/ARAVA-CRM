@@ -1,4 +1,5 @@
-import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -16,6 +17,27 @@ import {
 import { ApplicationService } from './services';
 import { runtimeMigrations } from './runtime-migrations';
 
+interface TarApi {
+  create(
+    options: {
+      cwd: string;
+      file: string;
+      gzip?: boolean;
+      portable?: boolean;
+    },
+    files: string[],
+  ): Promise<void>;
+  extract(options: { file: string; cwd: string; gzip?: boolean }): Promise<void>;
+  list(options: {
+    file: string;
+    cwd: string;
+    gzip?: boolean;
+    onentry?: (entry: { path: string }) => void;
+  }): Promise<void>;
+}
+
+const createTarClient = (): TarApi => createRequire(import.meta.url)('tar') as TarApi;
+
 describe('Sprint 4.3A local backup and restore', () => {
   let application: ApplicationService;
   let backups: BackupService;
@@ -24,6 +46,7 @@ describe('Sprint 4.3A local backup and restore', () => {
   let directory: string;
   let now: Date;
   let ownerToken: string;
+  let tarClient: TarApi;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'arava-backup-'));
@@ -47,6 +70,7 @@ describe('Sprint 4.3A local backup and restore', () => {
       externalLogPath: join(directory, 'backup-restore.log'),
       now: () => now,
     });
+    tarClient = createTarClient();
     await backups.initializePreferences();
   });
 
@@ -63,10 +87,17 @@ describe('Sprint 4.3A local backup and restore', () => {
     expect(backup.fileName).toMatch(/^ARAVA-CRM-backup-2026-08-14-\d{2}-30-00\.db$/u);
     expect(backup.integrity).toBe('VALID');
     expect((await stat(backup.location)).size).toBeGreaterThan(0);
-    expect((await readFile(backup.location)).subarray(0, 16).toString()).toBe('SQLite format 3\0');
+    await expect(backups.selectManagedBackup(ownerToken, backup.id)).resolves.toHaveProperty(
+      'backup.integrity',
+      'VALID',
+    );
 
     await application.createBranch(ownerToken, { name: 'После копии' });
-    const snapshot = createDatabaseClient(`${toSqliteUrl(backup.location)}?connection_limit=1`);
+    const snapshotDirectory = await mkdtemp(join(directory, 'arava-snapshot-'));
+    await tarClient.extract({ file: backup.location, cwd: snapshotDirectory, gzip: true });
+    const snapshot = createDatabaseClient(
+      `${toSqliteUrl(join(snapshotDirectory, 'database.db'))}?connection_limit=1`,
+    );
     try {
       await snapshot.$connect();
       expect(await snapshot.$queryRawUnsafe('PRAGMA quick_check')).toEqual([{ quick_check: 'ok' }]);
@@ -78,6 +109,107 @@ describe('Sprint 4.3A local backup and restore', () => {
       'До копии',
       'После копии',
     ]);
+  });
+
+  it('includes managed media files in backup and restores them', async () => {
+    const customerDisplayDirectory = join(directory, 'media', 'customer-display');
+    const publicationsDirectory = join(directory, 'media', 'publications');
+    await mkdir(customerDisplayDirectory, { recursive: true });
+    await mkdir(publicationsDirectory, { recursive: true });
+
+    const customerMedia = join(customerDisplayDirectory, 'client-screen.jpg');
+    const publicationMedia = join(publicationsDirectory, 'publication.webp');
+    await writeFile(customerMedia, 'customer-image-v1');
+    await writeFile(publicationMedia, 'publication-image-v1');
+
+    const beforeBranch = await application.createBranch(ownerToken, {
+      name: 'После резервной копии',
+    });
+    const backup = await backups.createManualBackup(ownerToken);
+    await writeFile(customerMedia, 'customer-image-v2');
+    await writeFile(publicationMedia, 'publication-image-v2');
+    await application.createBranch(ownerToken, { name: 'До восстановления' });
+
+    const selection = await backups.selectManagedBackup(ownerToken, backup.id);
+    expect(selection.canRestore).toBe(true);
+    await expect(
+      backups.restoreBackup(ownerToken, selection.selectionId, 'ВОССТАНОВИТЬ'),
+    ).resolves.toMatchObject({
+      safetyBackup: { type: 'RESTORE_SAFETY' },
+    });
+
+    const branches = await application.listBranches(ownerToken);
+    expect(branches.map(({ name }) => name)).toContain('После резервной копии');
+    expect(branches.map(({ name }) => name)).not.toContain('До восстановления');
+    expect(await readFile(customerMedia, 'utf8')).toBe('customer-image-v1');
+    expect(await readFile(publicationMedia, 'utf8')).toBe('publication-image-v1');
+    expect(await stat(customerMedia)).toBeDefined();
+    expect(await stat(publicationMedia)).toBeDefined();
+    expect(beforeBranch).not.toBeUndefined();
+  });
+
+  it('warns about media mismatch and keeps original data after failed restore', async () => {
+    const customerDisplayDirectory = join(directory, 'media', 'customer-display');
+    await mkdir(customerDisplayDirectory, { recursive: true });
+
+    const managedMedia = join(customerDisplayDirectory, 'managed.jpg');
+    await writeFile(managedMedia, 'before-restore-media');
+
+    const backup = await backups.createManualBackup(ownerToken);
+    const unstableBranch = await application.createBranch(ownerToken, {
+      name: 'Изменяется во время сбоя',
+    });
+    await writeFile(managedMedia, 'media-after-backup');
+
+    const workspace = await mkdtemp(join(directory, 'arava-bad-'));
+    await tarClient.extract({ file: backup.location, cwd: workspace, gzip: true });
+    const manifestPath = join(workspace, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      media: { path: string; size: number; sha256: string }[];
+      [key: string]: unknown;
+    };
+    expect(manifest.media).toHaveLength(1);
+    const corruptedMedia = manifest.media[0];
+    if (!corruptedMedia) throw new Error('Ожидался медиафайл в манифесте.');
+    corruptedMedia.sha256 = '000000000000000000000000000000000000000000000000000000000000000000';
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    const corrupted = join(directory, 'ARAVA-CRM-backup-corrupted-media.db');
+    await tarClient.create({ cwd: workspace, file: corrupted, gzip: true, portable: true }, ['.']);
+
+    const validation = await backups.selectExternalBackup(ownerToken, corrupted);
+    expect(validation.canRestore).toBe(true);
+    expect(validation.message).toContain('Копия проверена с предупреждениями');
+
+    await expect(
+      backups.restoreBackup(ownerToken, validation.selectionId, 'ВОССТАНОВИТЬ'),
+    ).rejects.toThrow('Восстановление не выполнено');
+    expect(await database.branch.findUnique({ where: { id: unstableBranch.id } })).not.toBeNull();
+    expect(await readFile(managedMedia, 'utf8')).toBe('media-after-backup');
+  });
+
+  it('rejects archive paths that escape media directories', async () => {
+    const customerDisplayDirectory = join(directory, 'media', 'customer-display');
+    await mkdir(customerDisplayDirectory, { recursive: true });
+    await writeFile(join(customerDisplayDirectory, 'display.jpg'), 'safe');
+
+    const backup = await backups.createManualBackup(ownerToken);
+    const malicious = join(directory, 'ARAVA-CRM-backup-traversal.db');
+    await writeFile(join(directory, 'outside.txt'), 'outside');
+    const workspace = await mkdtemp(join(directory, 'arava-traversal-'));
+    await tarClient.extract({ file: backup.location, cwd: workspace, gzip: true });
+    await tarClient.create(
+      {
+        cwd: workspace,
+        file: malicious,
+        gzip: true,
+        portable: true,
+      },
+      ['.', '../outside.txt'],
+    );
+
+    const validation = await backups.selectExternalBackup(ownerToken, malicious);
+    expect(validation.canRestore).toBe(false);
+    expect(validation.message).toContain('недопустимое имя');
   });
 
   it('stages, migrates and atomically restores a backup after creating a safety copy', async () => {
@@ -134,15 +266,19 @@ describe('Sprint 4.3A local backup and restore', () => {
       expect(result.canRestore).toBe(false);
     }
 
-    const current = await backups.createManualBackup(ownerToken);
+    await backups.createManualBackup(ownerToken);
     const newer = join(directory, 'newer.db');
-    await copyFile(current.location, newer);
+    await copyFile(databasePath, newer);
     const newerDatabase = createDatabaseClient(`${toSqliteUrl(newer)}?connection_limit=1`);
-    await newerDatabase.$executeRawUnsafe(
-      'INSERT INTO "_AppMigration" ("id") VALUES (?)',
-      '99999999999999_future',
-    );
-    await closeDatabase(newerDatabase);
+    try {
+      await newerDatabase.$connect();
+      await newerDatabase.$executeRawUnsafe(
+        'INSERT INTO "_AppMigration" ("id") VALUES (?)',
+        '99999999999999_future',
+      );
+    } finally {
+      await closeDatabase(newerDatabase);
+    }
     const newerResult = await backups.selectExternalBackup(ownerToken, newer);
     expect(newerResult).toMatchObject({ canRestore: false, integrity: 'VALID' });
     expect(newerResult.message).toContain('более новой версии');
@@ -177,6 +313,7 @@ describe('Sprint 4.3A local backup and restore', () => {
     const original = await readFile(oldPath);
 
     const selection = await backups.selectExternalBackup(ownerToken, oldPath);
+    expect(selection.message).toContain('Медиафайлы не были включены');
     expect(selection).toMatchObject({ canRestore: true });
     await backups.restoreBackup(ownerToken, selection.selectionId, 'ВОССТАНОВИТЬ');
 
@@ -231,6 +368,43 @@ describe('Sprint 4.3A local backup and restore', () => {
       });
       await expect(backups.getStatus(session.token)).rejects.toThrow('недостаточно прав');
       await expect(backups.createManualBackup(session.token)).rejects.toThrow('недостаточно прав');
+    }
+  });
+
+  it('removes old automatic backup files including metadata when retention is exceeded', async () => {
+    await database.appSetting.upsert({
+      create: { key: 'backup.retentionCount', value: '1' },
+      update: { value: '1' },
+      where: { key: 'backup.retentionCount' },
+    });
+
+    const first = await backups.runAutomaticBackup();
+    expect(first).toBeDefined();
+    await expect(backups.runAutomaticBackup()).resolves.toBeUndefined();
+    now = new Date(now.getTime() + 25 * 60 * 60 * 1000);
+    const second = await backups.runAutomaticBackup();
+    expect(second).toBeDefined();
+    await expect(backups.runAutomaticBackup()).resolves.toBeUndefined();
+    now = new Date(now.getTime() + 25 * 60 * 60 * 1000);
+    const third = await backups.runAutomaticBackup();
+    expect(third).toBeDefined();
+
+    const entries = await backups.listBackups(ownerToken);
+    const automatic = entries.filter(({ type }) => type === 'AUTOMATIC');
+    expect(automatic).toHaveLength(1);
+    if (!third) throw new Error('Не удалось создать третью автоматическую копию.');
+    const thirdEntry = automatic[0];
+    if (!thirdEntry) throw new Error('Ожидалась последняя автоматическая копия.');
+    expect(thirdEntry.location).toBe(third.location);
+    for (const removed of [first?.location, second?.location]) {
+      if (!removed) continue;
+      await expect(stat(removed)).rejects.toThrow();
+      await expect(stat(`${removed}.json`)).rejects.toThrow();
+    }
+    for (const entry of automatic) {
+      const sidecar = `${entry.location}.json`;
+      await expect(stat(entry.location)).resolves.toBeDefined();
+      await expect(stat(sidecar)).resolves.toBeDefined();
     }
   });
 

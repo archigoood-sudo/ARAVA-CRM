@@ -24,7 +24,8 @@
   },
   "dependencies": {
     "@arava/shared": "*",
-    "@prisma/client": "^6.3.1"
+    "@prisma/client": "^6.3.1",
+    "tar": "^6.2.1"
   },
   "devDependencies": {
     "prisma": "^6.3.1"

@@ -294,7 +294,8 @@ export function CustomerDisplaySettings() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Важно: изображения рекламных слайдов пока не входят в резервную копию базы данных.
+            Изображения рекламных слайдов и фото публикаций включаются в резервные копии вместе с
+            базой данных.
           </p>
         </CardContent>
       </Card>
