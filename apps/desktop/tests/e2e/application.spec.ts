@@ -47,10 +47,18 @@ test('вход, создание филиала, ученика и контак�
     await expect(window.getByText('Центральный филиал')).toBeVisible();
 
     await window.getByRole('link', { name: 'Филиалы и залы' }).click();
-    await window.getByRole('button', { name: 'Добавить зал' }).click();
+    await expect(window.getByRole('heading', { name: 'Центральный филиал' })).toBeVisible();
+    const addRoomButton = window.getByRole('button', { name: 'Добавить зал' });
+    await expect(addRoomButton).toBeEnabled();
+    await addRoomButton.click();
     const roomDialog = window.getByRole('dialog');
-    await roomDialog.locator('input').nth(0).fill('Зал E2E');
-    await roomDialog.locator('input').nth(1).fill('20');
+    await expect(roomDialog).toBeVisible();
+    const roomNameField = roomDialog.locator('input').nth(0);
+    const roomCapacityField = roomDialog.locator('input').nth(1);
+    await expect(roomNameField).toBeEditable();
+    await roomNameField.fill('Зал E2E');
+    await roomCapacityField.fill('20');
+    await expect(roomDialog.getByRole('button', { name: 'Сохранить' })).toBeEnabled();
     await roomDialog.getByRole('button', { name: 'Сохранить' }).click();
     await expect(window.getByText('Зал E2E')).toBeVisible();
 
