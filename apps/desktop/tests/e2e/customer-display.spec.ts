@@ -28,6 +28,12 @@ async function scan(page: Page, barcode: string) {
   await page.keyboard.press('Enter');
 }
 
+async function openScannedProfile(page: Page) {
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Сегодня занятий не найдено')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Открыть профиль' }).click();
+}
+
 interface ViewportMetrics {
   height: number;
   width: number;
@@ -250,6 +256,7 @@ test('предпросмотр экрана клиента получает бе
     await assertPromoFullscreen(display);
 
     await scan(page, '0000094301');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixtures.firstId}\\?openedByCard=1$`, 'u'),
     );
@@ -269,6 +276,7 @@ test('предпросмотр экрана клиента получает бе
       await expect(display.getByText(sensitive, { exact: false })).toHaveCount(0);
 
     await scan(page, '0000094302');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixtures.secondId}\\?openedByCard=1$`, 'u'),
     );
@@ -283,6 +291,7 @@ test('предпросмотр экрана клиента получает бе
     await assertPromoFullscreen(display);
 
     await scan(page, '0000094302');
+    await openScannedProfile(page);
     await expect(display.getByRole('heading', { name: 'Борис!' })).toBeVisible();
     await expect(display.getByTestId('customer-display-root')).toHaveAttribute(
       'data-mode',

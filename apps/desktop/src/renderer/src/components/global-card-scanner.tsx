@@ -1,10 +1,18 @@
-import type { CardScanResult } from '@arava/shared';
-import { ScanLine } from 'lucide-react';
+import {
+  formatDate,
+  type AttendanceScanLessonOption,
+  type AttendanceScanOptions,
+  type CardScanResult,
+} from '@arava/shared';
+import { Badge, Button, Dialog, cn } from '@arava/ui';
+import { useQueryClient } from '@tanstack/react-query';
+import { CheckCircle2, Clock3, ScanLine, UserRound } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { getDesktopApi } from '../lib/desktop-api';
-import { getSessionToken } from '../stores/auth-store';
+import { getSessionToken, useAuthStore } from '../stores/auth-store';
+import { localDateKey } from '../features/attendance/attendance-workspace';
 import { BarcodeScannerBuffer } from './barcode-scanner-buffer';
 import { GLOBAL_SEARCH_CLOSE_EVENT } from './global-search';
 
@@ -20,6 +28,14 @@ const feedback: Record<CardScanResult, string> = {
   OPENED: 'Клиент открыт',
   UNKNOWN: 'Карта не найдена',
 };
+
+const attendanceStatusLabels = {
+  ABSENT: 'Сейчас: отсутствовал',
+  EXCUSED: 'Сейчас: болел',
+  LATE: 'Сейчас: опоздал',
+  PRESENT: 'Уже отмечен',
+  TRIAL: 'Сейчас: пробное занятие',
+} as const;
 
 function configuredMinimum(): number {
   const parsed = Number(localStorage.getItem(SCANNER_MIN_LENGTH_KEY));
@@ -94,10 +110,15 @@ function restoreEditable(snapshot: EditableSnapshot | undefined): void {
 
 export function GlobalCardScanner() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const role = useAuthStore(({ user }) => user?.role);
   const buffer = useRef(new BarcodeScannerBuffer());
   const editableSnapshot = useRef<EditableSnapshot>();
   const minimumLength = useRef(configuredMinimum());
   const [message, setMessage] = useState<string>();
+  const [attendancePrompt, setAttendancePrompt] = useState<AttendanceScanOptions>();
+  const [selectedLessonId, setSelectedLessonId] = useState<string>();
+  const [savingAttendance, setSavingAttendance] = useState(false);
   const hideTimer = useRef<number>();
   const scanQueue = useRef(Promise.resolve());
 
@@ -131,7 +152,15 @@ export function GlobalCardScanner() {
             ? `Карта найдена · ${result.studentName}`
             : feedback[result.result],
         );
-        if (result.result === 'OPENED' && result.studentId) {
+        if (result.result === 'OPENED' && result.studentId && role !== 'COACH') {
+          const options = await getDesktopApi().attendance.scanOptions(
+            getSessionToken(),
+            result.studentId,
+            localDateKey(),
+          );
+          setAttendancePrompt(options);
+          setSelectedLessonId(options.lessons[0]?.lessonId);
+        } else if (result.result === 'OPENED' && result.studentId) {
           const profilePath = `/students/${result.studentId}`;
           const target = `${profilePath}?openedByCard=1`;
           const activeRoute = window.location.hash.replace(/^#/u, '');
@@ -181,15 +210,147 @@ export function GlobalCardScanner() {
       window.removeEventListener('keydown', onKeyDown, true);
       if (hideTimer.current) window.clearTimeout(hideTimer.current);
     };
-  }, [navigate]);
+  }, [navigate, role]);
 
-  if (!message) return null;
+  const selectedLesson = attendancePrompt?.lessons.find(
+    ({ lessonId }) => lessonId === selectedLessonId,
+  );
+  const openStudent = async () => {
+    if (!attendancePrompt) return;
+    const profilePath = `/students/${attendancePrompt.studentId}`;
+    const target = `${profilePath}?openedByCard=1`;
+    setAttendancePrompt(undefined);
+    await navigate(target, { replace: window.location.hash.includes('/students/') });
+  };
+  const markPresent = async () => {
+    if (!attendancePrompt || !selectedLesson || selectedLesson.currentStatus === 'PRESENT') return;
+    setSavingAttendance(true);
+    try {
+      await getDesktopApi().attendance.save(getSessionToken(), selectedLesson.lessonId, [
+        { status: 'PRESENT', studentId: attendancePrompt.studentId },
+      ]);
+      setAttendancePrompt({
+        ...attendancePrompt,
+        lessons: attendancePrompt.lessons.map((lesson) =>
+          lesson.lessonId === selectedLesson.lessonId
+            ? { ...lesson, currentStatus: 'PRESENT' }
+            : lesson,
+        ),
+      });
+      setMessage('Посещение отмечено');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['attendance'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['attention'] }),
+        queryClient.invalidateQueries({ queryKey: ['subscriptions'] }),
+      ]);
+    } catch {
+      setMessage('Не удалось отметить посещение');
+    } finally {
+      setSavingAttendance(false);
+    }
+  };
+
   return (
-    <div className="pointer-events-none fixed bottom-6 right-6 z-[70] flex max-w-sm animate-soft-rise items-center gap-3 rounded-2xl border border-white/10 bg-sidebar px-4 py-3 text-sm font-semibold text-white shadow-elevated">
-      <span className="flex size-9 items-center justify-center rounded-xl bg-accent text-neutral-950">
-        <ScanLine className="size-4" />
-      </span>
-      {message}
-    </div>
+    <>
+      {message ? (
+        <div className="pointer-events-none fixed bottom-6 right-6 z-[70] flex max-w-sm animate-soft-rise items-center gap-3 rounded-2xl border border-white/10 bg-sidebar px-4 py-3 text-sm font-semibold text-white shadow-elevated">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-accent text-neutral-950">
+            <ScanLine className="size-4" />
+          </span>
+          {message}
+        </div>
+      ) : null}
+      <Dialog
+        closeLabel="Закрыть"
+        description={
+          attendancePrompt?.lessons.length
+            ? attendancePrompt.lessons.length === 1
+              ? 'Подтвердите посещение сегодняшнего занятия'
+              : `Сегодня у ученика ${String(attendancePrompt.lessons.length)} занятия`
+            : 'Сегодня занятий не найдено'
+        }
+        footer={
+          attendancePrompt ? (
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button onClick={() => setAttendancePrompt(undefined)} variant="ghost">
+                Отмена
+              </Button>
+              <Button onClick={() => void openStudent()} variant="secondary">
+                <UserRound className="size-4" /> Открыть профиль
+              </Button>
+              {selectedLesson ? (
+                <Button
+                  disabled={savingAttendance || selectedLesson.currentStatus === 'PRESENT'}
+                  onClick={() => void markPresent()}
+                >
+                  <CheckCircle2 className="size-4" />
+                  {selectedLesson.currentStatus === 'PRESENT'
+                    ? 'Уже отмечен'
+                    : 'Отметить присутствие'}
+                </Button>
+              ) : null}
+            </div>
+          ) : undefined
+        }
+        onClose={() => setAttendancePrompt(undefined)}
+        open={Boolean(attendancePrompt)}
+        title={attendancePrompt?.studentName ?? 'Посещение по карте'}
+      >
+        {attendancePrompt?.lessons.length ? (
+          <div className="space-y-2">
+            {attendancePrompt.lessons.map((lesson) => (
+              <AttendanceLessonChoice
+                key={lesson.lessonId}
+                lesson={lesson}
+                onSelect={() => setSelectedLessonId(lesson.lessonId)}
+                selected={lesson.lessonId === selectedLessonId}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl bg-muted p-5 text-sm text-muted-foreground">
+            Можно открыть профиль ученика. Сканирование карты не изменило посещаемость.
+          </div>
+        )}
+      </Dialog>
+    </>
+  );
+}
+
+function AttendanceLessonChoice({
+  lesson,
+  onSelect,
+  selected,
+}: {
+  lesson: AttendanceScanLessonOption;
+  onSelect: () => void;
+  selected: boolean;
+}) {
+  return (
+    <button
+      className={cn(
+        'flex w-full items-center justify-between gap-4 rounded-2xl border p-4 text-left transition',
+        selected ? 'border-neutral-900 bg-neutral-50' : 'border-border hover:bg-muted',
+      )}
+      onClick={onSelect}
+      type="button"
+    >
+      <div>
+        <p className="font-semibold">{lesson.groupName}</p>
+        <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+          <Clock3 className="size-4" />
+          {formatDate(lesson.startsAt, { timeStyle: 'short' })}
+          {[lesson.roomName, lesson.effectiveTrainerName].filter(Boolean).join(' · ')}
+        </p>
+      </div>
+      {lesson.currentStatus === 'PRESENT' ? (
+        <Badge className="bg-emerald-50 text-emerald-700">✓ Уже отмечен</Badge>
+      ) : lesson.currentStatus ? (
+        <Badge className="bg-amber-50 text-amber-800">
+          {attendanceStatusLabels[lesson.currentStatus]}
+        </Badge>
+      ) : null}
+    </button>
   );
 }

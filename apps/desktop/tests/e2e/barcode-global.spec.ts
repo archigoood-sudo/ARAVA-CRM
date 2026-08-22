@@ -26,6 +26,12 @@ async function scan(page: Page, barcode: string) {
   await page.keyboard.press('Enter');
 }
 
+async function openScannedProfile(page: Page) {
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Сегодня занятий не найдено')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Открыть профиль' }).click();
+}
+
 test('глобальный сканер открывает профиль без фокуса в поиске и не меняет посещаемость', async ({
   request: _request,
 }, testInfo) => {
@@ -101,6 +107,7 @@ test('глобальный сканер открывает профиль без
     await expect(page).toHaveURL(/\/groups$/u);
     await page.getByRole('heading', { name: 'Танцевальные группы', exact: true }).click();
     await scan(page, '0000091201');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixture.firstStudentId}\\?openedByCard=1$`, 'u'),
     );
@@ -108,14 +115,17 @@ test('глобальный сканер открывает профиль без
     await page.getByRole('link', { name: 'Расписание', exact: true }).click();
     await page.getByRole('heading', { name: 'Расписание занятий', exact: true }).click();
     await scan(page, '0000091201');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixture.firstStudentId}\\?openedByCard=1$`, 'u'),
     );
     await scan(page, '0000091202');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixture.secondStudentId}\\?openedByCard=1$`, 'u'),
     );
     await scan(page, '0000091201');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixture.firstStudentId}\\?openedByCard=1$`, 'u'),
     );
@@ -129,6 +139,7 @@ test('глобальный сканер открывает профиль без
     await expect(page.getByText('Карта заблокирована', { exact: true })).toBeVisible();
     expect(page.url()).toBe(financeUrl);
     await scan(page, '0000091201');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixture.firstStudentId}\\?openedByCard=1$`, 'u'),
     );
@@ -139,6 +150,7 @@ test('глобальный сканер открывает профиль без
     await groupName.pressSequentially('Ручной ввод', { delay: 220 });
     await expect(groupName).toHaveValue('Ручной ввод');
     await scan(page, '0000091202');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixture.secondStudentId}\\?openedByCard=1$`, 'u'),
     );

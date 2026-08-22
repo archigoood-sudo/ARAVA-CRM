@@ -725,19 +725,42 @@ export class StudioService {
       throw new DomainError('VALIDATION', t('domain.validation.attendanceCancelled'));
     const [enrollments, marks] = await Promise.all([
       this.database.enrollment.findMany({
-        include: { student: { select: { firstName: true, lastName: true, middleName: true } } },
+        include: {
+          student: {
+            select: {
+              archivedAt: true,
+              firstName: true,
+              lastName: true,
+              middleName: true,
+              status: true,
+            },
+          },
+        },
         orderBy: { student: { lastName: 'asc' } },
         where: {
           groupId: lesson.groupId,
           joinedAt: { lte: lesson.startsAt },
           OR: [{ leftAt: null }, { leftAt: { gte: lesson.startsAt } }],
-          status: { in: EXPECTED_ENROLLMENTS },
         },
       }),
-      this.database.attendance.findMany({ where: { lessonId } }),
+      this.database.attendance.findMany({
+        include: {
+          student: { select: { firstName: true, lastName: true, middleName: true } },
+        },
+        where: { lessonId },
+      }),
     ]);
     const markByStudent = new Map(marks.map((mark) => [mark.studentId, mark]));
-    const participants: AttendanceParticipant[] = enrollments.map(({ student, studentId }) => {
+    const validEnrollments = enrollments.filter(
+      ({ leftAt, status, student, studentId }) =>
+        markByStudent.has(studentId) ||
+        (leftAt
+          ? leftAt >= lesson.startsAt
+          : EXPECTED_ENROLLMENTS.includes(status) &&
+            ['ACTIVE', 'TRIAL', 'FROZEN'].includes(student.status) &&
+            !student.archivedAt),
+    );
+    const participants: AttendanceParticipant[] = validEnrollments.map(({ student, studentId }) => {
       const mark = markByStudent.get(studentId);
       return {
         comment: mark?.comment ?? undefined,
@@ -749,6 +772,20 @@ export class StudioService {
           .join(' '),
       };
     });
+    const participantIds = new Set(participants.map(({ studentId }) => studentId));
+    for (const mark of marks) {
+      if (participantIds.has(mark.studentId)) continue;
+      participants.push({
+        comment: mark.comment ?? undefined,
+        markedAt: mark.markedAt.toISOString(),
+        status: mark.status,
+        studentId: mark.studentId,
+        studentName: [mark.student.lastName, mark.student.firstName, mark.student.middleName]
+          .filter(Boolean)
+          .join(' '),
+      });
+    }
+    participants.sort((left, right) => left.studentName.localeCompare(right.studentName, 'ru'));
     return {
       attendanceCompletedAt: lesson.attendanceCompletedAt?.toISOString(),
       lesson: lessonSummary(lesson),
@@ -809,16 +846,32 @@ export class StudioService {
   }
 
   private async attendanceStudentIds(lesson: LessonRecord): Promise<Set<string>> {
-    const enrollments = await this.database.enrollment.findMany({
-      select: { studentId: true },
-      where: {
-        groupId: lesson.groupId,
-        joinedAt: { lte: lesson.startsAt },
-        OR: [{ leftAt: null }, { leftAt: { gte: lesson.startsAt } }],
-        status: { in: EXPECTED_ENROLLMENTS },
-      },
-    });
-    return new Set(enrollments.map(({ studentId }) => studentId));
+    const [enrollments, existingMarks] = await Promise.all([
+      this.database.enrollment.findMany({
+        include: { student: { select: { archivedAt: true, status: true } } },
+        where: {
+          groupId: lesson.groupId,
+          joinedAt: { lte: lesson.startsAt },
+          OR: [{ leftAt: null }, { leftAt: { gte: lesson.startsAt } }],
+        },
+      }),
+      this.database.attendance.findMany({
+        select: { studentId: true },
+        where: { lessonId: lesson.id },
+      }),
+    ]);
+    return new Set([
+      ...existingMarks.map(({ studentId }) => studentId),
+      ...enrollments
+        .filter(
+          ({ leftAt, status, student }) =>
+            Boolean(leftAt) ||
+            (EXPECTED_ENROLLMENTS.includes(status) &&
+              ['ACTIVE', 'TRIAL', 'FROZEN'].includes(student.status) &&
+              !student.archivedAt),
+        )
+        .map(({ studentId }) => studentId),
+    ]);
   }
 
   private async persistAttendance(

@@ -1,41 +1,60 @@
-import {
-  ATTENDANCE_STATUSES,
-  formatDate,
-  t,
-  type AttendanceEntryInput,
-  type AttendanceStatus,
-} from '@arava/shared';
-import {
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  EmptyState,
-  ErrorState,
-  LoadingState,
-  ParticipantRow,
-  StatusBadge,
-  type StatusTone,
-} from '@arava/ui';
+import { formatDate, type AttendanceEntryInput, type AttendanceStatus } from '@arava/shared';
+import { Badge, Button, Card, EmptyState, ErrorState, Input, LoadingState, cn } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CheckCheck, CircleCheck, UsersRound } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
+import {
+  ArrowLeft,
+  CheckCheck,
+  CircleCheck,
+  Search,
+  UserRoundCheck,
+  UserRoundX,
+  UsersRound,
+} from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken } from '../../stores/auth-store';
 
-const tones: Record<AttendanceStatus, StatusTone> = {
-  ABSENT: 'danger',
-  EXCUSED: 'info',
-  LATE: 'warning',
-  PRESENT: 'success',
-  TRIAL: 'accent',
+const operationalStatuses: {
+  active: string;
+  icon: typeof UserRoundCheck;
+  label: string;
+  status: Extract<AttendanceStatus, 'PRESENT' | 'ABSENT' | 'EXCUSED'>;
+}[] = [
+  {
+    active: 'border-emerald-600 bg-emerald-600 text-white',
+    icon: UserRoundCheck,
+    label: 'Присутствовал',
+    status: 'PRESENT',
+  },
+  {
+    active: 'border-red-500 bg-red-500 text-white',
+    icon: UserRoundX,
+    label: 'Отсутствовал',
+    status: 'ABSENT',
+  },
+  {
+    active: 'border-amber-500 bg-amber-500 text-white',
+    icon: CircleCheck,
+    label: 'Болел',
+    status: 'EXCUSED',
+  },
+];
+
+const statusLabels: Record<AttendanceStatus, string> = {
+  ABSENT: 'Отсутствовал',
+  EXCUSED: 'Болел',
+  LATE: 'Опоздал',
+  PRESENT: 'Присутствовал',
+  TRIAL: 'Пробное занятие',
 };
 
 export function AttendancePage() {
   const { lessonId = '' } = useParams();
+  const [searchParams] = useSearchParams();
+  const [search, setSearch] = useState('');
   const client = useQueryClient();
   const attendance = useQuery({
     enabled: Boolean(lessonId),
@@ -48,6 +67,7 @@ export function AttendancePage() {
     onSuccess: async (data) => {
       client.setQueryData(queryKeys.attendance(lessonId), data);
       await Promise.all([
+        client.invalidateQueries({ queryKey: ['attendance', 'today'] }),
         client.invalidateQueries({ queryKey: ['subscriptions'] }),
         client.invalidateQueries({ queryKey: ['students', 'finance'] }),
         client.invalidateQueries({ queryKey: ['dashboard'] }),
@@ -55,53 +75,97 @@ export function AttendancePage() {
       ]);
     },
   });
-  if (attendance.isLoading) return <LoadingState label={t('attendance.loading')} />;
+
+  const filteredParticipants = useMemo(() => {
+    const normalized = search.trim().toLocaleLowerCase('ru-RU');
+    if (!normalized) return attendance.data?.participants ?? [];
+    return (attendance.data?.participants ?? []).filter(({ studentName }) =>
+      studentName.toLocaleLowerCase('ru-RU').includes(normalized),
+    );
+  }, [attendance.data?.participants, search]);
+
+  if (attendance.isLoading) return <LoadingState label="Загружаем список учеников…" />;
   if (!attendance.data || attendance.isError)
     return (
       <ErrorState
-        message={t('attendance.errorLoad')}
+        message="Не удалось загрузить посещаемость занятия."
         onRetry={() => void attendance.refetch()}
-        retryLabel={t('common.retry')}
-        title={t('common.errorTitle')}
+        retryLabel="Повторить"
+        title="Что-то пошло не так"
       />
     );
+
   const { lesson, participants } = attendance.data;
-  const marked = participants.filter(({ status }) => status).length;
+  const counts = {
+    ABSENT: participants.filter(({ status }) => status === 'ABSENT').length,
+    EXCUSED: participants.filter(({ status }) => status === 'EXCUSED').length,
+    PRESENT: participants.filter(({ status }) => status === 'PRESENT').length,
+    UNMARKED: participants.filter(({ status }) => !status).length,
+  };
+  const returnTo =
+    searchParams.get('from') === 'workspace' ? '/attendance' : `/lessons/${lessonId}`;
+
   return (
-    <main className="mx-auto w-full max-w-[1240px] animate-fade-in p-9 pb-14">
+    <main className="mx-auto w-full max-w-[1320px] animate-fade-in p-7 pb-16 min-[1500px]:p-9">
       <Link
-        className="mb-6 inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground"
-        to={`/lessons/${lessonId}`}
+        className="mb-5 inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground transition hover:text-foreground"
+        to={returnTo}
       >
         <ArrowLeft className="size-4" />
-        {t('lesson.details')}
+        {returnTo === '/attendance' ? 'Все занятия сегодня' : 'К занятию'}
       </Link>
-      <header className="mb-6 flex items-end justify-between">
+
+      <header className="mb-5 flex flex-wrap items-end justify-between gap-5">
         <div>
           <p className="text-sm font-medium text-muted-foreground">
             {formatDate(lesson.startsAt, { dateStyle: 'long', timeStyle: 'short' })}
           </p>
-          <h1 className="mt-2 text-4xl font-semibold tracking-[-0.04em]">
-            {t('attendance.pageTitle')} · {lesson.groupName}
-          </h1>
-          <p className="mt-2 text-muted-foreground">{t('attendance.pageDescription')}</p>
+          <h1 className="mt-2 text-4xl font-semibold tracking-[-0.045em]">{lesson.groupName}</h1>
+          <p className="mt-2 text-muted-foreground">Отмечайте учеников одним нажатием</p>
         </div>
         <div className="text-right">
           <p className="flex items-center justify-end gap-2 text-sm font-semibold">
             <CircleCheck className="size-4 text-emerald-500" />
-            {t('attendance.instantSave')}
-          </p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            {t('attendance.marked', { expected: participants.length, marked })}
+            Изменения сохраняются сразу
           </p>
           {attendance.data.attendanceCompletedAt ? (
-            <p className="mt-1 text-xs font-semibold text-emerald-600">Посещаемость заполнена</p>
+            <Badge className="mt-2 bg-emerald-50 text-emerald-700">Посещаемость заполнена</Badge>
           ) : null}
         </div>
       </header>
-      <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>{t('group.participants')}</CardTitle>
+
+      <section className="sticky top-0 z-20 -mx-2 mb-5 grid grid-cols-2 gap-2 bg-background/95 px-2 py-3 backdrop-blur md:grid-cols-4">
+        {[
+          ['Присутствуют', counts.PRESENT, 'text-emerald-700'],
+          ['Отсутствуют', counts.ABSENT, 'text-red-600'],
+          ['Болеют', counts.EXCUSED, 'text-amber-700'],
+          ['Не отмечены', counts.UNMARKED, 'text-muted-foreground'],
+        ].map(([label, value, tone]) => (
+          <Card className="px-4 py-3" key={String(label)}>
+            <p className={cn('text-2xl font-semibold tabular-nums', tone)}>{value}</p>
+            <p className="text-xs font-medium text-muted-foreground">{label}</p>
+          </Card>
+        ))}
+      </section>
+
+      {participants.length > 0 && counts.UNMARKED === 0 ? (
+        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+          <CheckCheck className="size-4" /> Все ученики отмечены
+        </div>
+      ) : null}
+
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
+          <div className="relative min-w-64 flex-1 md:max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              aria-label="Поиск ученика"
+              className="pl-9"
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Имя или фамилия"
+              value={search}
+            />
+          </div>
           <Button
             disabled={save.isPending || participants.length === 0}
             onClick={() =>
@@ -111,52 +175,65 @@ export function AttendancePage() {
             }
           >
             <CheckCheck className="size-4" />
-            {t('attendance.action.allPresent')}
+            Отметить всех присутствующими
           </Button>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {participants.length === 0 ? (
+        </div>
+
+        {participants.length === 0 ? (
+          <div className="p-8">
             <EmptyState
-              description={t('attendance.empty')}
+              description="Добавьте учеников в группу, чтобы отметить посещаемость."
               icon={UsersRound}
-              title={t('enrollment.empty')}
+              title="В группе пока нет учеников"
             />
-          ) : (
-            participants.map((participant) => (
-              <ParticipantRow
-                detail={
-                  participant.status ? (
-                    <StatusBadge tone={tones[participant.status]}>
-                      {t(`attendance.status.${participant.status}`)}
-                    </StatusBadge>
-                  ) : (
-                    t('common.notSpecified')
-                  )
-                }
+          </div>
+        ) : filteredParticipants.length === 0 ? (
+          <div className="p-8">
+            <EmptyState
+              description="Проверьте написание имени или фамилии."
+              icon={Search}
+              title="Ученик не найден"
+            />
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {filteredParticipants.map((participant) => (
+              <article
+                className="flex flex-col gap-3 px-4 py-4 md:flex-row md:items-center md:justify-between"
                 key={participant.studentId}
-                name={participant.studentName}
-                trailing={
-                  <div className="flex flex-wrap justify-end gap-1">
-                    {ATTENDANCE_STATUSES.map((status) => (
-                      <button
-                        aria-label={`${participant.studentName}: ${t(`attendance.status.${status}`)}`}
-                        className={`rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition ${participant.status === status ? 'border-transparent bg-sidebar text-white' : 'border-border bg-surface hover:bg-muted'}`}
-                        disabled={save.isPending}
-                        key={status}
-                        onClick={() =>
-                          void save.mutateAsync([{ status, studentId: participant.studentId }])
-                        }
-                        type="button"
-                      >
-                        {t(`attendance.status.${status}`)}
-                      </button>
-                    ))}
-                  </div>
-                }
-              />
-            ))
-          )}
-        </CardContent>
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-base font-semibold">{participant.studentName}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {participant.status ? statusLabels[participant.status] : 'Ещё не отмечен'}
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {operationalStatuses.map(({ active, icon: Icon, label, status }) => (
+                    <button
+                      aria-label={`${participant.studentName}: ${label}`}
+                      className={cn(
+                        'flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-semibold transition active:scale-[0.98]',
+                        participant.status === status
+                          ? active
+                          : 'border-border bg-surface hover:border-neutral-300 hover:bg-muted',
+                      )}
+                      disabled={save.isPending}
+                      key={status}
+                      onClick={() =>
+                        void save.mutateAsync([{ status, studentId: participant.studentId }])
+                      }
+                      type="button"
+                    >
+                      <Icon className="size-4" />
+                      <span className="hidden xl:inline">{label}</span>
+                    </button>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </Card>
     </main>
   );

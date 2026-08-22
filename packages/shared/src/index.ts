@@ -6,6 +6,7 @@ export {
   attendanceEntriesSchema,
   attendanceEntryInputSchema,
   attendanceStatusSchema,
+  attendanceWorkspaceDateSchema,
   analyticsQuerySchema,
   attentionFiltersSchema,
   calendarExceptionInputSchema,

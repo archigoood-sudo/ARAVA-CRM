@@ -267,6 +267,7 @@ const optionalIdentifier = z
   .optional()
   .transform((value) => (value?.length ? value : undefined));
 const isoDate = z.string().date(t('validation.date'));
+export const attendanceWorkspaceDateSchema = isoDate;
 const optionalIsoDate = isoDate.optional().or(z.literal('').transform(() => undefined));
 const isoDateTime = z.string().datetime({ message: t('validation.dateTime'), offset: true });
 const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/u, t('validation.time'));

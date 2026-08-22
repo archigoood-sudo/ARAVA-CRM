@@ -139,6 +139,7 @@ test('sidebar остаётся доступным на малой высоте, 
     await page.locator('main').click({ position: { x: 5, y: 5 } });
     await page.keyboard.type('0000076543', { delay: 1 });
     await page.keyboard.press('Enter');
+    await page.getByRole('dialog').getByRole('button', { name: 'Открыть профиль' }).click();
     await expect(page).toHaveURL(/\/students\/[^?]+\?openedByCard=1/u);
   } finally {
     await application.close();

@@ -139,9 +139,7 @@ test('вход, создание филиала, ученика и контак�
     await window.getByRole('button', { name: 'Создать занятия' }).click();
     await expect(window.getByText(/Создано занятий:/u)).toBeVisible();
     await window.getByRole('button', { name: 'Открыть посещаемость' }).first().click();
-    await expect(
-      window.getByRole('heading', { name: /Посещаемость · Импульс E2E/u }),
-    ).toBeVisible();
+    await expect(window.getByRole('heading', { name: 'Импульс E2E', exact: true })).toBeVisible();
     await window.getByRole('button', { name: 'Отметить всех присутствующими' }).click();
     await expect(window.getByText('Присутствовал').first()).toBeVisible();
 
@@ -153,8 +151,8 @@ test('вход, создание филиала, ученика и контак�
 
     await window.getByRole('link', { name: 'Расписание' }).click();
     await window.getByRole('button', { name: 'Открыть посещаемость' }).first().click();
-    await window.getByRole('button', { name: 'Петрова Мила: Уважительная причина' }).click();
-    await expect(window.getByText('Уважительная причина').first()).toBeVisible();
+    await window.getByRole('button', { name: 'Петрова Мила: Болел' }).click();
+    await expect(window.getByText('Болел').first()).toBeVisible();
     await window.getByRole('link', { name: 'Ученики' }).click();
     await window.getByRole('link', { name: /Петрова Мила/u }).click();
     await window.getByRole('button', { name: /Абонемент E2E/u }).click();

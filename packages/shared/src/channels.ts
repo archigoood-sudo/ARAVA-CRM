@@ -284,6 +284,8 @@ export const IPC_CHANNELS = {
   lessonUpdate: 'lesson:update',
   attendanceGet: 'attendance:get',
   attendanceSave: 'attendance:save',
+  attendanceScanOptions: 'attendance:scan-options',
+  attendanceToday: 'attendance:today',
   tariffArchive: 'tariff:archive',
   tariffCreate: 'tariff:create',
   tariffGet: 'tariff:get',
@@ -1674,6 +1676,45 @@ export interface AttendanceLessonDetail {
   participants: AttendanceParticipant[];
 }
 
+export interface AttendanceWorkspaceLesson {
+  attendanceCompletedAt?: string | undefined;
+  attendanceExpected: number;
+  attendanceMarked: number;
+  branchId: string;
+  branchName: string;
+  direction: string;
+  effectiveTrainerName?: string | undefined;
+  endsAt: string;
+  groupId: string;
+  groupName: string;
+  id: string;
+  roomName?: string | undefined;
+  startsAt: string;
+  status: LessonStatus;
+}
+
+export interface AttendanceWorkspaceDay {
+  date: string;
+  lessons: AttendanceWorkspaceLesson[];
+}
+
+export interface AttendanceScanLessonOption {
+  branchName: string;
+  currentStatus?: AttendanceStatus | undefined;
+  effectiveTrainerName?: string | undefined;
+  endsAt: string;
+  groupName: string;
+  lessonId: string;
+  roomName?: string | undefined;
+  startsAt: string;
+}
+
+export interface AttendanceScanOptions {
+  lessons: AttendanceScanLessonOption[];
+  studentId: string;
+  studentName: string;
+}
+
 export interface StudentAttendanceHistory {
   groupName: string;
   lessonId: string;
@@ -2417,11 +2458,13 @@ export interface AravaDesktopApi {
   };
   attendance: {
     get: (token: string, lessonId: string) => Promise<AttendanceLessonDetail>;
+    scanOptions: (token: string, studentId: string, date: string) => Promise<AttendanceScanOptions>;
     save: (
       token: string,
       lessonId: string,
       entries: AttendanceEntryInput[],
     ) => Promise<AttendanceLessonDetail>;
+    today: (token: string, date: string) => Promise<AttendanceWorkspaceDay>;
   };
   tariffs: {
     archive: (token: string, id: string) => Promise<TariffSummary>;

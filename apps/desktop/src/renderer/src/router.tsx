@@ -8,6 +8,7 @@ import { BranchesPage } from './features/branches/branches-page';
 import { DashboardPage } from './features/dashboard/dashboard-page';
 import { AttentionPage } from './features/attention/attention-page';
 import { AttendancePage } from './features/attendance/attendance-page';
+import { AttendanceWorkspacePage } from './features/attendance/attendance-workspace-page';
 import { FinancePage } from './features/finance/finance-page';
 import { ExpensesPage } from './features/expenses/expenses-page';
 import { ExpenseCategoriesPage } from './features/expenses/expense-categories-page';
@@ -64,6 +65,7 @@ export const router = createHashRouter([
           { element: <GroupProfilePage />, path: '/groups/:groupId' },
           { element: <SchedulePage />, path: '/schedule' },
           { element: <LessonDetailsPage />, path: '/lessons/:lessonId' },
+          { element: <AttendanceWorkspacePage />, path: '/attendance' },
           { element: <AttendancePage />, path: '/attendance/:lessonId' },
           { element: <StudentsPage />, path: '/students' },
           { element: <StudentProfilePage />, path: '/students/:studentId' },

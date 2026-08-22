@@ -1,5 +1,6 @@
 import {
   ApplicationService,
+  AttendanceWorkspaceService,
   ChatService,
   CalendarService,
   CardService,
@@ -22,6 +23,7 @@ import {
 import {
   IPC_CHANNELS,
   attendanceEntriesSchema,
+  attendanceWorkspaceDateSchema,
   chatListQuerySchema,
   chatSendInputSchema,
   calendarExceptionInputSchema,
@@ -163,6 +165,7 @@ export function createIpcHandlers(
   backupDependencies: BackupIpcDependencies = {},
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
+  const attendanceWorkspace = new AttendanceWorkspaceService(database, service);
   const finance = new FinanceService(database, service);
   const paymentOperations = new PaymentOperationService(database, service);
   const management = new ManagementService(database, service);
@@ -721,6 +724,17 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeLessonId),
         attendanceEntriesSchema.parse(unsafeEntries),
+      ),
+    [IPC_CHANNELS.attendanceToday]: (unsafeToken, unsafeDate) =>
+      attendanceWorkspace.today(
+        sessionTokenSchema.parse(unsafeToken),
+        attendanceWorkspaceDateSchema.parse(unsafeDate),
+      ),
+    [IPC_CHANNELS.attendanceScanOptions]: (unsafeToken, unsafeStudentId, unsafeDate) =>
+      attendanceWorkspace.scanOptions(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+        attendanceWorkspaceDateSchema.parse(unsafeDate),
       ),
 
     [IPC_CHANNELS.tariffList]: (unsafeToken, unsafeQuery) =>

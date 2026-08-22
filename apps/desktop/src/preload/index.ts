@@ -211,8 +211,11 @@ const desktopApi: AravaDesktopApi = {
   },
   attendance: {
     get: (token, lessonId) => invoke(IPC_CHANNELS.attendanceGet, token, lessonId),
+    scanOptions: (token, studentId, date) =>
+      invoke(IPC_CHANNELS.attendanceScanOptions, token, studentId, date),
     save: (token, lessonId, entries) =>
       invoke(IPC_CHANNELS.attendanceSave, token, lessonId, entries),
+    today: (token, date) => invoke(IPC_CHANNELS.attendanceToday, token, date),
   },
   tariffs: {
     archive: (token, id) => invoke(IPC_CHANNELS.tariffArchive, token, id),

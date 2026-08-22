@@ -168,6 +168,7 @@ test('расширенный профиль объединяет работу а
     await page.locator('main').click({ position: { x: 5, y: 5 } });
     await page.keyboard.type('0000042111', { delay: 1 });
     await page.keyboard.press('Enter');
+    await page.getByRole('dialog').getByRole('button', { name: 'Открыть профиль' }).click();
     await expect(page).toHaveURL(
       new RegExp(`/students/${context.studentId}[?]openedByCard=1$`, 'u'),
     );

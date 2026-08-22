@@ -13,6 +13,7 @@ const pageTitles: Record<string, { eyebrow: string; title: string }> = {
   '/about': { eyebrow: t('page.about.eyebrow'), title: t('nav.about') },
   '/dashboard': { eyebrow: t('page.dashboard.eyebrow'), title: t('nav.dashboard') },
   '/attention': { eyebrow: 'Операционный центр', title: 'Требует внимания' },
+  '/attendance': { eyebrow: 'Ежедневная работа', title: 'Посещения' },
   '/branches': { eyebrow: t('page.branches.eyebrow'), title: t('nav.branches') },
   '/cards': { eyebrow: 'Доступ клиентов', title: 'Карты' },
   '/chats': { eyebrow: 'ARAVA ECOSYSTEM', title: 'Чаты' },
@@ -27,11 +28,13 @@ export function AppLayout() {
   const queryClient = useQueryClient();
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
-  const page = location.pathname.startsWith('/students/')
-    ? { eyebrow: t('page.profile.eyebrow'), title: t('page.profile.title') }
-    : location.pathname.startsWith('/trainers/')
-      ? { eyebrow: 'Команда ARAVA', title: 'Профиль тренера' }
-      : (pageTitles[location.pathname] ?? pageTitles['/dashboard']);
+  const page = location.pathname.startsWith('/attendance/')
+    ? pageTitles['/attendance']
+    : location.pathname.startsWith('/students/')
+      ? { eyebrow: t('page.profile.eyebrow'), title: t('page.profile.title') }
+      : location.pathname.startsWith('/trainers/')
+        ? { eyebrow: 'Команда ARAVA', title: 'Профиль тренера' }
+        : (pageTitles[location.pathname] ?? pageTitles['/dashboard']);
 
   const handleLogout = async () => {
     await logout();

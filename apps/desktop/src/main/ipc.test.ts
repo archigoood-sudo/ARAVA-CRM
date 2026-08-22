@@ -12,6 +12,7 @@ import {
   INITIAL_OWNER_EMAIL,
   INITIAL_OWNER_PASSWORD,
   IntegrationService,
+  StudioService,
   type IntegrationCredentialStore,
   toSqliteUrl,
   type DatabaseClient,
@@ -36,6 +37,8 @@ import {
   type TrainerProfileOverview,
   type AttentionItem,
   type AttentionSummary,
+  type AttendanceScanOptions,
+  type AttendanceWorkspaceDay,
   type BackupEntry,
   type BackupRestoreSelection,
   type BackupStatus,
@@ -836,6 +839,79 @@ describe('Electron IPC boundary', () => {
     await expect(
       handlers[IPC_CHANNELS.cardRegister]?.(coachSession.token, { barcode: '0000005002' }),
     ).rejects.toThrow(t('domain.authorization.permissionDenied'));
+  });
+
+  it('exposes permission-aware attendance workspace and scan options without implicit writes', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!AttendanceIpc2026',
+    });
+    const studio = new StudioService(database, service);
+    const branch = await service.createBranch(owner.token, { name: 'Посещения IPC' });
+    const coach = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'coach-attendance-ipc@arava.local',
+      fullName: 'Тренер посещений',
+      password: 'Coach!AttendanceIpc2026',
+      role: 'COACH',
+    });
+    const coachSession = await service.login({
+      email: coach.email,
+      password: 'Coach!AttendanceIpc2026',
+    });
+    await service.changePassword(coachSession.token, {
+      currentPassword: 'Coach!AttendanceIpc2026',
+      newPassword: 'Coach!AttendanceIpcChanged2026',
+    });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Ирина',
+      lastName: 'Посещаемова',
+      status: 'ACTIVE',
+    });
+    const group = await studio.createGroup(owner.token, {
+      branchId: branch.id,
+      capacity: 20,
+      coachId: coach.id,
+      direction: 'Хип-хоп',
+      name: 'Посещения IPC',
+      status: 'ACTIVE',
+    });
+    await studio.addEnrollment(owner.token, group.id, {
+      joinedAt: '2026-08-01',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: student.id,
+    });
+    const lesson = await studio.createLesson(owner.token, {
+      coachId: coach.id,
+      endsAt: '2026-08-23T19:00:00',
+      groupId: group.id,
+      startsAt: '2026-08-23T18:00:00',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    expect(() => handlers[IPC_CHANNELS.attendanceToday]?.(owner.token, '23.08.2026')).toThrow();
+    const day = (await handlers[IPC_CHANNELS.attendanceToday]?.(
+      owner.token,
+      '2026-08-23',
+    )) as AttendanceWorkspaceDay;
+    expect(day.lessons).toEqual([
+      expect.objectContaining({ attendanceExpected: 1, id: lesson.id }),
+    ]);
+    const options = (await handlers[IPC_CHANNELS.attendanceScanOptions]?.(
+      owner.token,
+      student.id,
+      '2026-08-23',
+    )) as AttendanceScanOptions;
+    expect(options.lessons).toEqual([expect.objectContaining({ lessonId: lesson.id })]);
+    expect(await database.attendance.count()).toBe(0);
+    await expect(
+      handlers[IPC_CHANNELS.attendanceToday]?.(coachSession.token, '2026-08-23'),
+    ).rejects.toThrow('Рабочее место «Посещения» доступно владельцу и администраторам.');
   });
 
   it('keeps payment operations permission-aware and trusted completion test-only', async () => {

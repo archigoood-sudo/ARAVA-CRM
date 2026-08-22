@@ -21,6 +21,12 @@ async function scan(page: Page, barcode: string) {
   await page.keyboard.press('Enter');
 }
 
+async function openScannedProfile(page: Page) {
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Сегодня занятий не найдено')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Открыть профиль' }).click();
+}
+
 test('регистрация, привязка, сканирование, утеря и замена заранее напечатанной карты', async ({
   request: _request,
 }, testInfo) => {
@@ -78,6 +84,7 @@ test('регистрация, привязка, сканирование, уте
 
     // This is intentionally scanned without moving focus after the assignment dialog.
     await scan(page, '0000001001');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(/\/students\/[^?]+\?openedByCard=1/u);
     await expect(page.getByText('Открыто по карте')).toBeVisible();
     await expect(page.getByText('0000001001', { exact: true })).toBeVisible();
@@ -134,6 +141,7 @@ test('регистрация, привязка, сканирование, уте
     for (const pageName of ['Ученики', 'Группы', 'Расписание', 'Финансы', 'Настройки']) {
       await page.getByRole('link', { name: pageName, exact: true }).click();
       await scan(page, '0000001001');
+      await openScannedProfile(page);
       await expect(page).toHaveURL(
         new RegExp(`/students/${fixtures.firstStudentId}\\?openedByCard=1$`, 'u'),
       );
@@ -141,10 +149,12 @@ test('регистрация, привязка, сканирование, уте
     }
 
     await scan(page, '0000001010');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixtures.secondStudentId}\\?openedByCard=1$`, 'u'),
     );
     await scan(page, '0000001001');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixtures.firstStudentId}\\?openedByCard=1$`, 'u'),
     );
@@ -158,6 +168,7 @@ test('регистрация, привязка, сканирование, уте
       });
     const scansBeforeSameCard = await scanCount();
     await scan(page, '0000001001');
+    await openScannedProfile(page);
     await expect(page.getByText('Открыто по карте')).toBeVisible();
     await expect.poll(scanCount).toBe(scansBeforeSameCard + 1);
     await expect(page).toHaveURL(
@@ -173,6 +184,7 @@ test('регистрация, привязка, сканирование, уте
     await globalSearchInput.fill('');
     await scan(page, '0000001010');
     await expect(globalSearch).toBeHidden();
+    await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixtures.secondStudentId}\\?openedByCard=1$`, 'u'),
     );
@@ -233,6 +245,7 @@ test('регистрация, привязка, сканирование, уте
     await expect(page.getByText('0000001002', { exact: true })).toBeVisible();
     await page.getByRole('link', { name: 'Главная', exact: true }).click();
     await scan(page, '0000001002');
+    await openScannedProfile(page);
     await expect(page).toHaveURL(/\/students\/[^?]+\?openedByCard=1/u);
     await expect(page.getByText('0000001002', { exact: true })).toBeVisible();
 

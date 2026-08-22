@@ -138,6 +138,7 @@ export {
 } from './integration-service';
 export { CustomerDisplayService, CUSTOMER_DISPLAY_DEFAULTS } from './customer-display-service';
 export { AttentionService } from './attention-service';
+export { AttendanceWorkspaceService, rankAttendanceOptions } from './attendance-workspace-service';
 export { BackupService, type BackupServiceOptions } from './backup-service';
 export { ATTENTION_RULES, DAY_MS, isExpiringSoon, isLowLessonBalance } from './attention-rules';
 export {
