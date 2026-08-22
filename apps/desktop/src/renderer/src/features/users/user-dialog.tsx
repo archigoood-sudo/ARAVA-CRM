@@ -9,7 +9,7 @@ import {
   type UserSummary,
   type UserUpdateInput,
 } from '@arava/shared';
-import { Button, Checkbox, Dialog, Input, Label, Select } from '@arava/ui';
+import { Button, Checkbox, Dialog, Input, Label, Select, Textarea } from '@arava/ui';
 import { useLayoutEffect, useRef } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 
@@ -26,6 +26,7 @@ interface UserFormValues {
   isActive: boolean;
   phone: string;
   role: UserRole;
+  trainerDescription: string;
 }
 
 export function UserDialog({
@@ -63,6 +64,7 @@ export function UserDialog({
       isActive: true,
       phone: '',
       role: 'COACH',
+      trainerDescription: '',
     },
   });
   const wasOpen = useRef(false);
@@ -80,6 +82,7 @@ export function UserDialog({
               isActive: user.isActive,
               phone: user.phone ?? '',
               role: user.role,
+              trainerDescription: user.trainerDescription ?? '',
             }
           : {
               branchIds: [],
@@ -88,6 +91,7 @@ export function UserDialog({
               isActive: true,
               phone: '',
               role: 'COACH',
+              trainerDescription: '',
             },
       );
     }
@@ -103,6 +107,7 @@ export function UserDialog({
         isActive: values.isActive,
         phone: values.phone,
         role: values.role,
+        trainerDescription: values.trainerDescription,
       });
       if (!result.success) {
         setError('root', { message: result.error.issues[0]?.message ?? t('user.errorForm') });
@@ -116,6 +121,7 @@ export function UserDialog({
         fullName: values.fullName,
         phone: values.phone,
         role: values.role,
+        trainerDescription: values.trainerDescription,
       });
       if (!result.success) {
         setError('root', { message: result.error.issues[0]?.message ?? t('user.errorForm') });
@@ -167,6 +173,19 @@ export function UserDialog({
           <Label htmlFor="user-phone">{t('common.phone')}</Label>
           <Input id="user-phone" type="tel" {...register('phone')} />
         </div>
+        {selectedRole === 'COACH' ? (
+          <div className="space-y-2">
+            <Label htmlFor="user-trainer-description">Описание тренера</Label>
+            <Textarea
+              id="user-trainer-description"
+              maxLength={1200}
+              placeholder="Например: направления, опыт и особенности занятий"
+              rows={4}
+              {...register('trainerDescription')}
+            />
+            <p className="text-xs text-muted-foreground">До 1200 символов.</p>
+          </div>
+        ) : null}
         {scopedRole ? (
           <fieldset className="space-y-2 rounded-2xl border border-border p-4">
             <legend className="px-1 text-sm font-semibold">{t('user.assignedBranches')}</legend>

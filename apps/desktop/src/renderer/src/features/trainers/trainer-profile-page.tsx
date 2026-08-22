@@ -214,6 +214,11 @@ export function TrainerProfilePage() {
             {data.trainer.directions.length ? (
               <p className="mt-3 text-sm text-neutral-300">{data.trainer.directions.join(' · ')}</p>
             ) : null}
+            {data.trainer.trainerDescription ? (
+              <p className="mt-4 max-w-3xl whitespace-pre-wrap text-sm leading-6 text-neutral-300">
+                {data.trainer.trainerDescription}
+              </p>
+            ) : null}
           </div>
           <div className="relative flex flex-wrap gap-2">
             <Button onClick={() => window.location.assign('#/schedule')} variant="outline">

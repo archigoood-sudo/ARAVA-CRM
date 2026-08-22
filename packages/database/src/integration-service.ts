@@ -1739,8 +1739,15 @@ export class IntegrationService {
             mustChangePassword: true,
             passwordHash: 'REMOTE_ACCOUNT_LOGIN_DISABLED',
             role: 'COACH',
+            phone: nullableString(payload.phone),
+            trainerDescription: nullableString(payload.description),
           },
-          update: { fullName, isActive: booleanValue(payload.isActive) },
+          update: {
+            fullName,
+            isActive: booleanValue(payload.isActive),
+            phone: nullableString(payload.phone),
+            trainerDescription: nullableString(payload.description),
+          },
           where: { id: change.entityId },
         });
         const branchIds = Array.isArray(payload.branchIds)
@@ -2345,7 +2352,10 @@ export class IntegrationService {
         const row = await this.database.user.findUnique({
           include: {
             branchAssignments: { select: { branchId: true } },
-            coachedGroups: { select: { direction: true, id: true }, where: { archivedAt: null } },
+            coachedGroups: {
+              select: { direction: true, id: true },
+              where: { archivedAt: null, status: { not: 'ARCHIVED' } },
+            },
           },
           where: { id: entityId },
         });
@@ -2355,8 +2365,10 @@ export class IntegrationService {
               branchIds: row.branchAssignments.map(({ branchId }) => branchId),
               directions: [...new Set(row.coachedGroups.map(({ direction }) => direction))],
               displayName: row.fullName,
+              description: row.trainerDescription,
               id: row.id,
               isActive: row.isActive && row.role === 'COACH',
+              phone: row.phone,
               updatedAt: row.updatedAt.toISOString(),
             }
           : { id: entityId, missing: true };

@@ -466,6 +466,7 @@ export class TrainerProfileService {
         id: trainer.id,
         isActive: trainer.isActive,
         phone: trainer.phone ?? undefined,
+        trainerDescription: trainer.trainerDescription ?? undefined,
       },
       upcomingLessons: upcomingLessons.map(lessonView),
     };

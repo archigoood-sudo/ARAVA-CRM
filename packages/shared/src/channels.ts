@@ -369,6 +369,7 @@ export interface UserSummary extends AuthenticatedUser {
   lastLoginAt?: string | undefined;
   lockedUntil?: string | undefined;
   phone?: string | undefined;
+  trainerDescription?: string | undefined;
   updatedAt: string;
 }
 
@@ -380,6 +381,7 @@ export interface UserCreateInput {
   password?: string | undefined;
   phone?: string | undefined;
   role: UserRole;
+  trainerDescription?: string | undefined;
 }
 
 export interface UserUpdateInput {
@@ -388,6 +390,7 @@ export interface UserUpdateInput {
   isActive: boolean;
   phone?: string | undefined;
   role: UserRole;
+  trainerDescription?: string | undefined;
 }
 
 export interface TemporaryPasswordResult {
@@ -1237,6 +1240,7 @@ export interface TrainerProfileOverview {
     id: string;
     isActive: boolean;
     phone?: string | undefined;
+    trainerDescription?: string | undefined;
   };
   upcomingLessons: TrainerProfileLesson[];
 }

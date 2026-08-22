@@ -74,6 +74,7 @@ function userSummary(user: UserWithBranches): UserSummary {
     lastLoginAt: user.lastLoginAt?.toISOString(),
     lockedUntil: user.lockedUntil?.toISOString(),
     phone: user.phone ?? undefined,
+    trainerDescription: user.trainerDescription ?? undefined,
     updatedAt: user.updatedAt.toISOString(),
   };
 }
@@ -385,6 +386,8 @@ export class ApplicationService {
           passwordHash: await hashPassword(password),
           phone: input.phone ? normalizePhone(input.phone) : null,
           role: input.role,
+          trainerDescription:
+            input.role === 'COACH' ? optionalValue(input.trainerDescription) : null,
         },
         include: { branchAssignments: { select: { branchId: true } } },
       });
@@ -435,6 +438,12 @@ export class ApplicationService {
           isActive: input.isActive,
           phone: input.phone ? normalizePhone(input.phone) : null,
           role: input.role,
+          trainerDescription:
+            input.role === 'COACH'
+              ? input.trainerDescription === undefined
+                ? target.trainerDescription
+                : optionalValue(input.trainerDescription)
+              : null,
           securityVersion: { increment: 1 },
           sessions: { deleteMany: {} },
         },

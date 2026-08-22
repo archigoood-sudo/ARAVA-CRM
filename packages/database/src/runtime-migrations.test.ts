@@ -20,6 +20,7 @@ describe('runtime migrations', () => {
       '20260818000000_sprint_4_4a',
       '20260818020000_sprint_4_4d',
       '20260818030000_sprint_4_5a',
+      '20260822000000_trainer_sync_1',
     ]);
   });
 });

@@ -652,7 +652,6 @@ describe('Sprint 4.5A multi-device integration', () => {
     for (const forbidden of [
       'passwordHash',
       'private-trainer@arava.local',
-      '+79990000000',
       'securityVersion',
       'recoveryCode',
       'payment',
@@ -666,6 +665,138 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(
       await database.syncOutbox.count({ where: { entityType: 'STUDENT_IDENTITY' } }),
     ).toBeGreaterThan(0);
+  });
+
+  it('keeps trainer identity stable and refreshes derived payloads through the existing outbox', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Тренерский филиал' });
+    const trainerA = await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'trainer-a-sync@arava.local',
+      fullName: 'Анна До Переименования',
+      password: 'Trainer!A2026',
+      role: 'COACH',
+    });
+    const trainerB = await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'trainer-b-sync@arava.local',
+      fullName: 'Борис Тренер',
+      password: 'Trainer!B2026',
+      role: 'COACH',
+    });
+    const group = await database.danceGroup.create({
+      data: {
+        branchId: branch.id,
+        coachId: trainerA.id,
+        direction: 'Хип-хоп',
+        name: 'Активная группа',
+        status: 'ACTIVE',
+      },
+    });
+
+    await database.syncOutbox.deleteMany();
+    const renamed = await application.updateUser(ownerToken, trainerA.id, {
+      branchIds: [branch.id],
+      fullName: 'Анна После Переименования',
+      isActive: true,
+      phone: '+7 999 123-45-67',
+      role: 'COACH',
+      trainerDescription: 'Ведёт занятия по хип-хопу.',
+    });
+    expect(renamed.id).toBe(trainerA.id);
+    expect(await database.danceGroup.findUniqueOrThrow({ where: { id: group.id } })).toMatchObject({
+      coachId: trainerA.id,
+    });
+    expect(
+      await database.syncOutbox.count({
+        where: { entityId: trainerA.id, entityType: 'TRAINER', status: 'PENDING' },
+      }),
+    ).toBe(1);
+    const payload = await integration.safePayload('TRAINER', trainerA.id);
+    expect(payload).toEqual(
+      expect.objectContaining({
+        activeGroupIds: [group.id],
+        branchIds: [branch.id],
+        description: 'Ведёт занятия по хип-хопу.',
+        directions: ['Хип-хоп'],
+        displayName: 'Анна После Переименования',
+        id: trainerA.id,
+        isActive: true,
+        phone: '+79991234567',
+      }),
+    );
+    for (const forbidden of [
+      'email',
+      'passwordHash',
+      'securityVersion',
+      'recoveryCodeHash',
+      'mustChangePassword',
+    ]) {
+      expect(payload).not.toHaveProperty(forbidden);
+    }
+
+    await database.syncOutbox.deleteMany();
+    await database.danceGroup.update({
+      data: { direction: 'Контемпорари' },
+      where: { id: group.id },
+    });
+    expect(
+      await database.syncOutbox.count({
+        where: { entityId: trainerA.id, entityType: 'TRAINER' },
+      }),
+    ).toBe(1);
+
+    await database.syncOutbox.deleteMany();
+    await database.danceGroup.update({
+      data: { archivedAt: new Date(), status: 'ARCHIVED' },
+      where: { id: group.id },
+    });
+    expect(
+      await database.syncOutbox.count({
+        where: { entityId: trainerA.id, entityType: 'TRAINER' },
+      }),
+    ).toBe(1);
+    await expect(integration.safePayload('TRAINER', trainerA.id)).resolves.toMatchObject({
+      activeGroupIds: [],
+      directions: [],
+    });
+
+    await database.danceGroup.update({
+      data: { archivedAt: null, status: 'ACTIVE' },
+      where: { id: group.id },
+    });
+    await database.syncOutbox.deleteMany();
+    await database.danceGroup.update({
+      data: { coachId: trainerB.id },
+      where: { id: group.id },
+    });
+    const reassignment = await database.syncOutbox.findMany({
+      orderBy: { entityId: 'asc' },
+      where: { entityId: { in: [trainerA.id, trainerB.id] }, entityType: 'TRAINER' },
+    });
+    expect(reassignment.map(({ entityId }) => entityId)).toEqual([trainerA.id, trainerB.id].sort());
+
+    await database.syncOutbox.deleteMany();
+    const deactivated = await application.updateUser(ownerToken, trainerB.id, {
+      branchIds: [branch.id],
+      fullName: trainerB.fullName,
+      isActive: false,
+      role: 'COACH',
+    });
+    expect(deactivated.id).toBe(trainerB.id);
+    await expect(integration.safePayload('TRAINER', trainerB.id)).resolves.toMatchObject({
+      id: trainerB.id,
+      isActive: false,
+    });
+    const reactivated = await application.updateUser(ownerToken, trainerB.id, {
+      branchIds: [branch.id],
+      fullName: trainerB.fullName,
+      isActive: true,
+      role: 'COACH',
+    });
+    expect(reactivated.id).toBe(trainerB.id);
+    expect(await database.danceGroup.findUniqueOrThrow({ where: { id: group.id } })).toMatchObject({
+      coachId: trainerB.id,
+    });
   });
 
   it('denies configuration to ADMIN and COACH at the service boundary', async () => {

@@ -235,6 +235,7 @@ model User {
   isActive               Boolean               @default(true)
   mustChangePassword     Boolean               @default(false)
   phone                  String?
+  trainerDescription     String?
   failedLoginAttempts    Int                   @default(0)
   lockedUntil            DateTime?
   lastLoginAt            DateTime?

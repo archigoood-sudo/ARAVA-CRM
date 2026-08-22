@@ -54,6 +54,7 @@ describe('Sprint 4.3D trainer profile', () => {
       password: 'Trainer!Profile2026',
       phone: '+79990001010',
       role: 'COACH',
+      trainerDescription: 'Тренер основной группы.',
     });
     const substitute = await application.createUser(ownerToken, {
       branchIds: [branch.id],
@@ -296,6 +297,7 @@ describe('Sprint 4.3D trainer profile', () => {
       directions: ['Хип-хоп'],
       fullName: 'Анна Тренерова',
       isActive: true,
+      trainerDescription: 'Тренер основной группы.',
     });
     expect(overview.groups).toEqual([
       expect.objectContaining({ name: 'Основная группа', studentCount: 3 }),
@@ -385,6 +387,7 @@ describe('Sprint 4.3D trainer profile', () => {
     });
     const inactive = await profiles.getOverview(ownerToken, context.trainer.id, context.month);
     expect(inactive.trainer.isActive).toBe(false);
+    expect(inactive.trainer.trainerDescription).toBe('Тренер основной группы.');
     expect(inactive.activity.conducted).toBeGreaterThan(0);
     expect(inactive.payroll.details).toHaveLength(1);
     expect(inactive.attention.map(({ code }) => code)).toContain('INACTIVE_ASSIGNED');

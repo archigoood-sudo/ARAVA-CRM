@@ -116,6 +116,7 @@ export function UsersPage() {
     setError(undefined);
     try {
       await update.mutateAsync({ id: editing.id, input });
+      await queryClient.invalidateQueries({ queryKey: ['trainers', 'profile', editing.id] });
       await finish();
     } catch (caught) {
       setError(getErrorMessage(caught, t('user.errorUpdate')));

@@ -144,6 +144,7 @@ export const userCreateSchema: z.ZodType<UserCreateInput> = z.object({
   fullName: z.string().trim().min(2, t('validation.required')).max(120),
   phone: optionalText(40),
   role: userRoleSchema,
+  trainerDescription: optionalText(1200),
 });
 
 export const userUpdateSchema: z.ZodType<UserUpdateInput> = z.object({
@@ -152,6 +153,7 @@ export const userUpdateSchema: z.ZodType<UserUpdateInput> = z.object({
   isActive: z.boolean(),
   phone: optionalText(40),
   role: userRoleSchema,
+  trainerDescription: optionalText(1200),
 });
 
 export const branchInputSchema: z.ZodType<BranchInput> = z.object({
