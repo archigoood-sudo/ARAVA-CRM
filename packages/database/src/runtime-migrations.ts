@@ -695,4 +695,15 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'CREATE TRIGGER "sync_group_update" AFTER UPDATE ON "DanceGroup" WHEN COALESCE((SELECT "value" FROM "AppSetting" WHERE "key" = \'integration.applyingRemote\'), \'false\') != \'true\' BEGIN\n  INSERT INTO "SyncOutbox" ("id","entityType","entityId","operation","idempotencyKey","baseRevision","updatedAt")\n  VALUES (lower(hex(randomblob(16))), \'GROUP\', NEW."id", CASE WHEN NEW."archivedAt" IS NOT NULL OR NEW."status" = \'ARCHIVED\' THEN \'ARCHIVE\' ELSE \'UPSERT\' END, lower(hex(randomblob(16))), COALESCE((SELECT "revision" FROM "SyncEntityState" WHERE "entityType"=\'GROUP\' AND "entityId"=NEW."id"),0), CURRENT_TIMESTAMP);\n  INSERT INTO "SyncOutbox" ("id","entityType","entityId","operation","idempotencyKey","baseRevision","updatedAt")\n  SELECT lower(hex(randomblob(16))), \'TRAINER\', OLD."coachId", \'UPSERT\', lower(hex(randomblob(16))), COALESCE((SELECT "revision" FROM "SyncEntityState" WHERE "entityType"=\'TRAINER\' AND "entityId"=OLD."coachId"),0), CURRENT_TIMESTAMP\n  WHERE OLD."coachId" IS NOT NULL\n    AND (OLD."coachId" IS NOT NEW."coachId" OR OLD."direction" IS NOT NEW."direction" OR OLD."archivedAt" IS NOT NEW."archivedAt" OR OLD."status" IS NOT NEW."status");\n  INSERT INTO "SyncOutbox" ("id","entityType","entityId","operation","idempotencyKey","baseRevision","updatedAt")\n  SELECT lower(hex(randomblob(16))), \'TRAINER\', NEW."coachId", \'UPSERT\', lower(hex(randomblob(16))), COALESCE((SELECT "revision" FROM "SyncEntityState" WHERE "entityType"=\'TRAINER\' AND "entityId"=NEW."coachId"),0), CURRENT_TIMESTAMP\n  WHERE NEW."coachId" IS NOT NULL\n    AND NEW."coachId" IS NOT OLD."coachId";\nEND',
     ],
   },
+  {
+    id: '20260822010000_web_freeze_actions',
+    statements: [
+      'CREATE TABLE "WebAction" (\n  "id" TEXT NOT NULL PRIMARY KEY,\n  "externalActionId" TEXT NOT NULL,\n  "actionType" TEXT NOT NULL,\n  "crmStudentId" TEXT,\n  "crmSubscriptionId" TEXT,\n  "reason" TEXT,\n  "status" TEXT NOT NULL DEFAULT \'PENDING\',\n  "receivedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  "claimedAt" DATETIME,\n  "processedAt" DATETIME,\n  "processedByUserId" TEXT,\n  "safeResultJson" TEXT,\n  "safeError" TEXT,\n  "completionAttemptCount" INTEGER NOT NULL DEFAULT 0,\n  "nextCompletionAttemptAt" DATETIME,\n  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  "updatedAt" DATETIME NOT NULL\n)',
+      'CREATE UNIQUE INDEX "WebAction_externalActionId_key" ON "WebAction"("externalActionId")',
+      'CREATE INDEX "WebAction_status_receivedAt_idx" ON "WebAction"("status", "receivedAt")',
+      'CREATE INDEX "WebAction_crmStudentId_idx" ON "WebAction"("crmStudentId")',
+      'CREATE INDEX "WebAction_crmSubscriptionId_idx" ON "WebAction"("crmSubscriptionId")',
+      'CREATE INDEX "WebAction_nextCompletionAttemptAt_idx" ON "WebAction"("nextCompletionAttemptAt")',
+    ],
+  },
 ];

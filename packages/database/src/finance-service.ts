@@ -437,6 +437,7 @@ export class FinanceService {
     token: string,
     id: string,
     input: SubscriptionFreezeInput,
+    webAction?: { id: string; processedByUserId: string },
   ): Promise<SubscriptionDetail> {
     const actor = await this.application.authenticate(token);
     assertPermission(actor, 'subscriptions:manage');
@@ -469,6 +470,19 @@ export class FinanceService {
         days: input.days,
         ledgerId: ledger.id,
       });
+      if (webAction) {
+        await transaction.webAction.update({
+          data: {
+            nextCompletionAttemptAt: now,
+            processedAt: now,
+            processedByUserId: webAction.processedByUserId,
+            safeError: null,
+            safeResultJson: JSON.stringify({ status: 'SUCCEEDED' }),
+            status: 'SUCCEEDED_ACK_PENDING',
+          },
+          where: { id: webAction.id, status: 'CLAIMED' },
+        });
+      }
     });
     return this.getSubscription(token, id);
   }

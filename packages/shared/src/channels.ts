@@ -227,6 +227,9 @@ export const IPC_CHANNELS = {
   integrationSyncNow: 'integration:sync-now',
   integrationTestConnection: 'integration:test-connection',
   integrationUpdateSettings: 'integration:update-settings',
+  webActionApprove: 'web-action:approve',
+  webActionList: 'web-action:list',
+  webActionReject: 'web-action:reject',
   chatGet: 'chat:get',
   chatList: 'chat:list',
   chatMessages: 'chat:messages',
@@ -1792,6 +1795,28 @@ export interface IntegrationSettingsInput {
   enabled: boolean;
 }
 
+export type WebActionStatus =
+  | 'PENDING'
+  | 'CLAIMED'
+  | 'SUCCEEDED_ACK_PENDING'
+  | 'REJECTED_ACK_PENDING'
+  | 'SUCCEEDED'
+  | 'REJECTED'
+  | 'FAILED';
+
+export interface WebActionSummary {
+  actionType: 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST';
+  externalActionId: string;
+  id: string;
+  reason?: string;
+  receivedAt: string;
+  status: WebActionStatus;
+  studentId: string;
+  studentName: string;
+  subscriptionId: string;
+  subscriptionName: string;
+}
+
 export interface IntegrationPairInput extends IntegrationSettingsInput {
   pairingCode: string;
 }
@@ -2015,6 +2040,15 @@ export interface AravaDesktopApi {
     syncNow: (token: string) => Promise<IntegrationStatus>;
     testConnection: (token: string) => Promise<IntegrationStatus>;
     updateSettings: (token: string, input: IntegrationSettingsInput) => Promise<IntegrationStatus>;
+  };
+  webActions: {
+    approve: (
+      token: string,
+      id: string,
+      input: SubscriptionFreezeInput,
+    ) => Promise<WebActionSummary>;
+    list: (token: string) => Promise<WebActionSummary[]>;
+    reject: (token: string, id: string, reason?: string) => Promise<WebActionSummary>;
   };
   chats: {
     get: (token: string, conversationId: string) => Promise<ChatSummary>;

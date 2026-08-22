@@ -73,6 +73,11 @@ const desktopApi: AravaDesktopApi = {
     testConnection: (token) => invoke(IPC_CHANNELS.integrationTestConnection, token),
     updateSettings: (token, input) => invoke(IPC_CHANNELS.integrationUpdateSettings, token, input),
   },
+  webActions: {
+    approve: (token, id, input) => invoke(IPC_CHANNELS.webActionApprove, token, id, input),
+    list: (token) => invoke(IPC_CHANNELS.webActionList, token),
+    reject: (token, id, reason) => invoke(IPC_CHANNELS.webActionReject, token, id, reason),
+  },
   trainers: {
     getProfile: (token, id, month) => invoke(IPC_CHANNELS.trainerProfileGet, token, id, month),
   },

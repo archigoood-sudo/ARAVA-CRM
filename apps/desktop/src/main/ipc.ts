@@ -371,6 +371,20 @@ export function createIpcHandlers(
       requireIntegration().prepareInitialSync(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationConfirmInitialSync]: (unsafeToken) =>
       requireIntegration().confirmInitialSync(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.webActionList]: (unsafeToken) =>
+      requireIntegration().listWebActions(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.webActionApprove]: (unsafeToken, unsafeId, unsafeInput) =>
+      requireIntegration().approveWebAction(
+        sessionTokenSchema.parse(unsafeToken),
+        z.string().min(1).parse(unsafeId),
+        subscriptionFreezeInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.webActionReject]: (unsafeToken, unsafeId, unsafeReason) =>
+      requireIntegration().rejectWebAction(
+        sessionTokenSchema.parse(unsafeToken),
+        z.string().min(1).parse(unsafeId),
+        z.string().trim().max(300).optional().parse(unsafeReason),
+      ),
 
     [IPC_CHANNELS.cardList]: (unsafeToken, unsafeQuery) =>
       cards.listCards(
@@ -1381,6 +1395,8 @@ const SYNC_RELEVANT_MUTATIONS = new Set<string>([
   IPC_CHANNELS.groupCreate,
   IPC_CHANNELS.groupUpdate,
   IPC_CHANNELS.integrationPair,
+  IPC_CHANNELS.webActionApprove,
+  IPC_CHANNELS.webActionReject,
   IPC_CHANNELS.lessonCancel,
   IPC_CHANNELS.lessonCopyDay,
   IPC_CHANNELS.lessonCreate,

@@ -24,6 +24,7 @@ export const queryKeys = {
   integrationLog: ['integration', 'log'] as const,
   integrationPreview: ['integration', 'initial-preview'] as const,
   integrationStatus: ['integration', 'status'] as const,
+  webActions: (userId?: string) => ['web-actions', userId] as const,
   attendance: (lessonId: string) => ['attendance', lessonId] as const,
   lesson: (id: string) => ['lessons', 'detail', id] as const,
   lessons: (query: LessonListQuery) => ['lessons', 'list', query] as const,

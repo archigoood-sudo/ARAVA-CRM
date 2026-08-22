@@ -21,6 +21,7 @@ describe('runtime migrations', () => {
       '20260818020000_sprint_4_4d',
       '20260818030000_sprint_4_5a',
       '20260822000000_trainer_sync_1',
+      '20260822010000_web_freeze_actions',
     ]);
   });
 });

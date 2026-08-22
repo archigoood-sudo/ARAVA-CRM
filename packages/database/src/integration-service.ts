@@ -14,6 +14,8 @@ import type {
   IntegrationDeviceRenameInput,
   IntegrationSettingsInput,
   IntegrationStatus,
+  SubscriptionFreezeInput,
+  WebActionSummary,
 } from '@arava/shared';
 import type { Gender, SyncOperation } from '@prisma/client';
 import { Buffer } from 'node:buffer';
@@ -23,6 +25,8 @@ import { hostname } from 'node:os';
 import type { DatabaseClient } from './index';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
+import { FinanceService } from './finance-service';
+import { accessibleBranchIds } from './permissions';
 
 export const INTEGRATION_API_VERSION = 'v1';
 export const INTEGRATION_BATCH_SIZE = 25;
@@ -134,6 +138,17 @@ interface ApiErrorBody {
   code?: string;
   message?: string;
 }
+
+interface RemoteWebAction {
+  actionType: string;
+  externalActionId: string;
+  crmStudentId?: string;
+  crmSubscriptionId?: string;
+  reason?: string;
+  receivedAt: string;
+}
+
+type WebActionCompletionStatus = 'SUCCEEDED' | 'REJECTED' | 'FAILED';
 
 interface IntegrationHealthDetails {
   apiVersion: string;
@@ -941,6 +956,79 @@ export class IntegrationApiClient {
       context,
     );
   }
+
+  async listActions(baseUrl: string, deviceId: string, token: string): Promise<RemoteWebAction[]> {
+    const payload = await this.request(baseUrl, 'actions', deviceId, token, 'GET');
+    const entries = Array.isArray(payload)
+      ? payload
+      : isRecord(payload) && Array.isArray(payload.actions)
+        ? payload.actions
+        : [];
+    return entries.flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const actionPayload = isRecord(entry.payload) ? entry.payload : entry;
+      const externalActionId = optionalString(entry.id) ?? optionalString(entry.externalActionId);
+      if (!externalActionId) return [];
+      const actionType =
+        optionalString(entry.type) ?? optionalString(entry.actionType) ?? 'UNKNOWN';
+      const receivedAt =
+        optionalString(entry.createdAt) ??
+        optionalString(entry.receivedAt) ??
+        new Date(0).toISOString();
+      const crmStudentId =
+        optionalString(actionPayload.crmStudentId) ?? optionalString(actionPayload.studentId);
+      const crmSubscriptionId =
+        optionalString(actionPayload.crmSubscriptionId) ??
+        optionalString(actionPayload.subscriptionId);
+      const reason = optionalString(actionPayload.reason) ?? optionalString(entry.reason);
+      return [
+        {
+          actionType,
+          externalActionId,
+          ...(crmStudentId ? { crmStudentId } : {}),
+          ...(crmSubscriptionId ? { crmSubscriptionId } : {}),
+          ...(reason ? { reason: reason.slice(0, 500) } : {}),
+          receivedAt,
+        },
+      ];
+    });
+  }
+
+  async claimAction(baseUrl: string, deviceId: string, token: string, id: string): Promise<void> {
+    await this.request(
+      baseUrl,
+      `actions/${encodeURIComponent(id)}/claim`,
+      deviceId,
+      token,
+      'POST',
+      {
+        apiVersion: INTEGRATION_API_VERSION,
+        deviceId,
+      },
+    );
+  }
+
+  async completeAction(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    id: string,
+    status: WebActionCompletionStatus,
+    detail?: string,
+  ): Promise<void> {
+    await this.request(
+      baseUrl,
+      `actions/${encodeURIComponent(id)}/complete`,
+      deviceId,
+      token,
+      'POST',
+      {
+        apiVersion: INTEGRATION_API_VERSION,
+        ...(detail ? { result: { message: detail.slice(0, 300) } } : {}),
+        status,
+      },
+    );
+  }
 }
 
 function iso(value: Date | null | undefined): string | undefined {
@@ -974,6 +1062,7 @@ const ENTITY_PRIORITY: Record<SyncEntityType, number> = {
 
 export class IntegrationService {
   private processing = false;
+  private readonly finance: FinanceService;
 
   constructor(
     private readonly database: DatabaseClient,
@@ -981,7 +1070,9 @@ export class IntegrationService {
     private readonly credentials: IntegrationCredentialStore,
     private readonly api = new IntegrationApiClient(),
     private readonly now: () => Date = () => new Date(),
-  ) {}
+  ) {
+    this.finance = new FinanceService(database, application);
+  }
 
   private async assertOwner(token: string): Promise<AuthenticatedUser> {
     const actor = await this.application.authenticate(token);
@@ -1009,6 +1100,202 @@ export class IntegrationService {
       data: { nextAttemptAt: this.now(), status: 'PENDING' },
       where: { lastAttemptAt: { lte: staleBefore }, status: 'PROCESSING' },
     });
+    await this.database.webAction.updateMany({
+      data: { status: 'PENDING' },
+      where: { status: 'CLAIMING' },
+    });
+  }
+
+  private async integrationConnection(): Promise<{
+    baseUrl: string;
+    deviceId: string;
+    token: string;
+  }> {
+    return this.chatConnection();
+  }
+
+  private async actionSummary(id: string, actor: AuthenticatedUser): Promise<WebActionSummary> {
+    const action = await this.database.webAction.findUnique({ where: { id } });
+    if (
+      action?.actionType !== 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST' ||
+      !action.crmStudentId ||
+      !action.crmSubscriptionId
+    )
+      throw new DomainError('NOT_FOUND', 'Заявка с сайта не найдена.');
+    const subscription = await this.database.subscription.findUnique({
+      include: { student: true, tariff: true },
+      where: { id: action.crmSubscriptionId },
+    });
+    if (subscription?.studentId !== action.crmStudentId)
+      throw new DomainError('VALIDATION', 'Абонемент не принадлежит указанному ученику.');
+    const branchIds = accessibleBranchIds(actor);
+    if (branchIds && !branchIds.includes(subscription.branchId))
+      throw new DomainError('AUTHORIZATION', 'Нет доступа к филиалу этой заявки.');
+    return {
+      actionType: 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST',
+      externalActionId: action.externalActionId,
+      id: action.id,
+      ...(action.reason ? { reason: action.reason } : {}),
+      receivedAt: action.receivedAt.toISOString(),
+      status: action.status as WebActionSummary['status'],
+      studentId: subscription.studentId,
+      studentName: `${subscription.student.lastName} ${subscription.student.firstName}`,
+      subscriptionId: subscription.id,
+      subscriptionName: subscription.tariff.name,
+    };
+  }
+
+  private async assertActionActor(token: string): Promise<AuthenticatedUser> {
+    const actor = await this.application.authenticate(token);
+    if (actor.role === 'COACH')
+      throw new DomainError('AUTHORIZATION', 'Тренеру недоступны заявки с сайта.');
+    return actor;
+  }
+
+  async listWebActions(token: string): Promise<WebActionSummary[]> {
+    const actor = await this.assertActionActor(token);
+    try {
+      const connection = await this.integrationConnection();
+      await this.pullWebActions(connection.baseUrl, connection.deviceId, connection.token);
+    } catch {
+      // Locally persisted actions remain available while the website is offline.
+    }
+    const branchIds = accessibleBranchIds(actor);
+    const rows = await this.database.webAction.findMany({
+      orderBy: { receivedAt: 'desc' },
+      take: 100,
+      where: {
+        actionType: 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST',
+        crmStudentId: { not: null },
+        crmSubscriptionId: { not: null },
+        ...(branchIds
+          ? {
+              crmSubscriptionId: {
+                in: (
+                  await this.database.subscription.findMany({
+                    select: { id: true },
+                    where: { branchId: { in: branchIds } },
+                  })
+                ).map(({ id }) => id),
+              },
+            }
+          : {}),
+      },
+    });
+    const summaries = await Promise.all(rows.map(({ id }) => this.actionSummary(id, actor)));
+    return summaries;
+  }
+
+  private async claimLocalAction(id: string): Promise<void> {
+    const action = await this.database.webAction.findUnique({ where: { id } });
+    if (!action) throw new DomainError('NOT_FOUND', 'Заявка с сайта не найдена.');
+    if (action.status === 'CLAIMED') return;
+    if (action.status !== 'PENDING') throw new DomainError('CONFLICT', 'Заявка уже обработана.');
+    const claimed = await this.database.webAction.updateMany({
+      data: { status: 'CLAIMING' },
+      where: { id, status: 'PENDING' },
+    });
+    if (claimed.count !== 1) throw new DomainError('CONFLICT', 'Заявка уже обрабатывается.');
+    try {
+      const connection = await this.integrationConnection();
+      await this.api.claimAction(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        action.externalActionId,
+      );
+      await this.database.webAction.update({
+        data: { claimedAt: this.now(), status: 'CLAIMED' },
+        where: { id },
+      });
+    } catch (error) {
+      await this.database.webAction.updateMany({
+        data: { status: 'PENDING' },
+        where: { id, status: 'CLAIMING' },
+      });
+      throw error;
+    }
+  }
+
+  private async acknowledgeWebAction(id: string): Promise<void> {
+    const action = await this.database.webAction.findUnique({ where: { id } });
+    if (!action || !['SUCCEEDED_ACK_PENDING', 'REJECTED_ACK_PENDING'].includes(action.status))
+      return;
+    const remoteStatus: WebActionCompletionStatus = action.status.startsWith('SUCCEEDED')
+      ? 'SUCCEEDED'
+      : 'REJECTED';
+    try {
+      const connection = await this.integrationConnection();
+      await this.api.completeAction(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        action.externalActionId,
+        remoteStatus,
+        remoteStatus === 'REJECTED' ? (action.safeError ?? undefined) : undefined,
+      );
+      await this.database.webAction.update({
+        data: {
+          completionAttemptCount: { increment: 1 },
+          nextCompletionAttemptAt: null,
+          safeError: remoteStatus === 'SUCCEEDED' ? null : action.safeError,
+          status: remoteStatus,
+        },
+        where: { id },
+      });
+    } catch {
+      await this.database.webAction.update({
+        data: {
+          completionAttemptCount: { increment: 1 },
+          nextCompletionAttemptAt: new Date(this.now().getTime() + 60_000),
+        },
+        where: { id },
+      });
+    }
+  }
+
+  async approveWebAction(
+    token: string,
+    id: string,
+    input: SubscriptionFreezeInput,
+  ): Promise<WebActionSummary> {
+    const actor = await this.assertActionActor(token);
+    const summary = await this.actionSummary(id, actor);
+    const action = await this.database.webAction.findUniqueOrThrow({ where: { id } });
+    if (action.status === 'SUCCEEDED_ACK_PENDING') {
+      await this.acknowledgeWebAction(id);
+      return this.actionSummary(id, actor);
+    }
+    await this.claimLocalAction(id);
+    await this.finance.freezeSubscription(token, summary.subscriptionId, input, {
+      id,
+      processedByUserId: actor.id,
+    });
+    await this.acknowledgeWebAction(id);
+    return this.actionSummary(id, actor);
+  }
+
+  async rejectWebAction(token: string, id: string, reason?: string): Promise<WebActionSummary> {
+    const actor = await this.assertActionActor(token);
+    await this.actionSummary(id, actor);
+    const current = await this.database.webAction.findUniqueOrThrow({ where: { id } });
+    if (current.status !== 'REJECTED_ACK_PENDING') {
+      await this.claimLocalAction(id);
+      const rejectedReason = reason?.trim().slice(0, 300);
+      await this.database.webAction.update({
+        data: {
+          nextCompletionAttemptAt: this.now(),
+          processedAt: this.now(),
+          processedByUserId: actor.id,
+          safeError: rejectedReason?.length ? rejectedReason : 'Отклонено администратором.',
+          safeResultJson: JSON.stringify({ status: 'REJECTED' }),
+          status: 'REJECTED_ACK_PENDING',
+        },
+        where: { id, status: 'CLAIMED' },
+      });
+    }
+    await this.acknowledgeWebAction(id);
+    return this.actionSummary(id, actor);
   }
 
   private async chatConnection(): Promise<{ baseUrl: string; deviceId: string; token: string }> {
@@ -1814,6 +2101,17 @@ export class IntegrationService {
     if (enabled !== 'true' || !baseUrl || !token) return;
     this.processing = true;
     try {
+      await this.pullWebActions(baseUrl, deviceId, token);
+      const acknowledgements = await this.database.webAction.findMany({
+        select: { id: true },
+        where: {
+          nextCompletionAttemptAt: { lte: this.now() },
+          status: { in: ['SUCCEEDED_ACK_PENDING', 'REJECTED_ACK_PENDING'] },
+        },
+      });
+      for (const acknowledgement of acknowledgements) {
+        await this.acknowledgeWebAction(acknowledgement.id);
+      }
       const candidates = await this.database.syncOutbox.findMany({
         orderBy: { createdAt: 'asc' },
         take: INTEGRATION_BATCH_SIZE * 4,
@@ -1891,6 +2189,53 @@ export class IntegrationService {
       await this.processInboundSafely(baseUrl, deviceId, token);
     } finally {
       this.processing = false;
+    }
+  }
+
+  private async pullWebActions(baseUrl: string, deviceId: string, token: string): Promise<void> {
+    let actions: RemoteWebAction[];
+    try {
+      actions = await this.api.listActions(baseUrl, deviceId, token);
+    } catch {
+      return;
+    }
+    for (const action of actions) {
+      const valid =
+        action.actionType === 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST' &&
+        Boolean(action.crmStudentId) &&
+        Boolean(action.crmSubscriptionId) &&
+        !Number.isNaN(Date.parse(action.receivedAt));
+      if (!valid) {
+        try {
+          await this.api.claimAction(baseUrl, deviceId, token, action.externalActionId);
+          await this.api.completeAction(
+            baseUrl,
+            deviceId,
+            token,
+            action.externalActionId,
+            'REJECTED',
+            'Тип или данные заявки не поддерживаются CRM.',
+          );
+        } catch {
+          // The next polling cycle will receive and safely retry this remote action.
+        }
+        continue;
+      }
+      const crmStudentId = action.crmStudentId;
+      const crmSubscriptionId = action.crmSubscriptionId;
+      if (!crmStudentId || !crmSubscriptionId) continue;
+      await this.database.webAction.upsert({
+        create: {
+          actionType: action.actionType,
+          crmStudentId,
+          crmSubscriptionId,
+          externalActionId: action.externalActionId,
+          ...(action.reason ? { reason: action.reason } : {}),
+          receivedAt: new Date(action.receivedAt),
+        },
+        update: {},
+        where: { externalActionId: action.externalActionId },
+      });
     }
   }
 

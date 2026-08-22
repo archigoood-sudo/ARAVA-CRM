@@ -38,6 +38,7 @@ import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
+import { WebActionsSection } from './web-actions-section';
 
 const categories: { icon: typeof BellRing; label: string; value: AttentionCategory }[] = [
   { icon: UsersRound, label: 'Ученики', value: 'STUDENTS' },
@@ -121,6 +122,8 @@ export function AttentionPage() {
         eyebrow="Операционный центр"
         title="Требует внимания"
       />
+
+      <WebActionsSection />
 
       <Card className="mt-7">
         <CardContent className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] gap-3 p-4">
