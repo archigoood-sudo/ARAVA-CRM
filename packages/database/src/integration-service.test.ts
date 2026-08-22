@@ -159,6 +159,10 @@ describe('Sprint 4.5A multi-device integration', () => {
         response.end('invalid');
         return;
       }
+      if (request.url?.endsWith('/payments/provider-health')) {
+        json(response, 200, { configured: true, provider: 'TBANK_SBP' });
+        return;
+      }
       if (request.url?.endsWith('/health')) {
         json(response, 200, {
           apiVersion: healthApiVersion,
@@ -606,6 +610,7 @@ describe('Sprint 4.5A multi-device integration', () => {
         'conflicts',
         'chat-api',
         'publication-api',
+        'payment-provider',
       ]),
     );
     const serialized = JSON.stringify(result);

@@ -883,6 +883,54 @@ describe('Electron IPC boundary', () => {
     await expect(
       handlers[IPC_CHANNELS.paymentOperationListStudent]?.(coachSession.token, student.id),
     ).rejects.toThrow(t('domain.authorization.permissionDenied'));
+    const sbpOperation = await handlers[IPC_CHANNELS.paymentOperationCreate]?.(owner.token, {
+      amount: 12_000,
+      branchId: branch.id,
+      currency: 'RUB',
+      idempotencyKey: 'payment-ipc-sbp-real-shaped',
+      providerType: 'SBP',
+      purpose: 'Проверка шлюза СБП',
+      studentId: student.id,
+    });
+    const gatewayService = {
+      refreshSbpPayment: vi.fn(),
+      sbpProviderHealth: vi.fn(() =>
+        Promise.resolve({ configured: true, provider: 'TBANK_SBP' as const }),
+      ),
+      startSbpPayment: vi.fn(() =>
+        Promise.resolve({
+          amountKopecks: 12_000,
+          aravaOperationId: (sbpOperation as { id: string }).id,
+          currency: 'RUB' as const,
+          provider: 'TBANK_SBP' as const,
+          providerOperationId: 'tbank-ipc-1',
+          status: 'SUCCEEDED' as const,
+          updatedAt: new Date().toISOString(),
+        }),
+      ),
+    };
+    const sbpHandlers = createIpcHandlers(database, service, '/test/arava.db', {
+      integration: { service: gatewayService as never } as never,
+    });
+    await expect(
+      sbpHandlers[IPC_CHANNELS.paymentOperationSbpHealth]?.(coachSession.token),
+    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
+    expect(await sbpHandlers[IPC_CHANNELS.paymentOperationSbpHealth]?.(owner.token)).toEqual({
+      configured: true,
+      provider: 'TBANK_SBP',
+    });
+    expect(
+      await sbpHandlers[IPC_CHANNELS.paymentOperationStartSbp]?.(
+        owner.token,
+        (sbpOperation as { id: string }).id,
+      ),
+    ).toMatchObject({ status: 'SUCCEEDED' });
+    expect(
+      await handlers[IPC_CHANNELS.paymentOperationGet]?.(
+        owner.token,
+        (sbpOperation as { id: string }).id,
+      ),
+    ).toMatchObject({ providerOperationId: 'tbank-ipc-1', status: 'SUCCEEDED' });
     await expect(
       handlers[IPC_CHANNELS.paymentOperationTestComplete]?.(
         owner.token,
@@ -898,7 +946,7 @@ describe('Electron IPC boundary', () => {
         'SBP',
       );
       expect(completed).toMatchObject({ status: 'SUCCEEDED' });
-      expect(await database.payment.count()).toBe(1);
+      expect(await database.payment.count()).toBe(2);
     } finally {
       delete process.env.ARAVA_E2E_PAYMENT_PROVIDER;
     }

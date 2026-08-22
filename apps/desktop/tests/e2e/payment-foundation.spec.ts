@@ -100,6 +100,28 @@ test('платёжная операция становится одним под
     expect(result.payments).toHaveLength(1);
     expect(result.debt).toBe(75_000);
 
+    await page.getByRole('button', { name: 'Принять оплату' }).first().click();
+    const sbpMode = page.getByRole('button', { name: 'СБП', exact: true });
+    await expect(sbpMode).toBeEnabled();
+    await sbpMode.click();
+    await page.getByLabel('Сумма').fill('100');
+    await page.getByLabel('Комментарий').fill('Оплата QR E2E');
+    await page.getByRole('button', { name: 'Показать QR-код' }).click();
+    await expect(page.getByAltText('QR-код для оплаты через СБП')).toBeVisible();
+    await expect(page.getByText('Оплата подтверждена')).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Готово' }).click();
+    const afterQr = await page.evaluate(async ({ studentId, token }) => {
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      return (
+        await api.payments.list(token, {
+          dateFrom: new Date(Date.now() - 86_400_000).toISOString(),
+          dateTo: new Date(Date.now() + 86_400_000).toISOString(),
+        })
+      ).filter(({ studentId: id }) => id === studentId);
+    }, context);
+    expect(afterQr).toHaveLength(2);
+    expect(afterQr.filter(({ paymentMethod }) => paymentMethod === 'SBP')).toHaveLength(2);
+
     await page.getByRole('link', { name: 'Главная', exact: true }).click();
     await page.getByRole('button', { name: 'Поиск по приложению' }).click();
     search = page.getByRole('region', { name: 'Глобальный поиск' });
@@ -107,7 +129,7 @@ test('платёжная операция становится одним под
     await search.getByRole('button', { name: /Оплатина E2E Анна/u }).click();
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Оплатина E2E Анна' })).toBeVisible();
-    await expect(page.getByText('Оплачено')).toBeVisible();
+    await expect(page.getByText('Оплачено')).toHaveCount(2);
   } finally {
     await application.close();
   }

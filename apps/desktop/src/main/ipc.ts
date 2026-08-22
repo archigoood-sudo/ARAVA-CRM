@@ -7,6 +7,7 @@ import {
   GlobalSearchService,
   ManagementService,
   PaymentOperationService,
+  SbpPaymentService,
   PublicationService,
   StudioService,
   StudentProfileService,
@@ -15,6 +16,7 @@ import {
   BackupService,
   accessibleBranchIds,
   assertCapability,
+  assertPermission,
   type DatabaseClient,
 } from '@arava/database';
 import {
@@ -179,6 +181,9 @@ export function createIpcHandlers(
       externalLogPath: join(dirname(databasePath), 'backup-restore.log'),
     });
   const integration = backupDependencies.integration?.service;
+  const sbpPayments = integration
+    ? new SbpPaymentService(paymentOperations, integration)
+    : undefined;
   const chats = integration ? new ChatService(database, service, integration) : undefined;
   const requireIntegration = () => {
     if (!integration) throw new Error('Сервис интеграции не инициализирован.');
@@ -187,6 +192,15 @@ export function createIpcHandlers(
   const requireChats = () => {
     if (!chats) throw new Error('Сервис чатов не инициализирован.');
     return chats;
+  };
+  const requireSbpPayments = () => {
+    if (!sbpPayments) throw new Error('Сервис оплаты через СБП не инициализирован.');
+    return sbpPayments;
+  };
+  const paymentManagerToken = async (unsafeToken: unknown) => {
+    const token = sessionTokenSchema.parse(unsafeToken);
+    assertPermission(await service.authenticate(token), 'payments:manage');
+    return token;
   };
   const publicationMediaDirectory = join(dirname(databasePath), 'media', 'publications');
   const publicationMedia = (mediaId?: string) => {
@@ -809,6 +823,57 @@ export function createIpcHandlers(
         identifierSchema.parse(unsafeId),
         paymentOperationReasonSchema.parse(unsafeInput).reason,
       ),
+    [IPC_CHANNELS.paymentOperationSbpHealth]: async (unsafeToken) => {
+      const token = await paymentManagerToken(unsafeToken);
+      return process.env.ARAVA_E2E_PAYMENT_PROVIDER === 'memory'
+        ? { configured: true, provider: 'TBANK_SBP' as const }
+        : requireSbpPayments().health(token);
+    },
+    [IPC_CHANNELS.paymentOperationStartSbp]: async (unsafeToken, unsafeId) => {
+      const token = await paymentManagerToken(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
+        return requireSbpPayments().start(token, id);
+      const operation = await paymentOperations.get(token, id);
+      if (operation.status === 'CREATED')
+        await paymentOperations.transition(
+          token,
+          id,
+          'WAITING_FOR_PAYMENT',
+          undefined,
+          `e2e-${id}`,
+        );
+      return {
+        amountKopecks: operation.amount,
+        aravaOperationId: id,
+        currency: 'RUB' as const,
+        provider: 'TBANK_SBP' as const,
+        providerOperationId: `e2e-${id}`,
+        qrPayload: 'https://qr.nspk.ru/ARAVA-E2E',
+        status: 'WAITING' as const,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+    [IPC_CHANNELS.paymentOperationRefreshSbp]: async (unsafeToken, unsafeId) => {
+      const token = await paymentManagerToken(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
+        return requireSbpPayments().refresh(token, id);
+      const operation = await paymentOperations.get(token, id);
+      await paymentOperations.finalizeTrusted(id, {
+        paymentMethod: 'SBP',
+        providerOperationId: operation.providerOperationId,
+      });
+      return {
+        amountKopecks: operation.amount,
+        aravaOperationId: id,
+        currency: 'RUB' as const,
+        provider: 'TBANK_SBP' as const,
+        providerOperationId: operation.providerOperationId,
+        status: 'SUCCEEDED' as const,
+        updatedAt: new Date().toISOString(),
+      };
+    },
     [IPC_CHANNELS.paymentOperationTestComplete]: async (
       unsafeToken,
       unsafeId,

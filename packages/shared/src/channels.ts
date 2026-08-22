@@ -304,6 +304,9 @@ export const IPC_CHANNELS = {
   paymentOperationCreate: 'payment-operation:create',
   paymentOperationGet: 'payment-operation:get',
   paymentOperationListStudent: 'payment-operation:list-student',
+  paymentOperationRefreshSbp: 'payment-operation:refresh-sbp',
+  paymentOperationSbpHealth: 'payment-operation:sbp-health',
+  paymentOperationStartSbp: 'payment-operation:start-sbp',
   paymentOperationTestComplete: 'payment-operation:test-complete',
   refundCreate: 'refund:create',
   financeEmployees: 'finance:employees',
@@ -866,6 +869,28 @@ export interface PaymentOperationSummary extends PaymentOperationCreateInput {
 
 export interface PaymentOperationReasonInput {
   reason: string;
+}
+
+export type SbpGatewayStatus =
+  'CREATED' | 'WAITING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'EXPIRED';
+
+export interface SbpGatewayPayment {
+  amountKopecks: number;
+  aravaOperationId: string;
+  currency: 'RUB';
+  error?: { code?: string | null; message: string } | null;
+  expiresAt?: string | null;
+  provider: 'TBANK_SBP';
+  providerOperationId?: string | null;
+  providerStatus?: string | null;
+  qrPayload?: string | null;
+  status: SbpGatewayStatus;
+  updatedAt: string;
+}
+
+export interface SbpProviderHealth {
+  configured: boolean;
+  provider: 'TBANK_SBP';
 }
 
 export interface PaymentInput {
@@ -2396,6 +2421,9 @@ export interface AravaDesktopApi {
     create: (token: string, input: PaymentOperationCreateInput) => Promise<PaymentOperationSummary>;
     get: (token: string, id: string) => Promise<PaymentOperationSummary>;
     listStudent: (token: string, studentId: string) => Promise<PaymentOperationSummary[]>;
+    refreshSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
+    sbpHealth: (token: string) => Promise<SbpProviderHealth>;
+    startSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
     testComplete: (
       token: string,
       id: string,

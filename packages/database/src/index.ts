@@ -111,6 +111,7 @@ export {
   PaymentOperationService,
   type TrustedPaymentCompletion,
 } from './payment-operation-service';
+export { SbpPaymentService } from './sbp-payment-service';
 export type {
   PaymentProviderAdapter,
   ProviderPaymentRequest,

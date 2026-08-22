@@ -113,6 +113,9 @@ export function StudentFinance({
   const payment = useMutation({
     mutationFn: (input: PaymentInput) => getDesktopApi().payments.create(getSessionToken(), input),
   });
+  const refreshSbp = useMutation({
+    mutationFn: (id: string) => getDesktopApi().paymentOperations.refreshSbp(getSessionToken(), id),
+  });
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.studentFinance(student.id) }),
@@ -121,6 +124,7 @@ export function StudentFinance({
       queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
       queryClient.invalidateQueries({ queryKey: ['student-profile'] }),
       queryClient.invalidateQueries({ queryKey: ['attention'] }),
+      queryClient.invalidateQueries({ queryKey: ['payment-operations'] }),
     ]);
   };
   const perform = async (
@@ -286,6 +290,22 @@ export function StudentFinance({
                       <div className="mt-1">
                         <Badge>{t(`payment.operation.status.${operation.status}`)}</Badge>
                       </div>
+                      {operation.providerType === 'SBP' &&
+                      ['WAITING_FOR_PAYMENT', 'PROCESSING'].includes(operation.status) ? (
+                        <Button
+                          className="mt-2"
+                          disabled={refreshSbp.isPending}
+                          onClick={() =>
+                            void perform(
+                              () => refreshSbp.mutateAsync(operation.id),
+                              'Не удалось проверить оплату.',
+                            )
+                          }
+                          variant="ghost"
+                        >
+                          Проверить оплату
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -315,6 +335,7 @@ export function StudentFinance({
         error={error}
         fixedStudent={student}
         onClose={() => setPaymentOpen(false)}
+        onSbpCompleted={refresh}
         onSubmit={(input) =>
           perform(
             () => payment.mutateAsync(input),

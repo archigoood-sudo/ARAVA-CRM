@@ -339,6 +339,7 @@ export function FinancePage() {
         branches={branches.data ?? []}
         error={error}
         onClose={() => setPaymentOpen(false)}
+        onSbpCompleted={refresh}
         onSubmit={savePayment}
         open={paymentOpen}
         students={students.data?.items ?? []}

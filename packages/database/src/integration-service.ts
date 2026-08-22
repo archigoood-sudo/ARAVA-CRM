@@ -18,6 +18,9 @@ import type {
   IntegrationSettingsInput,
   IntegrationStatus,
   IntegrationReconciliationPreview,
+  PaymentOperationSummary,
+  SbpGatewayPayment,
+  SbpProviderHealth,
   SubscriptionFreezeInput,
   WebActionSummary,
 } from '@arava/shared';
@@ -31,7 +34,7 @@ import type { DatabaseClient } from './index';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
 import { FinanceService } from './finance-service';
-import { accessibleBranchIds } from './permissions';
+import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
 import { StudioService } from './studio-service';
 
 export const INTEGRATION_API_VERSION = 'v1';
@@ -267,6 +270,66 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function parseSbpGatewayPayment(
+  payload: unknown,
+  expected: PaymentOperationSummary,
+): SbpGatewayPayment {
+  if (!isRecord(payload))
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Сервер вернул неверную операцию СБП.',
+    );
+  const statuses = new Set([
+    'CREATED',
+    'WAITING',
+    'PROCESSING',
+    'SUCCEEDED',
+    'FAILED',
+    'CANCELLED',
+    'EXPIRED',
+  ]);
+  if (
+    payload.provider !== 'TBANK_SBP' ||
+    payload.aravaOperationId !== expected.id ||
+    payload.currency !== 'RUB' ||
+    payload.amountKopecks !== expected.amount ||
+    typeof payload.status !== 'string' ||
+    !statuses.has(payload.status) ||
+    typeof payload.updatedAt !== 'string'
+  ) {
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Данные операции СБП не совпадают с оплатой.',
+    );
+  }
+  const error =
+    isRecord(payload.error) && typeof payload.error.message === 'string'
+      ? {
+          ...(typeof payload.error.code === 'string' ? { code: payload.error.code } : {}),
+          message: payload.error.message,
+        }
+      : null;
+  return {
+    amountKopecks: payload.amountKopecks,
+    aravaOperationId: expected.id,
+    currency: 'RUB',
+    error,
+    ...(typeof payload.expiresAt === 'string' ? { expiresAt: payload.expiresAt } : {}),
+    provider: 'TBANK_SBP',
+    ...(typeof payload.providerOperationId === 'string'
+      ? { providerOperationId: payload.providerOperationId }
+      : {}),
+    ...(typeof payload.providerStatus === 'string'
+      ? { providerStatus: payload.providerStatus }
+      : {}),
+    ...(typeof payload.qrPayload === 'string' ? { qrPayload: payload.qrPayload } : {}),
+    status: payload.status as SbpGatewayPayment['status'],
+    updatedAt: payload.updatedAt,
+  };
 }
 
 function nullableString(value: unknown): string | null {
@@ -654,6 +717,79 @@ export class IntegrationApiClient {
       apiVersion: String(payload.apiVersion),
       ...(typeof payload.deviceStatus === 'string' ? { deviceStatus: payload.deviceStatus } : {}),
     };
+  }
+
+  async paymentProviderHealth(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+  ): Promise<SbpProviderHealth> {
+    const payload = await this.request(
+      baseUrl,
+      'payments/provider-health',
+      deviceId,
+      token,
+      'GET',
+      undefined,
+      context,
+    );
+    if (
+      !isRecord(payload) ||
+      typeof payload.configured !== 'boolean' ||
+      payload.provider !== 'TBANK_SBP'
+    )
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер вернул неверный статус СБП.',
+      );
+    return { configured: payload.configured, provider: 'TBANK_SBP' };
+  }
+
+  async createSbpPayment(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    operation: PaymentOperationSummary,
+    context: CrmChatRequestContext,
+  ): Promise<SbpGatewayPayment> {
+    const payload = await this.request(
+      baseUrl,
+      'payments/sbp',
+      deviceId,
+      token,
+      'POST',
+      {
+        amountKopecks: operation.amount,
+        aravaOperationId: operation.id,
+        branchId: operation.branchId,
+        currency: operation.currency,
+        idempotencyKey: operation.idempotencyKey,
+        purpose: operation.purpose,
+      },
+      context,
+    );
+    return parseSbpGatewayPayment(payload, operation);
+  }
+
+  async getSbpPayment(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    operation: PaymentOperationSummary,
+    context: CrmChatRequestContext,
+  ): Promise<SbpGatewayPayment> {
+    const payload = await this.request(
+      baseUrl,
+      `payments/${encodeURIComponent(operation.id)}`,
+      deviceId,
+      token,
+      'GET',
+      undefined,
+      context,
+    );
+    return parseSbpGatewayPayment(payload, operation);
   }
 
   async probeChat(
@@ -1325,6 +1461,61 @@ export class IntegrationService {
     };
   }
 
+  private actorContext(actor: AuthenticatedUser): CrmChatRequestContext {
+    return {
+      branchIds: actor.branchIds,
+      name: actor.fullName,
+      role: actor.role,
+      userId: actor.id,
+    };
+  }
+
+  async sbpProviderHealth(token: string): Promise<SbpProviderHealth> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'payments:manage');
+    const connection = await this.integrationConnection();
+    return this.api.paymentProviderHealth(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      this.actorContext(actor),
+    );
+  }
+
+  async startSbpPayment(
+    token: string,
+    operation: PaymentOperationSummary,
+  ): Promise<SbpGatewayPayment> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'payments:manage');
+    assertBranchAccess(actor, operation.branchId);
+    const connection = await this.integrationConnection();
+    return this.api.createSbpPayment(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      operation,
+      this.actorContext(actor),
+    );
+  }
+
+  async refreshSbpPayment(
+    token: string,
+    operation: PaymentOperationSummary,
+  ): Promise<SbpGatewayPayment> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'payments:manage');
+    assertBranchAccess(actor, operation.branchId);
+    const connection = await this.integrationConnection();
+    return this.api.getSbpPayment(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      operation,
+      this.actorContext(actor),
+    );
+  }
+
   private async setting(key: string): Promise<string | undefined> {
     return (await this.database.appSetting.findUnique({ where: { key } }))?.value;
   }
@@ -1828,6 +2019,7 @@ export class IntegrationService {
         ['device-recognized', 'Сервер распознаёт это устройство'],
         ['chat-api', 'Сервис чатов доступен'],
         ['publication-api', 'Сервис публикаций доступен'],
+        ['payment-provider', 'Оплата через СБП настроена'],
       ] as const) {
         checks.push(diagnosticCheck(id, label, 'WARNING', detail, action));
       }
@@ -2006,9 +2198,10 @@ export class IntegrationService {
           role: actor.role,
           userId: actor.id,
         };
-        const [chatProbe, publicationProbe] = await Promise.allSettled([
+        const [chatProbe, publicationProbe, paymentProbe] = await Promise.allSettled([
           this.api.probeChat(baseUrl, deviceId, deviceToken, context),
           this.api.probePublications(baseUrl, deviceId, deviceToken),
+          this.api.paymentProviderHealth(baseUrl, deviceId, deviceToken, context),
         ]);
         for (const [id, label, result] of [
           ['chat-api', 'Сервис чатов доступен', chatProbe],
@@ -2028,11 +2221,41 @@ export class IntegrationService {
             checks.push(diagnosticCheck(id, label, 'ERROR', failure.detail, failure.action));
           }
         }
+        if (paymentProbe.status === 'fulfilled') {
+          checks.push(
+            paymentProbe.value.configured
+              ? diagnosticCheck(
+                  'payment-provider',
+                  'Оплата через СБП настроена',
+                  'WORKING',
+                  'Сервер готов создавать динамические QR-коды T‑Bank.',
+                )
+              : diagnosticCheck(
+                  'payment-provider',
+                  'Оплата через СБП не настроена',
+                  'WARNING',
+                  'На сервере не заданы реквизиты терминала T‑Bank.',
+                  'Настройте T‑Bank на сервере ARAVA-WEB.',
+                ),
+          );
+        } else {
+          const failure = diagnosticFailure(paymentProbe.reason);
+          checks.push(
+            diagnosticCheck(
+              'payment-provider',
+              'Оплата через СБП недоступна',
+              'WARNING',
+              failure.detail,
+              failure.action,
+            ),
+          );
+        }
       } else {
         for (const [id, label] of [
           ['device-recognized', 'Сервер распознаёт это устройство'],
           ['chat-api', 'Сервис чатов доступен'],
           ['publication-api', 'Сервис публикаций доступен'],
+          ['payment-provider', 'Оплата через СБП настроена'],
         ] as const) {
           if (checks.some((check) => check.id === id)) continue;
           checks.push(
