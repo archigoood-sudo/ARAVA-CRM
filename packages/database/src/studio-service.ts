@@ -20,7 +20,7 @@ import type {
   WeeklyScheduleQuery,
   WeeklyScheduleSummary,
 } from '@arava/shared';
-import { t } from '@arava/shared';
+import { permissionsForRole, t } from '@arava/shared';
 import {
   Prisma,
   type DanceGroup,
@@ -765,9 +765,70 @@ export class StudioService {
     assertPermission(actor, 'attendance:manage');
     const lesson = await this.requireLesson(lessonId);
     this.assertLessonRead(actor, lesson);
-    const allowedStudents = new Set(
-      (await this.getAttendance(token, lessonId)).participants.map(({ studentId }) => studentId),
-    );
+    if (lesson.status === 'CANCELLED')
+      throw new DomainError('VALIDATION', t('domain.validation.attendanceCancelled'));
+    const allowedStudents = await this.attendanceStudentIds(lesson);
+    await this.persistAttendance(actor, lesson, entries, allowedStudents);
+    return this.getAttendance(token, lessonId);
+  }
+
+  async processTrainerWebAttendance(
+    trainerId: string,
+    lessonId: string,
+    entries: AttendanceEntryInput[],
+    webActionId: string,
+  ): Promise<void> {
+    const trainer = await this.database.user.findUnique({
+      include: { branchAssignments: { select: { branchId: true } } },
+      where: { id: trainerId },
+    });
+    if (trainer?.role !== 'COACH' || !trainer.isActive)
+      throw new DomainError('AUTHORIZATION', 'Тренер недоступен для отметки посещаемости.');
+    const actor: AuthenticatedUser = {
+      branchIds: trainer.branchAssignments.map(({ branchId }) => branchId),
+      email: trainer.email,
+      fullName: trainer.fullName,
+      id: trainer.id,
+      mustChangePassword: trainer.mustChangePassword,
+      permissions: permissionsForRole(trainer.role),
+      role: trainer.role,
+    };
+    assertPermission(actor, 'attendance:manage');
+    const lesson = await this.requireLesson(lessonId);
+    assertBranchAccess(actor, lesson.branchId);
+    const assignedTrainerId = lesson.substitution?.substituteTrainerId ?? lesson.coachId;
+    const assignedThroughGroup =
+      !assignedTrainerId &&
+      (lesson.group.coachId === actor.id || lesson.group.assistantCoachId === actor.id);
+    if (assignedTrainerId !== actor.id && !assignedThroughGroup)
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.lessonCoach'));
+    if (lesson.status === 'CANCELLED')
+      throw new DomainError('VALIDATION', t('domain.validation.attendanceCancelled'));
+    const allowedStudents = await this.attendanceStudentIds(lesson);
+    await this.persistAttendance(actor, lesson, entries, allowedStudents, webActionId, true);
+  }
+
+  private async attendanceStudentIds(lesson: LessonRecord): Promise<Set<string>> {
+    const enrollments = await this.database.enrollment.findMany({
+      select: { studentId: true },
+      where: {
+        groupId: lesson.groupId,
+        joinedAt: { lte: lesson.startsAt },
+        OR: [{ leftAt: null }, { leftAt: { gte: lesson.startsAt } }],
+        status: { in: EXPECTED_ENROLLMENTS },
+      },
+    });
+    return new Set(enrollments.map(({ studentId }) => studentId));
+  }
+
+  private async persistAttendance(
+    actor: AuthenticatedUser,
+    lesson: LessonRecord,
+    entries: AttendanceEntryInput[],
+    allowedStudents: Set<string>,
+    webActionId?: string,
+    allowCoachCorrection = false,
+  ): Promise<void> {
     if (new Set(entries.map(({ studentId }) => studentId)).size !== entries.length)
       throw new DomainError('VALIDATION', t('domain.validation.attendanceUnique'));
     if (entries.some(({ studentId }) => !allowedStudents.has(studentId)))
@@ -775,21 +836,26 @@ export class StudioService {
     await this.database.$transaction(async (transaction) => {
       for (const entry of entries) {
         const previous = await transaction.attendance.findUnique({
-          where: { lessonId_studentId: { lessonId, studentId: entry.studentId } },
+          where: { lessonId_studentId: { lessonId: lesson.id, studentId: entry.studentId } },
         });
-        if (previous && previous.status !== entry.status && actor.role === 'COACH')
+        if (
+          previous &&
+          previous.status !== entry.status &&
+          actor.role === 'COACH' &&
+          !allowCoachCorrection
+        )
           throw new DomainError('AUTHORIZATION', t('domain.authorization.attendanceCorrection'));
         if (previous && previous.status !== entry.status)
           await reverseAttendanceWriteOffs(
             transaction,
-            `${lessonId}:${entry.studentId}`,
+            `${lesson.id}:${entry.studentId}`,
             actor.id,
             t('ledger.comment.attendanceCorrection'),
           );
         await transaction.attendance.upsert({
           create: {
             comment: optionalValue(entry.comment),
-            lessonId,
+            lessonId: lesson.id,
             markedAt: new Date(),
             markedByUserId: actor.id,
             status: entry.status,
@@ -801,14 +867,14 @@ export class StudioService {
             markedByUserId: actor.id,
             status: entry.status,
           },
-          where: { lessonId_studentId: { lessonId, studentId: entry.studentId } },
+          where: { lessonId_studentId: { lessonId: lesson.id, studentId: entry.studentId } },
         });
         if (previous?.status !== entry.status)
           await applyAttendanceWriteOff(transaction, {
             actorUserId: actor.id,
             attendanceStatus: entry.status,
             branchId: lesson.branchId,
-            lessonId,
+            lessonId: lesson.id,
             lessonStartsAt: lesson.startsAt,
             studentId: entry.studentId,
           });
@@ -818,20 +884,35 @@ export class StudioService {
             actor.id,
             'ATTENDANCE_CORRECTED',
             'Attendance',
-            `${lessonId}:${entry.studentId}`,
-            { from: previous.status, to: entry.status },
+            `${lesson.id}:${entry.studentId}`,
+            {
+              from: previous.status,
+              source: webActionId ? 'TRAINER_WEB_ACTION' : 'CRM',
+              to: entry.status,
+            },
           );
       }
       if (!lesson.attendanceCompletedAt && allowedStudents.size > 0) {
-        const markedCount = await transaction.attendance.count({ where: { lessonId } });
+        const markedCount = await transaction.attendance.count({ where: { lessonId: lesson.id } });
         if (markedCount >= allowedStudents.size)
           await transaction.lesson.update({
             data: { attendanceCompletedAt: new Date() },
-            where: { id: lessonId },
+            where: { id: lesson.id },
           });
       }
+      if (webActionId)
+        await transaction.webAction.update({
+          data: {
+            nextCompletionAttemptAt: new Date(),
+            processedAt: new Date(),
+            processedByUserId: actor.id,
+            safeError: null,
+            safeResultJson: JSON.stringify({ marksApplied: entries.length, status: 'SUCCEEDED' }),
+            status: 'SUCCEEDED_ACK_PENDING',
+          },
+          where: { id: webActionId, status: 'CLAIMED' },
+        });
     });
-    return this.getAttendance(token, lessonId);
   }
 
   private async manageBranch(

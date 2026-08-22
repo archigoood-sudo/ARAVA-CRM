@@ -32,6 +32,7 @@ import { DomainError } from './security';
 import type { ApplicationService } from './services';
 import { FinanceService } from './finance-service';
 import { accessibleBranchIds } from './permissions';
+import { StudioService } from './studio-service';
 
 export const INTEGRATION_API_VERSION = 'v1';
 export const INTEGRATION_BATCH_SIZE = 25;
@@ -148,8 +149,11 @@ interface ApiErrorBody {
 interface RemoteWebAction {
   actionType: string;
   externalActionId: string;
+  crmTrainerId?: string;
+  crmLessonId?: string;
   crmStudentId?: string;
   crmSubscriptionId?: string;
+  marks?: { crmStudentId: string; status: string }[];
   reason?: string;
   receivedAt: string;
 }
@@ -1197,6 +1201,14 @@ export class IntegrationApiClient {
       const crmSubscriptionId =
         optionalString(actionPayload.crmSubscriptionId) ??
         optionalString(actionPayload.subscriptionId);
+      const crmTrainerId = optionalString(actionPayload.crmTrainerId);
+      const crmLessonId = optionalString(actionPayload.crmLessonId);
+      const marks = Array.isArray(actionPayload.marks)
+        ? actionPayload.marks.map((mark) => ({
+            crmStudentId: isRecord(mark) ? (optionalString(mark.crmStudentId) ?? '') : '',
+            status: isRecord(mark) ? (optionalString(mark.status) ?? '') : '',
+          }))
+        : undefined;
       const reason = optionalString(actionPayload.reason) ?? optionalString(entry.reason);
       return [
         {
@@ -1204,6 +1216,9 @@ export class IntegrationApiClient {
           externalActionId,
           ...(crmStudentId ? { crmStudentId } : {}),
           ...(crmSubscriptionId ? { crmSubscriptionId } : {}),
+          ...(crmTrainerId ? { crmTrainerId } : {}),
+          ...(crmLessonId ? { crmLessonId } : {}),
+          ...(marks ? { marks } : {}),
           ...(reason ? { reason: reason.slice(0, 500) } : {}),
           receivedAt,
         },
@@ -1280,6 +1295,7 @@ const ENTITY_PRIORITY: Record<SyncEntityType, number> = {
 export class IntegrationService {
   private processing = false;
   private readonly finance: FinanceService;
+  private readonly studio: StudioService;
 
   constructor(
     private readonly database: DatabaseClient,
@@ -1289,6 +1305,7 @@ export class IntegrationService {
     private readonly now: () => Date = () => new Date(),
   ) {
     this.finance = new FinanceService(database, application);
+    this.studio = new StudioService(database, application);
   }
 
   private async assertOwner(token: string): Promise<AuthenticatedUser> {
@@ -1445,11 +1462,18 @@ export class IntegrationService {
 
   private async acknowledgeWebAction(id: string): Promise<void> {
     const action = await this.database.webAction.findUnique({ where: { id } });
-    if (!action || !['SUCCEEDED_ACK_PENDING', 'REJECTED_ACK_PENDING'].includes(action.status))
+    if (
+      !action ||
+      !['SUCCEEDED_ACK_PENDING', 'REJECTED_ACK_PENDING', 'FAILED_ACK_PENDING'].includes(
+        action.status,
+      )
+    )
       return;
     const remoteStatus: WebActionCompletionStatus = action.status.startsWith('SUCCEEDED')
       ? 'SUCCEEDED'
-      : 'REJECTED';
+      : action.status.startsWith('FAILED')
+        ? 'FAILED'
+        : 'REJECTED';
     try {
       const connection = await this.integrationConnection();
       await this.api.completeAction(
@@ -1458,7 +1482,7 @@ export class IntegrationService {
         connection.token,
         action.externalActionId,
         remoteStatus,
-        remoteStatus === 'REJECTED' ? (action.safeError ?? undefined) : undefined,
+        remoteStatus === 'SUCCEEDED' ? undefined : (action.safeError ?? undefined),
       );
       await this.database.webAction.update({
         data: {
@@ -2522,11 +2546,14 @@ export class IntegrationService {
     this.processing = true;
     try {
       await this.pullWebActions(baseUrl, deviceId, token);
+      await this.processTrainerAttendanceActions();
       const acknowledgements = await this.database.webAction.findMany({
         select: { id: true },
         where: {
           nextCompletionAttemptAt: { lte: this.now() },
-          status: { in: ['SUCCEEDED_ACK_PENDING', 'REJECTED_ACK_PENDING'] },
+          status: {
+            in: ['SUCCEEDED_ACK_PENDING', 'REJECTED_ACK_PENDING', 'FAILED_ACK_PENDING'],
+          },
         },
       });
       for (const acknowledgement of acknowledgements) {
@@ -2620,12 +2647,19 @@ export class IntegrationService {
       return;
     }
     for (const action of actions) {
-      const valid =
+      const validFreeze =
         action.actionType === 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST' &&
         Boolean(action.crmStudentId) &&
         Boolean(action.crmSubscriptionId) &&
         !Number.isNaN(Date.parse(action.receivedAt));
-      if (!valid) {
+      const validAttendance =
+        action.actionType === 'TRAINER_ATTENDANCE_SUBMIT' &&
+        Boolean(action.crmTrainerId) &&
+        Boolean(action.crmLessonId) &&
+        Array.isArray(action.marks) &&
+        action.marks.length > 0 &&
+        !Number.isNaN(Date.parse(action.receivedAt));
+      if (!validFreeze && !validAttendance) {
         try {
           await this.api.claimAction(baseUrl, deviceId, token, action.externalActionId);
           await this.api.completeAction(
@@ -2639,6 +2673,24 @@ export class IntegrationService {
         } catch {
           // The next polling cycle will receive and safely retry this remote action.
         }
+        continue;
+      }
+      if (validAttendance) {
+        const crmTrainerId = action.crmTrainerId;
+        const crmLessonId = action.crmLessonId;
+        if (!crmTrainerId || !crmLessonId) continue;
+        await this.database.webAction.upsert({
+          create: {
+            actionType: action.actionType,
+            crmLessonId,
+            crmTrainerId,
+            externalActionId: action.externalActionId,
+            payloadJson: JSON.stringify({ marks: action.marks }),
+            receivedAt: new Date(action.receivedAt),
+          },
+          update: {},
+          where: { externalActionId: action.externalActionId },
+        });
         continue;
       }
       const crmStudentId = action.crmStudentId;
@@ -2656,6 +2708,71 @@ export class IntegrationService {
         update: {},
         where: { externalActionId: action.externalActionId },
       });
+    }
+  }
+
+  private async processTrainerAttendanceActions(): Promise<void> {
+    const actions = await this.database.webAction.findMany({
+      orderBy: { receivedAt: 'asc' },
+      where: {
+        actionType: 'TRAINER_ATTENDANCE_SUBMIT',
+        status: { in: ['PENDING', 'CLAIMED'] },
+      },
+    });
+    for (const action of actions) {
+      try {
+        if (action.status === 'PENDING') await this.claimLocalAction(action.id);
+        const payload = action.payloadJson
+          ? (JSON.parse(action.payloadJson) as unknown)
+          : undefined;
+        if (
+          !action.crmTrainerId ||
+          !action.crmLessonId ||
+          !isRecord(payload) ||
+          !Array.isArray(payload.marks)
+        )
+          throw new DomainError('VALIDATION', 'Данные посещаемости повреждены.');
+        const marks = payload.marks.map((mark) => {
+          if (!isRecord(mark))
+            throw new DomainError('VALIDATION', 'Данные отметки посещаемости повреждены.');
+          const studentId = optionalString(mark.crmStudentId);
+          const remoteStatus = optionalString(mark.status);
+          if (!studentId || !remoteStatus || !['PRESENT', 'ABSENT', 'ILL'].includes(remoteStatus))
+            throw new DomainError('VALIDATION', 'Статус посещаемости не поддерживается.');
+          if (remoteStatus === 'PRESENT') return { status: 'PRESENT' as const, studentId };
+          if (remoteStatus === 'ABSENT') return { status: 'ABSENT' as const, studentId };
+          return { status: 'EXCUSED' as const, studentId };
+        });
+        if (new Set(marks.map(({ studentId }) => studentId)).size !== marks.length)
+          throw new DomainError('VALIDATION', 'Один ученик указан в заявке несколько раз.');
+        await this.studio.processTrainerWebAttendance(
+          action.crmTrainerId,
+          action.crmLessonId,
+          marks,
+          action.id,
+        );
+        await this.acknowledgeWebAction(action.id);
+      } catch (error) {
+        const current = await this.database.webAction.findUnique({ where: { id: action.id } });
+        if (current?.status !== 'CLAIMED') continue;
+        const authoritativeRejection = error instanceof DomainError;
+        await this.database.webAction.update({
+          data: {
+            nextCompletionAttemptAt: this.now(),
+            processedAt: this.now(),
+            processedByUserId: action.crmTrainerId,
+            safeError: authoritativeRejection
+              ? error.message.slice(0, 300)
+              : 'Не удалось безопасно применить посещаемость.',
+            safeResultJson: JSON.stringify({
+              status: authoritativeRejection ? 'REJECTED' : 'FAILED',
+            }),
+            status: authoritativeRejection ? 'REJECTED_ACK_PENDING' : 'FAILED_ACK_PENDING',
+          },
+          where: { id: action.id, status: 'CLAIMED' },
+        });
+        await this.acknowledgeWebAction(action.id);
+      }
     }
   }
 

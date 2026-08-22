@@ -1132,6 +1132,9 @@ model WebAction {
   actionType              String
   crmStudentId            String?
   crmSubscriptionId       String?
+  crmTrainerId            String?
+  crmLessonId             String?
+  payloadJson             String?
   reason                  String?
   status                  String   @default("PENDING")
   receivedAt              DateTime @default(now())
@@ -1148,6 +1151,8 @@ model WebAction {
   @@index([status, receivedAt])
   @@index([crmStudentId])
   @@index([crmSubscriptionId])
+  @@index([crmTrainerId])
+  @@index([crmLessonId])
   @@index([nextCompletionAttemptAt])
 }
 
