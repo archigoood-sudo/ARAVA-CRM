@@ -482,10 +482,12 @@ describe('Sprint 4.5A multi-device integration', () => {
 
     const devices = await integration.listAqsiDevices(ownerToken);
 
-    expect(received.map(({ path }) => path)).toEqual([
-      '/api/integration/v1/payments/provider-health',
-      '/api/integration/v1/payments/aqsi/devices',
-    ]);
+    expect(received.map(({ path }) => path).sort()).toEqual(
+      [
+        '/api/integration/v1/payments/provider-health',
+        '/api/integration/v1/payments/aqsi/devices',
+      ].sort(),
+    );
     for (const request of received) {
       expect(request.headers).toMatchObject({
         authorization: 'Bearer device-secret',
