@@ -893,7 +893,8 @@ describe('Electron IPC boundary', () => {
       studentId: student.id,
     });
     const gatewayService = {
-      refreshSbpPayment: vi.fn(),
+      cancelAqsiPayment: vi.fn(),
+      refreshAqsiPayment: vi.fn(),
       sbpProviderHealth: vi.fn(() =>
         Promise.resolve({
           apiReachable: true,
@@ -902,13 +903,15 @@ describe('Electron IPC boundary', () => {
           provider: 'AQSI_SBP' as const,
         }),
       ),
-      startSbpPayment: vi.fn(() =>
+      startAqsiPayment: vi.fn((_token: string, target: { id: string; providerType: string }) =>
         Promise.resolve({
           amountKopecks: 12_000,
-          aravaOperationId: (sbpOperation as { id: string }).id,
+          aravaOperationId: target.id,
           currency: 'RUB' as const,
-          provider: 'AQSI_SBP' as const,
-          providerOperationId: 'aqsi-ipc-1',
+          provider:
+            target.providerType === 'ACQUIRING' ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
+          providerOperationId: `aqsi-${target.id}`,
+          providerResultId: `slip-${target.id}`,
           status: 'SUCCEEDED' as const,
           updatedAt: new Date().toISOString(),
         }),
@@ -937,7 +940,29 @@ describe('Electron IPC boundary', () => {
         owner.token,
         (sbpOperation as { id: string }).id,
       ),
-    ).toMatchObject({ providerOperationId: 'aqsi-ipc-1', status: 'SUCCEEDED' });
+    ).toMatchObject({
+      providerOperationId: `aqsi-${(sbpOperation as { id: string }).id}`,
+      status: 'SUCCEEDED',
+    });
+    const cardOperation = await handlers[IPC_CHANNELS.paymentOperationCreate]?.(owner.token, {
+      amount: 12_000,
+      branchId: branch.id,
+      currency: 'RUB',
+      idempotencyKey: 'payment-ipc-card-real-shaped',
+      providerType: 'ACQUIRING',
+      purpose: 'Проверка шлюза оплаты картой',
+      studentId: student.id,
+    });
+    expect(
+      await sbpHandlers[IPC_CHANNELS.paymentOperationStartAqsi]?.(
+        owner.token,
+        (cardOperation as { id: string }).id,
+      ),
+    ).toMatchObject({ provider: 'AQSI_CARD', status: 'SUCCEEDED' });
+    const cardPayment = await database.payment.findFirstOrThrow({
+      where: { operation: { id: (cardOperation as { id: string }).id } },
+    });
+    expect(cardPayment.paymentMethod).toBe('ACQUIRING');
     await expect(
       handlers[IPC_CHANNELS.paymentOperationTestComplete]?.(
         owner.token,
@@ -959,7 +984,7 @@ describe('Electron IPC boundary', () => {
         'SBP',
       );
       expect(completed).toMatchObject({ status: 'SUCCEEDED' });
-      expect(await database.payment.count()).toBe(2);
+      expect(await database.payment.count()).toBe(3);
     } finally {
       delete process.env.ARAVA_E2E_PAYMENT_PROVIDER;
     }

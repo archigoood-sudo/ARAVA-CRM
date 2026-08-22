@@ -100,15 +100,27 @@ test('платёжная операция становится одним под
     expect(result.payments).toHaveLength(1);
     expect(result.debt).toBe(75_000);
 
-    await page.getByRole('button', { name: 'Принять оплату' }).first().click();
-    const sbpMode = page.getByRole('button', { name: 'СБП через aQsi', exact: true });
+    await page.getByRole('button', { name: 'Принять оплату' }).last().click();
+    const cardMode = page.getByRole('button', { name: 'Оплата картой', exact: true });
+    await expect(cardMode).toBeEnabled();
+    await cardMode.click();
+    await page.getByLabel('Сумма').fill('100');
+    await page.getByLabel('Комментарий').fill('Оплата картой aQsi E2E');
+    await expect(page.getByText('aQsi 5Ф · E2E-001')).toBeVisible();
+    await page.getByRole('button', { name: 'Начать оплату картой' }).click();
+    await expect(page.getByText('Ожидаем оплату картой на кассе aQsi')).toBeVisible();
+    await expect(page.getByText('Оплата подтверждена')).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Готово' }).click();
+
+    await page.getByRole('button', { name: 'Принять оплату' }).last().click();
+    const sbpMode = page.getByRole('button', { name: 'Оплата по СБП', exact: true });
     await expect(sbpMode).toBeEnabled();
     await sbpMode.click();
     await page.getByLabel('Сумма').fill('100');
     await page.getByLabel('Комментарий').fill('Оплата aQsi E2E');
     await expect(page.getByText('aQsi 5Ф · E2E-001')).toBeVisible();
-    await page.getByRole('button', { name: 'Начать оплату на aQsi' }).click();
-    await expect(page.getByText('Ожидаем оплату на кассе aQsi')).toBeVisible();
+    await page.getByRole('button', { name: 'Начать оплату по СБП' }).click();
+    await expect(page.getByText('Ожидаем оплату по СБП на кассе aQsi')).toBeVisible();
     await expect(page.getByText('Оплата подтверждена')).toBeVisible({ timeout: 15_000 });
     await page.getByRole('button', { name: 'Готово' }).click();
     const afterQr = await page.evaluate(async ({ studentId, token }) => {
@@ -120,8 +132,11 @@ test('платёжная операция становится одним под
         })
       ).filter(({ studentId: id }) => id === studentId);
     }, context);
-    expect(afterQr).toHaveLength(2);
+    expect(afterQr).toHaveLength(3);
     expect(afterQr.filter(({ paymentMethod }) => paymentMethod === 'SBP')).toHaveLength(2);
+    expect(afterQr.filter(({ paymentMethod }) => paymentMethod === 'ACQUIRING')).toEqual([
+      expect.objectContaining({ amount: 10_000 }),
+    ]);
 
     await page.getByRole('link', { name: 'Главная', exact: true }).click();
     await page.getByRole('button', { name: 'Поиск по приложению' }).click();
@@ -130,7 +145,7 @@ test('платёжная операция становится одним под
     await search.getByRole('button', { name: /Оплатина E2E Анна/u }).click();
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Оплатина E2E Анна' })).toBeVisible();
-    await expect(page.getByText('Оплачено')).toHaveCount(2);
+    await expect(page.getByText('Оплачено')).toHaveCount(3);
   } finally {
     await application.close();
   }

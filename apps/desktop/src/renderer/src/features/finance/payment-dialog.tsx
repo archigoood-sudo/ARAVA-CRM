@@ -2,9 +2,9 @@ import {
   MANUAL_PAYMENT_METHODS,
   paymentInputSchema,
   t,
+  type AqsiGatewayPayment,
   type BranchSummary,
   type PaymentInput,
-  type SbpGatewayPayment,
   type StudentSummary,
   type SubscriptionSummary,
 } from '@arava/shared';
@@ -21,7 +21,7 @@ function localDateTimeValue(value = new Date()): string {
   return new Date(value.getTime() - offset).toISOString().slice(0, 16);
 }
 
-const sbpStatusText: Record<SbpGatewayPayment['status'], string> = {
+const aqsiStatusText: Record<AqsiGatewayPayment['status'], string> = {
   CANCELLED: 'Оплата отменена',
   CREATED: 'Создаём оплату…',
   EXPIRED: 'Время оплаты истекло',
@@ -74,14 +74,17 @@ export function PaymentDialog({
     },
   });
   const [validationError, setValidationError] = useState<string>();
-  const [mode, setMode] = useState<'MANUAL' | 'SBP'>('MANUAL');
+  const [mode, setMode] = useState<'CARD' | 'MANUAL' | 'SBP'>('MANUAL');
   const [sbpAvailable, setSbpAvailable] = useState(false);
   const [sbpDeviceName, setSbpDeviceName] = useState<string>();
-  const [sbpPayment, setSbpPayment] = useState<SbpGatewayPayment>();
+  const [sbpPayment, setSbpPayment] = useState<AqsiGatewayPayment>();
   const [sbpBusy, setSbpBusy] = useState(false);
   const [sbpError, setSbpError] = useState<string>();
   const attemptKey = useRef(crypto.randomUUID());
   const values = watch();
+  const aqsiModeLocked = Boolean(
+    sbpPayment && !['SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED'].includes(sbpPayment.status),
+  );
   useLayoutEffect(() => {
     if (!open) return;
     reset({
@@ -120,7 +123,7 @@ export function PaymentDialog({
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void getDesktopApi()
-        .paymentOperations.refreshSbp(getSessionToken(), sbpPayment.aravaOperationId)
+        .paymentOperations.refreshAqsi(getSessionToken(), sbpPayment.aravaOperationId)
         .then(async (payment) => {
           if (cancelled) return;
           setSbpPayment(payment);
@@ -137,7 +140,7 @@ export function PaymentDialog({
     };
   }, [onSbpCompleted, open, sbpPayment]);
 
-  const startSbp = async () => {
+  const startAqsi = async () => {
     const amount = Math.round(values.amount * 100);
     const purpose = values.comment?.trim();
     if (!values.studentId || !values.branchId || !Number.isSafeInteger(amount) || amount < 1_000) {
@@ -152,19 +155,31 @@ export function PaymentDialog({
         branchId: values.branchId,
         currency: 'RUB',
         idempotencyKey: attemptKey.current,
-        providerType: 'SBP',
-        purpose: purpose && purpose.length > 0 ? purpose : 'Оплата через СБП',
+        providerType: mode === 'CARD' ? 'ACQUIRING' : 'SBP',
+        purpose:
+          purpose && purpose.length > 0
+            ? purpose
+            : mode === 'CARD'
+              ? 'Оплата картой через aQsi'
+              : 'Оплата через СБП',
         studentId: values.studentId,
         ...(values.subscriptionId ? { subscriptionId: values.subscriptionId } : {}),
       });
-      const gateway = await getDesktopApi().paymentOperations.startSbp(
+      const gateway = await getDesktopApi().paymentOperations.startAqsi(
         getSessionToken(),
         operation.id,
       );
       setSbpPayment(gateway);
       if (gateway.status === 'SUCCEEDED') await onSbpCompleted?.();
     } catch (caught) {
-      setSbpError(getErrorMessage(caught, 'Не удалось создать оплату через СБП.'));
+      setSbpError(
+        getErrorMessage(
+          caught,
+          mode === 'CARD'
+            ? 'Не удалось начать оплату картой.'
+            : 'Не удалось создать оплату через СБП.',
+        ),
+      );
     } finally {
       setSbpBusy(false);
     }
@@ -175,7 +190,7 @@ export function PaymentDialog({
     setSbpBusy(true);
     setSbpError(undefined);
     try {
-      const payment = await getDesktopApi().paymentOperations.refreshSbp(
+      const payment = await getDesktopApi().paymentOperations.refreshAqsi(
         getSessionToken(),
         sbpPayment.aravaOperationId,
       );
@@ -194,7 +209,7 @@ export function PaymentDialog({
     setSbpError(undefined);
     try {
       setSbpPayment(
-        await getDesktopApi().paymentOperations.cancelSbp(
+        await getDesktopApi().paymentOperations.cancelAqsi(
           getSessionToken(),
           sbpPayment.aravaOperationId,
         ),
@@ -214,16 +229,27 @@ export function PaymentDialog({
       open={open}
       title={t('payment.createTitle')}
     >
-      <div className="mb-5 grid grid-cols-2 rounded-2xl bg-muted p-1">
-        <Button onClick={() => setMode('MANUAL')} variant={mode === 'MANUAL' ? 'primary' : 'ghost'}>
-          Наличными / картой
+      <div className="mb-5 grid grid-cols-3 rounded-2xl bg-muted p-1">
+        <Button
+          disabled={aqsiModeLocked}
+          onClick={() => setMode('MANUAL')}
+          variant={mode === 'MANUAL' ? 'primary' : 'ghost'}
+        >
+          Вручную
         </Button>
         <Button
-          disabled={!sbpAvailable}
+          disabled={!sbpAvailable || aqsiModeLocked}
+          onClick={() => setMode('CARD')}
+          variant={mode === 'CARD' ? 'primary' : 'ghost'}
+        >
+          Оплата картой
+        </Button>
+        <Button
+          disabled={!sbpAvailable || aqsiModeLocked}
           onClick={() => setMode('SBP')}
           variant={mode === 'SBP' ? 'primary' : 'ghost'}
         >
-          СБП через aQsi
+          Оплата по СБП
         </Button>
       </div>
       <form
@@ -338,12 +364,16 @@ export function PaymentDialog({
           <Label htmlFor="payment-comment">{t('payment.comment')}</Label>
           <Textarea id="payment-comment" {...register('comment')} />
         </div>
-        {mode === 'SBP' ? (
+        {mode !== 'MANUAL' ? (
           <div className="rounded-2xl border border-border bg-muted/30 p-5 text-center">
             {sbpPayment &&
             !['SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED'].includes(sbpPayment.status) ? (
               <>
-                <p className="font-semibold">Ожидаем оплату на кассе aQsi</p>
+                <p className="font-semibold">
+                  {mode === 'CARD'
+                    ? 'Ожидаем оплату картой на кассе aQsi'
+                    : 'Ожидаем оплату по СБП на кассе aQsi'}
+                </p>
                 <p className="mt-1 text-lg font-semibold">
                   {formatRubles(sbpPayment.amountKopecks)}
                 </p>
@@ -351,10 +381,14 @@ export function PaymentDialog({
                   {sbpDeviceName ?? `Касса aQsi #${String(sbpPayment.deviceId ?? '')}`}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {values.comment?.trim() ? values.comment.trim() : 'Оплата через СБП'}
+                  {values.comment?.trim()
+                    ? values.comment.trim()
+                    : mode === 'CARD'
+                      ? 'Оплата картой через aQsi'
+                      : 'Оплата через СБП'}
                 </p>
                 <p className="mt-3 text-sm text-muted-foreground">
-                  {sbpStatusText[sbpPayment.status]}
+                  {aqsiStatusText[sbpPayment.status]}
                 </p>
               </>
             ) : sbpPayment?.status === 'SUCCEEDED' ? (
@@ -364,14 +398,18 @@ export function PaymentDialog({
                 <p className="font-semibold text-red-700">Оплата не завершена</p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {sbpPayment.error?.message ??
-                    'Создайте новый QR-код и попросите клиента повторить оплату.'}
+                    'Создайте новую попытку и попросите клиента повторить оплату.'}
                 </p>
               </>
             ) : (
               <>
-                <p className="font-medium">СБП через aQsi</p>
+                <p className="font-medium">
+                  {mode === 'CARD' ? 'Оплата картой через aQsi' : 'Оплата по СБП через aQsi'}
+                </p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  QR-код появится на выбранной физической кассе aQsi.
+                  {mode === 'CARD'
+                    ? 'Попросите клиента приложить или вставить карту в выбранную кассу.'
+                    : 'QR-код появится на выбранной физической кассе aQsi.'}
                 </p>
                 {sbpDeviceName ? <p className="mt-2 text-sm font-medium">{sbpDeviceName}</p> : null}
               </>
@@ -417,7 +455,7 @@ export function PaymentDialog({
                   type="button"
                   variant="outline"
                 >
-                  Обновить статус
+                  Проверить оплату
                 </Button>
               ) : null}
               {sbpPayment ? (
@@ -430,8 +468,12 @@ export function PaymentDialog({
                   Отменить ожидание
                 </Button>
               ) : (
-                <Button disabled={sbpBusy} onClick={() => void startSbp()} type="button">
-                  {sbpBusy ? 'Передаём на кассу…' : 'Начать оплату на aQsi'}
+                <Button disabled={sbpBusy} onClick={() => void startAqsi()} type="button">
+                  {sbpBusy
+                    ? 'Передаём на кассу…'
+                    : mode === 'CARD'
+                      ? 'Начать оплату картой'
+                      : 'Начать оплату по СБП'}
                 </Button>
               )}
             </div>

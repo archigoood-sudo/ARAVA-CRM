@@ -6,8 +6,8 @@ import {
   FinanceService,
   GlobalSearchService,
   ManagementService,
+  AqsiPaymentService,
   PaymentOperationService,
-  SbpPaymentService,
   PublicationService,
   StudioService,
   StudentProfileService,
@@ -181,8 +181,8 @@ export function createIpcHandlers(
       externalLogPath: join(dirname(databasePath), 'backup-restore.log'),
     });
   const integration = backupDependencies.integration?.service;
-  const sbpPayments = integration
-    ? new SbpPaymentService(paymentOperations, integration)
+  const aqsiPayments = integration
+    ? new AqsiPaymentService(paymentOperations, integration)
     : undefined;
   const chats = integration ? new ChatService(database, service, integration) : undefined;
   const requireIntegration = () => {
@@ -193,9 +193,9 @@ export function createIpcHandlers(
     if (!chats) throw new Error('Сервис чатов не инициализирован.');
     return chats;
   };
-  const requireSbpPayments = () => {
-    if (!sbpPayments) throw new Error('Сервис оплаты через СБП не инициализирован.');
-    return sbpPayments;
+  const requireAqsiPayments = () => {
+    if (!aqsiPayments) throw new Error('Сервис оплаты через aQsi не инициализирован.');
+    return aqsiPayments;
   };
   const paymentManagerToken = async (unsafeToken: unknown) => {
     const token = sessionTokenSchema.parse(unsafeToken);
@@ -834,7 +834,7 @@ export function createIpcHandlers(
             selectedDeviceId: 101,
             selectedDeviceName: 'aQsi 5Ф · E2E-001',
           }
-        : requireSbpPayments().health(token);
+        : requireAqsiPayments().health(token);
     },
     [IPC_CHANNELS.paymentOperationSbpDevices]: async (unsafeToken) => {
       const token = sessionTokenSchema.parse(unsafeToken);
@@ -878,7 +878,7 @@ export function createIpcHandlers(
       const token = await paymentManagerToken(unsafeToken);
       const id = identifierSchema.parse(unsafeId);
       if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
-        return requireSbpPayments().start(token, id);
+        return requireAqsiPayments().start(token, id);
       const operation = await paymentOperations.get(token, id);
       if (operation.status === 'CREATED')
         await paymentOperations.transition(
@@ -903,7 +903,7 @@ export function createIpcHandlers(
       const token = await paymentManagerToken(unsafeToken);
       const id = identifierSchema.parse(unsafeId);
       if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
-        return requireSbpPayments().refresh(token, id);
+        return requireAqsiPayments().refresh(token, id);
       const operation = await paymentOperations.get(token, id);
       await paymentOperations.finalizeTrusted(id, {
         paymentMethod: 'SBP',
@@ -925,7 +925,7 @@ export function createIpcHandlers(
       const token = await paymentManagerToken(unsafeToken);
       const id = identifierSchema.parse(unsafeId);
       if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
-        return requireSbpPayments().cancel(token, id);
+        return requireAqsiPayments().cancel(token, id);
       const operation = await paymentOperations.get(token, id);
       if (operation.status !== 'SUCCEEDED')
         await paymentOperations.cancel(token, id, 'Ожидание оплаты отменено пользователем.');
@@ -935,6 +935,78 @@ export function createIpcHandlers(
         currency: 'RUB' as const,
         deviceId: 101,
         provider: 'AQSI_SBP' as const,
+        providerOperationId: operation.providerOperationId,
+        status: 'CANCELLED' as const,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+    [IPC_CHANNELS.paymentOperationStartAqsi]: async (unsafeToken, unsafeId) => {
+      const token = await paymentManagerToken(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
+        return requireAqsiPayments().start(token, id);
+      const operation = await paymentOperations.get(token, id);
+      if (operation.providerType !== 'SBP' && operation.providerType !== 'ACQUIRING')
+        throw new Error('Операция не предназначена для оплаты через aQsi.');
+      if (operation.status === 'CREATED')
+        await paymentOperations.transition(
+          token,
+          id,
+          'WAITING_FOR_PAYMENT',
+          undefined,
+          `e2e-${id}`,
+        );
+      return {
+        amountKopecks: operation.amount,
+        aravaOperationId: id,
+        currency: 'RUB' as const,
+        deviceId: 101,
+        provider:
+          operation.providerType === 'ACQUIRING' ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
+        providerOperationId: `e2e-${id}`,
+        status: 'WAITING' as const,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+    [IPC_CHANNELS.paymentOperationRefreshAqsi]: async (unsafeToken, unsafeId) => {
+      const token = await paymentManagerToken(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
+        return requireAqsiPayments().refresh(token, id);
+      const operation = await paymentOperations.get(token, id);
+      const isCard = operation.providerType === 'ACQUIRING';
+      await paymentOperations.finalizeTrusted(id, {
+        paymentMethod: isCard ? 'ACQUIRING' : 'SBP',
+        providerOperationId: operation.providerOperationId,
+        providerResultId: `slip-${id}`,
+      });
+      return {
+        amountKopecks: operation.amount,
+        aravaOperationId: id,
+        currency: 'RUB' as const,
+        deviceId: 101,
+        provider: isCard ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
+        providerOperationId: operation.providerOperationId,
+        providerResultId: `slip-${id}`,
+        status: 'SUCCEEDED' as const,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+    [IPC_CHANNELS.paymentOperationCancelAqsi]: async (unsafeToken, unsafeId) => {
+      const token = await paymentManagerToken(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
+        return requireAqsiPayments().cancel(token, id);
+      const operation = await paymentOperations.get(token, id);
+      if (operation.status !== 'SUCCEEDED')
+        await paymentOperations.cancel(token, id, 'Ожидание оплаты отменено пользователем.');
+      return {
+        amountKopecks: operation.amount,
+        aravaOperationId: id,
+        currency: 'RUB' as const,
+        deviceId: 101,
+        provider:
+          operation.providerType === 'ACQUIRING' ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
         providerOperationId: operation.providerOperationId,
         status: 'CANCELLED' as const,
         updatedAt: new Date().toISOString(),

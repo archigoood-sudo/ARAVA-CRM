@@ -1,9 +1,9 @@
-import type { PaymentOperationSummary, SbpGatewayPayment } from '@arava/shared';
+import type { AqsiGatewayPayment, PaymentOperationSummary } from '@arava/shared';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { IntegrationService } from './integration-service';
 import type { PaymentOperationService } from './payment-operation-service';
-import { SbpPaymentService } from './sbp-payment-service';
+import { AqsiPaymentService } from './sbp-payment-service';
 
 const operation: PaymentOperationSummary = {
   amount: 150_000,
@@ -21,12 +21,15 @@ const operation: PaymentOperationSummary = {
   updatedAt: '2026-08-22T10:00:00.000Z',
 };
 
-function gateway(status: SbpGatewayPayment['status']): SbpGatewayPayment {
+function gateway(
+  status: AqsiGatewayPayment['status'],
+  provider: AqsiGatewayPayment['provider'] = 'AQSI_SBP',
+): AqsiGatewayPayment {
   return {
     amountKopecks: operation.amount,
     aravaOperationId: operation.id,
     currency: 'RUB',
-    provider: 'AQSI_SBP',
+    provider,
     providerOperationId: 'aqsi-100',
     providerResultId: status === 'SUCCEEDED' ? 'slip-100' : null,
     qrPayload: null,
@@ -35,8 +38,11 @@ function gateway(status: SbpGatewayPayment['status']): SbpGatewayPayment {
   };
 }
 
-function setup(remoteStatus: SbpGatewayPayment['status']) {
-  let current = operation;
+function setup(
+  remoteStatus: AqsiGatewayPayment['status'],
+  currentOperation: PaymentOperationSummary = operation,
+) {
+  let current = currentOperation;
   const operations = {
     cancel: vi.fn(),
     expireTrusted: vi.fn(),
@@ -57,7 +63,12 @@ function setup(remoteStatus: SbpGatewayPayment['status']) {
     ),
   };
   const integration = {
-    refreshSbpPayment: vi.fn(() => Promise.resolve(gateway(remoteStatus))),
+    cancelAqsiPayment: vi.fn(() => Promise.resolve(gateway(remoteStatus))),
+    refreshAqsiPayment: vi.fn(() =>
+      Promise.resolve(
+        gateway(remoteStatus, current.providerType === 'ACQUIRING' ? 'AQSI_CARD' : 'AQSI_SBP'),
+      ),
+    ),
     sbpProviderHealth: vi.fn(() =>
       Promise.resolve({
         apiReachable: true,
@@ -66,19 +77,23 @@ function setup(remoteStatus: SbpGatewayPayment['status']) {
         provider: 'AQSI_SBP' as const,
       }),
     ),
-    startSbpPayment: vi.fn(() => Promise.resolve(gateway(remoteStatus))),
+    startAqsiPayment: vi.fn(() =>
+      Promise.resolve(
+        gateway(remoteStatus, current.providerType === 'ACQUIRING' ? 'AQSI_CARD' : 'AQSI_SBP'),
+      ),
+    ),
   };
   return {
     integration,
     operations,
-    service: new SbpPaymentService(
+    service: new AqsiPaymentService(
       operations as unknown as PaymentOperationService,
       integration as unknown as IntegrationService,
     ),
   };
 }
 
-describe('SbpPaymentService', () => {
+describe('AqsiPaymentService', () => {
   it('starts a waiting operation without creating a canonical payment', async () => {
     const { operations, service } = setup('WAITING');
     const result = await service.start('session', operation.id);
@@ -98,6 +113,24 @@ describe('SbpPaymentService', () => {
     await service.start('session', operation.id);
     expect(operations.finalizeTrusted).toHaveBeenCalledWith(operation.id, {
       paymentMethod: 'SBP',
+      providerOperationId: 'aqsi-100',
+      providerResultId: 'slip-100',
+    });
+  });
+
+  it('finalizes a confirmed card purchase as acquiring exactly once', async () => {
+    const cardOperation: PaymentOperationSummary = {
+      ...operation,
+      id: 'operation-card-1',
+      idempotencyKey: 'attempt-card-1',
+      providerType: 'ACQUIRING',
+    };
+    const { integration, operations, service } = setup('SUCCEEDED', cardOperation);
+    const result = await service.start('session', cardOperation.id);
+    expect(integration.startAqsiPayment).toHaveBeenCalledOnce();
+    expect(result.provider).toBe('AQSI_CARD');
+    expect(operations.finalizeTrusted).toHaveBeenCalledWith(cardOperation.id, {
+      paymentMethod: 'ACQUIRING',
       providerOperationId: 'aqsi-100',
       providerResultId: 'slip-100',
     });

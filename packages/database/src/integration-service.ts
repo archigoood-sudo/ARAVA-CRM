@@ -1,6 +1,7 @@
 import type {
   AqsiDeviceList,
   AqsiDeviceSummary,
+  AqsiGatewayPayment,
   AuthenticatedUser,
   ChatListQuery,
   ChatListResult,
@@ -276,10 +277,10 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function parseSbpGatewayPayment(
+function parseAqsiGatewayPayment(
   payload: unknown,
   expected: PaymentOperationSummary,
-): SbpGatewayPayment {
+): AqsiGatewayPayment {
   if (!isRecord(payload))
     throw new IntegrationApiError(
       'INVALID_RESPONSE',
@@ -296,12 +297,18 @@ function parseSbpGatewayPayment(
     'EXPIRED',
   ]);
   if (
-    payload.provider !== 'AQSI_SBP' ||
+    payload.provider !== (expected.providerType === 'ACQUIRING' ? 'AQSI_CARD' : 'AQSI_SBP') ||
     payload.aravaOperationId !== expected.id ||
     payload.currency !== 'RUB' ||
     payload.amountKopecks !== expected.amount ||
     typeof payload.status !== 'string' ||
     !statuses.has(payload.status) ||
+    (payload.status === 'SUCCEEDED' &&
+      (!Number.isSafeInteger(payload.deviceId) ||
+        typeof payload.providerOperationId !== 'string' ||
+        payload.providerOperationId.length === 0 ||
+        typeof payload.providerResultId !== 'string' ||
+        payload.providerResultId.length === 0)) ||
     typeof payload.updatedAt !== 'string'
   ) {
     throw new IntegrationApiError(
@@ -324,7 +331,7 @@ function parseSbpGatewayPayment(
     error,
     ...(typeof payload.expiresAt === 'string' ? { expiresAt: payload.expiresAt } : {}),
     ...(Number.isSafeInteger(payload.deviceId) ? { deviceId: payload.deviceId as number } : {}),
-    provider: 'AQSI_SBP',
+    provider: payload.provider as AqsiGatewayPayment['provider'],
     ...(typeof payload.providerOperationId === 'string'
       ? { providerOperationId: payload.providerOperationId }
       : {}),
@@ -335,7 +342,7 @@ function parseSbpGatewayPayment(
       ? { providerStatus: payload.providerStatus }
       : {}),
     ...(typeof payload.qrPayload === 'string' ? { qrPayload: payload.qrPayload } : {}),
-    status: payload.status as SbpGatewayPayment['status'],
+    status: payload.status as AqsiGatewayPayment['status'],
     updatedAt: payload.updatedAt,
   };
 }
@@ -867,7 +874,34 @@ export class IntegrationApiClient {
       },
       context,
     );
-    return parseSbpGatewayPayment(payload, operation);
+    return parseAqsiGatewayPayment(payload, operation);
+  }
+
+  async createAqsiPayment(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    operation: PaymentOperationSummary,
+    context: CrmChatRequestContext,
+  ): Promise<AqsiGatewayPayment> {
+    const payload = await this.request(
+      baseUrl,
+      'payments/aqsi',
+      deviceId,
+      token,
+      'POST',
+      {
+        amountKopecks: operation.amount,
+        aravaOperationId: operation.id,
+        branchId: operation.branchId,
+        currency: operation.currency,
+        idempotencyKey: operation.idempotencyKey,
+        paymentMethod: operation.providerType === 'ACQUIRING' ? 'CARD' : 'SBP',
+        purpose: operation.purpose,
+      },
+      context,
+    );
+    return parseAqsiGatewayPayment(payload, operation);
   }
 
   async getSbpPayment(
@@ -886,7 +920,7 @@ export class IntegrationApiClient {
       undefined,
       context,
     );
-    return parseSbpGatewayPayment(payload, operation);
+    return parseAqsiGatewayPayment(payload, operation);
   }
 
   async cancelSbpPayment(
@@ -905,7 +939,7 @@ export class IntegrationApiClient {
       undefined,
       context,
     );
-    return parseSbpGatewayPayment(payload, operation);
+    return parseAqsiGatewayPayment(payload, operation);
   }
 
   async probeChat(
@@ -1671,6 +1705,23 @@ export class IntegrationService {
     );
   }
 
+  async startAqsiPayment(
+    token: string,
+    operation: PaymentOperationSummary,
+  ): Promise<AqsiGatewayPayment> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'payments:manage');
+    assertBranchAccess(actor, operation.branchId);
+    const connection = await this.integrationConnection();
+    return this.api.createAqsiPayment(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      operation,
+      this.actorContext(actor),
+    );
+  }
+
   async refreshSbpPayment(
     token: string,
     operation: PaymentOperationSummary,
@@ -1688,6 +1739,13 @@ export class IntegrationService {
     );
   }
 
+  async refreshAqsiPayment(
+    token: string,
+    operation: PaymentOperationSummary,
+  ): Promise<AqsiGatewayPayment> {
+    return this.refreshSbpPayment(token, operation);
+  }
+
   async cancelSbpPayment(
     token: string,
     operation: PaymentOperationSummary,
@@ -1703,6 +1761,13 @@ export class IntegrationService {
       operation,
       this.actorContext(actor),
     );
+  }
+
+  async cancelAqsiPayment(
+    token: string,
+    operation: PaymentOperationSummary,
+  ): Promise<AqsiGatewayPayment> {
+    return this.cancelSbpPayment(token, operation);
   }
 
   private async setting(key: string): Promise<string | undefined> {

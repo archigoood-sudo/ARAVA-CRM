@@ -113,8 +113,9 @@ export function StudentFinance({
   const payment = useMutation({
     mutationFn: (input: PaymentInput) => getDesktopApi().payments.create(getSessionToken(), input),
   });
-  const refreshSbp = useMutation({
-    mutationFn: (id: string) => getDesktopApi().paymentOperations.refreshSbp(getSessionToken(), id),
+  const refreshAqsi = useMutation({
+    mutationFn: (id: string) =>
+      getDesktopApi().paymentOperations.refreshAqsi(getSessionToken(), id),
   });
   const refresh = async () => {
     await Promise.all([
@@ -290,14 +291,15 @@ export function StudentFinance({
                       <div className="mt-1">
                         <Badge>{t(`payment.operation.status.${operation.status}`)}</Badge>
                       </div>
-                      {operation.providerType === 'SBP' &&
+                      {(operation.providerType === 'SBP' ||
+                        operation.providerType === 'ACQUIRING') &&
                       ['WAITING_FOR_PAYMENT', 'PROCESSING'].includes(operation.status) ? (
                         <Button
                           className="mt-2"
-                          disabled={refreshSbp.isPending}
+                          disabled={refreshAqsi.isPending}
                           onClick={() =>
                             void perform(
-                              () => refreshSbp.mutateAsync(operation.id),
+                              () => refreshAqsi.mutateAsync(operation.id),
                               'Не удалось проверить оплату.',
                             )
                           }

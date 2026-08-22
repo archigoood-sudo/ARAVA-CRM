@@ -185,6 +185,20 @@ describe('Sprint 4.5A multi-device integration', () => {
         });
         return;
       }
+      if (request.method === 'POST' && request.url?.endsWith('/payments/aqsi')) {
+        const isCard = requestBody.paymentMethod === 'CARD';
+        json(response, 200, {
+          amountKopecks: requestBody.amountKopecks,
+          aravaOperationId: requestBody.aravaOperationId,
+          currency: 'RUB',
+          deviceId: 77,
+          provider: isCard ? 'AQSI_CARD' : 'AQSI_SBP',
+          providerOperationId: isCard ? 'aqsi-card-1' : 'aqsi-sbp-1',
+          status: 'WAITING',
+          updatedAt: now.toISOString(),
+        });
+        return;
+      }
       if (request.url?.endsWith('/health')) {
         json(response, 200, {
           apiVersion: healthApiVersion,
@@ -541,6 +555,56 @@ describe('Sprint 4.5A multi-device integration', () => {
       '/api/integration/v1/payments/provider-health',
       '/api/integration/v1/payments/aqsi/devices',
     ]);
+  });
+
+  it('sends card and SBP modes through the authenticated aQsi payment endpoint', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Филиал оплаты aQsi' });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Картова',
+      status: 'ACTIVE',
+    });
+    received.length = 0;
+    const baseOperation = {
+      amount: 12_345,
+      branchId: branch.id,
+      createdAt: now.toISOString(),
+      createdByName: 'Владелец',
+      currency: 'RUB' as const,
+      id: 'operation-card-http',
+      idempotencyKey: 'attempt-card-http',
+      providerType: 'ACQUIRING' as const,
+      purpose: 'Оплата картой',
+      status: 'CREATED' as const,
+      studentId: student.id,
+      studentName: 'Картова Анна',
+      updatedAt: now.toISOString(),
+    };
+    await expect(integration.startAqsiPayment(ownerToken, baseOperation)).resolves.toMatchObject({
+      provider: 'AQSI_CARD',
+      status: 'WAITING',
+    });
+    await expect(
+      integration.startAqsiPayment(ownerToken, {
+        ...baseOperation,
+        id: 'operation-sbp-http',
+        idempotencyKey: 'attempt-sbp-http',
+        providerType: 'SBP',
+      }),
+    ).resolves.toMatchObject({ provider: 'AQSI_SBP', status: 'WAITING' });
+    const paymentRequests = received.filter(({ path }) => String(path).endsWith('/payments/aqsi'));
+    expect(paymentRequests).toHaveLength(2);
+    expect(paymentRequests.map(({ paymentMethod }) => paymentMethod)).toEqual(['CARD', 'SBP']);
+    for (const request of paymentRequests) {
+      expect(request.headers).toMatchObject({
+        authorization: 'Bearer device-secret',
+        'x-arava-api-version': 'v1',
+        'x-arava-device-id': credentials.deviceId,
+      });
+      expect(JSON.stringify(request)).not.toContain('AQSI_API_KEY');
+    }
   });
 
   it('sends default display name on pair and allows renaming connected devices', async () => {

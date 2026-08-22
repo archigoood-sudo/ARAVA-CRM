@@ -239,17 +239,20 @@ const desktopApi: AravaDesktopApi = {
   },
   paymentOperations: {
     cancel: (token, id, input) => invoke(IPC_CHANNELS.paymentOperationCancel, token, id, input),
+    cancelAqsi: (token, id) => invoke(IPC_CHANNELS.paymentOperationCancelAqsi, token, id),
     cancelSbp: (token, id) => invoke(IPC_CHANNELS.paymentOperationCancelSbp, token, id),
     create: (token, input) => invoke(IPC_CHANNELS.paymentOperationCreate, token, input),
     get: (token, id) => invoke(IPC_CHANNELS.paymentOperationGet, token, id),
     listStudent: (token, studentId) =>
       invoke(IPC_CHANNELS.paymentOperationListStudent, token, studentId),
     refreshSbp: (token, id) => invoke(IPC_CHANNELS.paymentOperationRefreshSbp, token, id),
+    refreshAqsi: (token, id) => invoke(IPC_CHANNELS.paymentOperationRefreshAqsi, token, id),
     sbpDevices: (token) => invoke(IPC_CHANNELS.paymentOperationSbpDevices, token),
     sbpHealth: (token) => invoke(IPC_CHANNELS.paymentOperationSbpHealth, token),
     sbpSelectDevice: (token, deviceId) =>
       invoke(IPC_CHANNELS.paymentOperationSbpSelectDevice, token, deviceId),
     startSbp: (token, id) => invoke(IPC_CHANNELS.paymentOperationStartSbp, token, id),
+    startAqsi: (token, id) => invoke(IPC_CHANNELS.paymentOperationStartAqsi, token, id),
     testComplete: (token, id, paymentMethod) =>
       invoke(IPC_CHANNELS.paymentOperationTestComplete, token, id, paymentMethod),
   },

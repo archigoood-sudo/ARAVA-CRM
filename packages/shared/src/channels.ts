@@ -301,15 +301,18 @@ export const IPC_CHANNELS = {
   paymentGet: 'payment:get',
   paymentList: 'payment:list',
   paymentOperationCancel: 'payment-operation:cancel',
+  paymentOperationCancelAqsi: 'payment-operation:cancel-aqsi',
   paymentOperationCreate: 'payment-operation:create',
   paymentOperationGet: 'payment-operation:get',
   paymentOperationListStudent: 'payment-operation:list-student',
+  paymentOperationRefreshAqsi: 'payment-operation:refresh-aqsi',
   paymentOperationRefreshSbp: 'payment-operation:refresh-sbp',
   paymentOperationCancelSbp: 'payment-operation:cancel-sbp',
   paymentOperationSbpDevices: 'payment-operation:sbp-devices',
   paymentOperationSbpHealth: 'payment-operation:sbp-health',
   paymentOperationSbpSelectDevice: 'payment-operation:sbp-select-device',
   paymentOperationStartSbp: 'payment-operation:start-sbp',
+  paymentOperationStartAqsi: 'payment-operation:start-aqsi',
   paymentOperationTestComplete: 'payment-operation:test-complete',
   refundCreate: 'refund:create',
   financeEmployees: 'finance:employees',
@@ -877,14 +880,16 @@ export interface PaymentOperationReasonInput {
 export type SbpGatewayStatus =
   'CREATED' | 'WAITING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'EXPIRED';
 
-export interface SbpGatewayPayment {
+export type AqsiGatewayProvider = 'AQSI_CARD' | 'AQSI_SBP';
+
+export interface AqsiGatewayPayment {
   amountKopecks: number;
   aravaOperationId: string;
   currency: 'RUB';
   error?: { code?: string | null; message: string } | null;
   expiresAt?: string | null;
   deviceId?: number | null;
-  provider: 'AQSI_SBP';
+  provider: AqsiGatewayProvider;
   providerOperationId?: string | null;
   providerResultId?: string | null;
   providerStatus?: string | null;
@@ -892,6 +897,8 @@ export interface SbpGatewayPayment {
   status: SbpGatewayStatus;
   updatedAt: string;
 }
+
+export type SbpGatewayPayment = AqsiGatewayPayment;
 
 export interface SbpProviderHealth {
   apiReachable: boolean;
@@ -2453,14 +2460,17 @@ export interface AravaDesktopApi {
       input: PaymentOperationReasonInput,
     ) => Promise<PaymentOperationSummary>;
     cancelSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
+    cancelAqsi: (token: string, id: string) => Promise<AqsiGatewayPayment>;
     create: (token: string, input: PaymentOperationCreateInput) => Promise<PaymentOperationSummary>;
     get: (token: string, id: string) => Promise<PaymentOperationSummary>;
     listStudent: (token: string, studentId: string) => Promise<PaymentOperationSummary[]>;
     refreshSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
+    refreshAqsi: (token: string, id: string) => Promise<AqsiGatewayPayment>;
     sbpDevices: (token: string) => Promise<AqsiDeviceList>;
     sbpHealth: (token: string) => Promise<SbpProviderHealth>;
     sbpSelectDevice: (token: string, deviceId: number) => Promise<AqsiDeviceSummary>;
     startSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
+    startAqsi: (token: string, id: string) => Promise<AqsiGatewayPayment>;
     testComplete: (
       token: string,
       id: string,
