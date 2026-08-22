@@ -1629,12 +1629,17 @@ export class IntegrationService {
   async listAqsiDevices(token: string): Promise<AqsiDeviceList> {
     const actor = await this.assertOwner(token);
     const connection = await this.integrationConnection();
-    return this.api.listAqsiDevices(
-      connection.baseUrl,
-      connection.deviceId,
-      connection.token,
-      this.actorContext(actor),
-    );
+    const context = this.actorContext(actor);
+    const [, devices] = await Promise.all([
+      this.api.paymentProviderHealth(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        context,
+      ),
+      this.api.listAqsiDevices(connection.baseUrl, connection.deviceId, connection.token, context),
+    ]);
+    return devices;
   }
 
   async selectAqsiDevice(token: string, aqsiDeviceId: number): Promise<AqsiDeviceSummary> {

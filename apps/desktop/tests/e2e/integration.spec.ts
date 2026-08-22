@@ -63,6 +63,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
 }, testInfo) => {
   test.setTimeout(process.env.CI ? 300_000 : 150_000);
   let receivedOperations = 0;
+  const receivedPaymentPaths: string[] = [];
   let conflictOpen = true;
   const receivedChatMessages: string[] = [];
   const chat = {
@@ -142,7 +143,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       });
       return;
     }
-    if (request.url?.endsWith('/devices')) {
+    if (request.url === '/api/integration/v1/devices') {
       const deviceId = String(request.headers['x-arava-device-id'] ?? 'e2e-device');
       respond(response, {
         apiVersion: 'v1',
@@ -156,6 +157,34 @@ test('OWNER подключает сайт, выполняет initial/offline sy
             status: 'ACTIVE',
           },
         ],
+      });
+      return;
+    }
+    if (request.url?.endsWith('/payments/provider-health')) {
+      receivedPaymentPaths.push(request.url);
+      respond(response, {
+        apiReachable: true,
+        configured: true,
+        deviceConfigured: true,
+        provider: 'AQSI_SBP',
+        selectedDeviceId: 101,
+        selectedDeviceName: 'aQsi 5Ф · E2E-001',
+      });
+      return;
+    }
+    if (request.method === 'GET' && request.url?.endsWith('/payments/aqsi/devices')) {
+      receivedPaymentPaths.push(request.url);
+      respond(response, {
+        devices: [
+          {
+            deviceId: 101,
+            model: 'aQsi 5Ф',
+            name: 'aQsi 5Ф · E2E-001',
+            selected: true,
+            serialNumber: 'E2E-001',
+          },
+        ],
+        selectedDeviceId: 101,
       });
       return;
     }
@@ -289,6 +318,14 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByLabel('Код подключения').fill('123456');
     await page.getByRole('button', { name: 'Подключить' }).click();
     await expect(page.getByText('Устройство подключено к сайту.')).toBeVisible();
+    const aqsiSettings = page.getByTestId('aqsi-settings');
+    await expect(aqsiSettings.getByLabel('Касса для оплаты')).toHaveValue('101');
+    await expect
+      .poll(() => receivedPaymentPaths)
+      .toEqual([
+        '/api/integration/v1/payments/provider-health',
+        '/api/integration/v1/payments/aqsi/devices',
+      ]);
     await page.getByRole('button', { name: 'Проверить соединение' }).click();
     await expect(page.getByText('Соединение с сайтом установлено.')).toBeVisible();
     await page.getByRole('button', { name: 'Запустить диагностику' }).click();

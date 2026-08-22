@@ -170,6 +170,21 @@ describe('Sprint 4.5A multi-device integration', () => {
         });
         return;
       }
+      if (request.method === 'GET' && request.url?.endsWith('/payments/aqsi/devices')) {
+        json(response, 200, {
+          devices: [
+            {
+              deviceId: 77,
+              model: 'aQsi 5Ф',
+              name: 'aQsi 5Ф · TEST-77',
+              selected: true,
+              serialNumber: 'TEST-77',
+            },
+          ],
+          selectedDeviceId: 77,
+        });
+        return;
+      }
       if (request.url?.endsWith('/health')) {
         json(response, 200, {
           apiVersion: healthApiVersion,
@@ -213,7 +228,7 @@ describe('Sprint 4.5A multi-device integration', () => {
         });
         return;
       }
-      if (request.url?.endsWith('/devices')) {
+      if (request.url === '/api/integration/v1/devices') {
         json(response, 200, { apiVersion: 'v1', devices: deviceList });
         return;
       }
@@ -445,6 +460,87 @@ describe('Sprint 4.5A multi-device integration', () => {
       'x-arava-api-version': 'v1',
       'x-arava-device-id': credentials.deviceId,
     });
+  });
+
+  it('sends authenticated aQsi health and device discovery requests through the integration transport', async () => {
+    await pair();
+    received.length = 0;
+
+    const devices = await integration.listAqsiDevices(ownerToken);
+
+    expect(received.map(({ path }) => path)).toEqual([
+      '/api/integration/v1/payments/provider-health',
+      '/api/integration/v1/payments/aqsi/devices',
+    ]);
+    for (const request of received) {
+      expect(request.headers).toMatchObject({
+        authorization: 'Bearer device-secret',
+        'x-arava-api-version': 'v1',
+        'x-arava-device-id': credentials.deviceId,
+      });
+      expect(request.headers).toHaveProperty('x-arava-crm-context');
+    }
+    expect(devices).toEqual({
+      devices: [
+        {
+          deviceId: 77,
+          model: 'aQsi 5Ф',
+          name: 'aQsi 5Ф · TEST-77',
+          selected: true,
+          serialNumber: 'TEST-77',
+        },
+      ],
+      selectedDeviceId: 77,
+    });
+    expect(JSON.stringify(devices)).not.toContain('device-secret');
+
+    received.length = 0;
+    await expect(integration.sbpProviderHealth(ownerToken)).resolves.toMatchObject({
+      apiReachable: true,
+      configured: true,
+      deviceConfigured: true,
+      provider: 'AQSI_SBP',
+    });
+    expect(received.map(({ path }) => path)).toEqual([
+      '/api/integration/v1/payments/provider-health',
+    ]);
+  });
+
+  it('starts both aQsi HTTP requests and reports timeout only when the transport actually stalls', async () => {
+    await pair();
+    const requestedUrls: string[] = [];
+    const stalledClient = new IntegrationApiClient((url, init) => {
+      requestedUrls.push(url);
+      if (url.endsWith('/payments/aqsi/devices')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({ devices: [], selectedDeviceId: null }),
+          ok: true,
+          status: 200,
+        });
+      }
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          const error = new Error('mock transport aborted');
+          error.name = 'AbortError';
+          reject(error);
+        });
+      });
+    }, 10);
+    const stalledService = new IntegrationService(
+      database,
+      application,
+      credentials,
+      stalledClient,
+      () => now,
+    );
+
+    await expect(stalledService.listAqsiDevices(ownerToken)).rejects.toThrow(
+      'Сервер не ответил вовремя.',
+    );
+    expect(requestedUrls.map((url) => new URL(url).pathname)).toEqual([
+      '/api/integration/v1/payments/provider-health',
+      '/api/integration/v1/payments/aqsi/devices',
+    ]);
   });
 
   it('sends default display name on pair and allows renaming connected devices', async () => {
