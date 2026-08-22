@@ -76,6 +76,7 @@ describe('Sprint 4.5A multi-device integration', () => {
   let healthApiVersion: string;
   let healthDeviceStatus: string;
   let mode: ServerMode;
+  let managedConflicts: Record<string, unknown>[];
   let now: Date;
   let ownerToken: string;
   let received: Record<string, unknown>[];
@@ -104,6 +105,7 @@ describe('Sprint 4.5A multi-device integration', () => {
     healthApiVersion = 'v1';
     healthDeviceStatus = 'ACTIVE';
     mode = 'SUCCESS';
+    managedConflicts = [];
     now = new Date('2030-08-18T10:00:00.000Z');
     received = [];
     server = createServer(async (request, response) => {
@@ -202,6 +204,53 @@ describe('Sprint 4.5A multi-device integration', () => {
       }
       if (request.url?.endsWith('/devices')) {
         json(response, 200, { apiVersion: 'v1', devices: deviceList });
+        return;
+      }
+      if (request.method === 'DELETE' && request.url?.startsWith('/api/integration/v1/devices/')) {
+        const target = decodeURIComponent(request.url.split('/').at(-1) ?? '');
+        const device = deviceList.find((item) => item.deviceId === target);
+        if (device) device.status = 'REVOKED';
+        json(response, 200, { apiVersion: 'v1', deviceId: target });
+        return;
+      }
+      if (request.method === 'GET' && request.url?.endsWith('/conflicts')) {
+        json(response, 200, { apiVersion: 'v1', conflicts: managedConflicts });
+        return;
+      }
+      if (
+        request.method === 'POST' &&
+        request.url?.includes('/conflicts/') &&
+        request.url.endsWith('/resolve')
+      ) {
+        const conflict = managedConflicts[0];
+        json(response, 200, { apiVersion: 'v1', conflict: { ...conflict, status: 'RESOLVED' } });
+        return;
+      }
+      if (request.method === 'POST' && request.url?.endsWith('/reconciliation/preview')) {
+        const entities = Array.isArray(requestBody.entities) ? requestBody.entities : [];
+        json(response, 200, {
+          ambiguous: [],
+          apiVersion: 'v1',
+          divergent: [],
+          identical: [],
+          localOnly: entities.map((entity) => ({
+            ...(entity as Record<string, unknown>),
+            reason: 'Есть только на этом устройстве',
+          })),
+          serverOnly: [],
+          serverCursor: changes.length,
+        });
+        return;
+      }
+      if (request.method === 'POST' && request.url?.endsWith('/maintenance/journal')) {
+        json(response, 200, {
+          activeDeviceCount: 1,
+          apiVersion: 'v1',
+          deleted: 0,
+          maximumCursor: changes.length,
+          minimumAcknowledgedCursor: changes.length,
+          safeThrough: 0,
+        });
         return;
       }
       if (request.method === 'PATCH' && request.url?.startsWith('/api/integration/v1/devices/')) {
@@ -446,6 +495,76 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(device?.name).toBe('Старый сервер');
   });
 
+  it('revokes only another device and keeps OWNER context outside renderer', async () => {
+    await pair();
+    deviceList = [
+      {
+        conflictCount: 0,
+        deviceId: credentials.deviceId,
+        lastInboundCursor: 0,
+        pendingCount: 0,
+        status: 'ACTIVE',
+      },
+      {
+        conflictCount: 0,
+        deviceId: 'device-b',
+        lastInboundCursor: 0,
+        pendingCount: 2,
+        status: 'ACTIVE',
+      },
+    ];
+    await expect(integration.revokeDevice(ownerToken, credentials.deviceId)).rejects.toThrow(
+      'Текущее устройство нельзя отозвать',
+    );
+    await integration.revokeDevice(ownerToken, 'device-b');
+    const request = received.find((entry) => entry.method === 'DELETE');
+    expect(request).toMatchObject({ path: '/api/integration/v1/devices/device-b' });
+    const context = JSON.parse(
+      Buffer.from(
+        String(
+          request?.headers && (request.headers as Record<string, unknown>)['x-arava-crm-context'],
+        ),
+        'base64url',
+      ).toString('utf8'),
+    ) as Record<string, unknown>;
+    expect(context).toMatchObject({ role: 'OWNER' });
+  });
+
+  it('previews reconciliation without changing local data and exposes explicit conflicts', async () => {
+    await pair();
+    await application.createBranch(ownerToken, { name: 'Локальный филиал' });
+    const beforeOutbox = await database.syncOutbox.count();
+    const preview = await integration.reconciliationPreview(ownerToken);
+    expect(preview.localOnly.some(({ entityType }) => entityType === 'BRANCH')).toBe(true);
+    expect(await database.syncOutbox.count()).toBe(beforeOutbox);
+
+    managedConflicts = [
+      {
+        baseRevision: 1,
+        candidate: { name: 'Устройство' },
+        candidateOperation: 'UPSERT',
+        canonical: { name: 'Сервер' },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 2,
+        createdAt: now.toISOString(),
+        differences: [{ candidate: 'Устройство', canonical: 'Сервер', field: 'name' }],
+        entityId: 'branch-1',
+        entityType: 'BRANCH',
+        id: 'conflict-1',
+        sourceDeviceId: 'device-b',
+        status: 'OPEN',
+      },
+    ];
+    const conflicts = await integration.listConflicts(ownerToken);
+    expect(conflicts[0]?.differences[0]).toMatchObject({ field: 'name' });
+    const resolved = await integration.resolveConflict(ownerToken, 'conflict-1', {
+      expectedCanonicalRevision: 2,
+      idempotencyKey: 'resolve:conflict-1:once',
+      resolution: 'KEEP_CANONICAL',
+    });
+    expect(resolved.status).toBe('RESOLVED');
+  });
+
   it('returns a fully healthy read-only diagnostic without exposing credentials', async () => {
     await pair();
     deviceList.push({
@@ -613,6 +732,10 @@ describe('Sprint 4.5A multi-device integration', () => {
         newPassword: `${role}!DiagnosticChanged2026`,
       });
       await expect(integration.diagnose(session.token)).rejects.toThrow('только владелец');
+      await expect(integration.listConflicts(session.token)).rejects.toThrow('только владелец');
+      await expect(integration.revokeDevice(session.token, 'device-b')).rejects.toThrow(
+        'только владелец',
+      );
     }
   });
 

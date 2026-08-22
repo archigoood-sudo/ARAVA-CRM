@@ -219,6 +219,12 @@ export const IPC_CHANNELS = {
   globalSearch: 'global-search:query',
   integrationConfirmInitialSync: 'integration:confirm-initial-sync',
   integrationDiagnose: 'integration:diagnose',
+  integrationListConflicts: 'integration:list-conflicts',
+  integrationResolveConflict: 'integration:resolve-conflict',
+  integrationReconciliationPreview: 'integration:reconciliation-preview',
+  integrationConfirmReconciliation: 'integration:confirm-reconciliation',
+  integrationRevokeDevice: 'integration:revoke-device',
+  integrationPruneJournal: 'integration:prune-journal',
   integrationGetStatus: 'integration:get-status',
   integrationListLog: 'integration:list-log',
   integrationPair: 'integration:pair',
@@ -1867,6 +1873,7 @@ export interface IntegrationDiagnostics {
 export interface IntegrationDeviceSummary {
   conflictCount: number;
   deviceId: string;
+  errorCount: number;
   lastInboundCursor: number;
   lastInboundSyncAt?: string;
   lastOutboundSyncAt?: string;
@@ -1875,6 +1882,58 @@ export interface IntegrationDeviceSummary {
   pendingCount: number;
   displayName?: string;
   status: 'ACTIVE' | 'REVOKED';
+}
+
+export interface IntegrationConflictDifference {
+  candidate: unknown;
+  canonical: unknown;
+  field: string;
+}
+
+export interface IntegrationConflictSummary {
+  baseRevision: number;
+  candidate: Record<string, unknown>;
+  candidateOperation: 'UPSERT' | 'ARCHIVE';
+  canonical: Record<string, unknown>;
+  canonicalOperation: 'UPSERT' | 'ARCHIVE';
+  canonicalRevision: number;
+  createdAt: string;
+  differences: IntegrationConflictDifference[];
+  entityId: string;
+  entityType: string;
+  id: string;
+  sourceDeviceId: string;
+  sourceDeviceName?: string;
+  status: 'OPEN' | 'RESOLVED';
+}
+
+export interface IntegrationConflictResolutionInput {
+  expectedCanonicalRevision: number;
+  idempotencyKey: string;
+  resolution: 'KEEP_CANONICAL' | 'ACCEPT_CANDIDATE';
+}
+
+export interface IntegrationReconciliationItem {
+  entityId: string;
+  entityType: string;
+  reason: string;
+}
+
+export interface IntegrationReconciliationPreview {
+  ambiguous: IntegrationReconciliationItem[];
+  divergent: IntegrationReconciliationItem[];
+  identical: IntegrationReconciliationItem[];
+  localOnly: IntegrationReconciliationItem[];
+  serverOnly: IntegrationReconciliationItem[];
+  serverCursor: number;
+}
+
+export interface IntegrationJournalMaintenanceResult {
+  activeDeviceCount: number;
+  deleted: number;
+  maximumCursor: number;
+  minimumAcknowledgedCursor: number;
+  safeThrough: number;
 }
 
 export interface IntegrationInitialSyncPreview {
@@ -2028,6 +2087,16 @@ export interface AravaDesktopApi {
   integration: {
     confirmInitialSync: (token: string) => Promise<IntegrationStatus>;
     diagnose: (token: string) => Promise<IntegrationDiagnostics>;
+    listConflicts: (token: string) => Promise<IntegrationConflictSummary[]>;
+    resolveConflict: (
+      token: string,
+      conflictId: string,
+      input: IntegrationConflictResolutionInput,
+    ) => Promise<IntegrationConflictSummary>;
+    reconciliationPreview: (token: string) => Promise<IntegrationReconciliationPreview>;
+    confirmReconciliation: (token: string) => Promise<IntegrationStatus>;
+    revokeDevice: (token: string, deviceId: string) => Promise<IntegrationStatus>;
+    pruneJournal: (token: string) => Promise<IntegrationJournalMaintenanceResult>;
     getStatus: (token: string) => Promise<IntegrationStatus>;
     listLog: (token: string) => Promise<IntegrationLogEntry[]>;
     pair: (token: string, input: IntegrationPairInput) => Promise<IntegrationStatus>;

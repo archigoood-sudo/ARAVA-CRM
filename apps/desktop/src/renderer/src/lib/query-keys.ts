@@ -22,6 +22,8 @@ export const queryKeys = {
   group: (id: string) => ['groups', 'detail', id] as const,
   groups: (query: GroupListQuery) => ['groups', 'list', query] as const,
   integrationLog: ['integration', 'log'] as const,
+  integrationConflicts: ['integration', 'conflicts'] as const,
+  integrationReconciliation: ['integration', 'reconciliation'] as const,
   integrationPreview: ['integration', 'initial-preview'] as const,
   integrationStatus: ['integration', 'status'] as const,
   webActions: (userId?: string) => ['web-actions', userId] as const,

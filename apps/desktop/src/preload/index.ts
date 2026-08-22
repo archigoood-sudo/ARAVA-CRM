@@ -62,13 +62,21 @@ const desktopApi: AravaDesktopApi = {
   },
   integration: {
     confirmInitialSync: (token) => invoke(IPC_CHANNELS.integrationConfirmInitialSync, token),
+    confirmReconciliation: (token) => invoke(IPC_CHANNELS.integrationConfirmReconciliation, token),
     diagnose: (token) => invoke(IPC_CHANNELS.integrationDiagnose, token),
     getStatus: (token) => invoke(IPC_CHANNELS.integrationGetStatus, token),
+    listConflicts: (token) => invoke(IPC_CHANNELS.integrationListConflicts, token),
     listLog: (token) => invoke(IPC_CHANNELS.integrationListLog, token),
     pair: (token, input) => invoke(IPC_CHANNELS.integrationPair, token, input),
     renameDevice: (token, deviceId, input) =>
       invoke(IPC_CHANNELS.integrationRenameDevice, token, deviceId, input),
     prepareInitialSync: (token) => invoke(IPC_CHANNELS.integrationPrepareInitialSync, token),
+    reconciliationPreview: (token) => invoke(IPC_CHANNELS.integrationReconciliationPreview, token),
+    resolveConflict: (token, conflictId, input) =>
+      invoke(IPC_CHANNELS.integrationResolveConflict, token, conflictId, input),
+    revokeDevice: (token, deviceId) =>
+      invoke(IPC_CHANNELS.integrationRevokeDevice, token, deviceId),
+    pruneJournal: (token) => invoke(IPC_CHANNELS.integrationPruneJournal, token),
     syncNow: (token) => invoke(IPC_CHANNELS.integrationSyncNow, token),
     testConnection: (token) => invoke(IPC_CHANNELS.integrationTestConnection, token),
     updateSettings: (token, input) => invoke(IPC_CHANNELS.integrationUpdateSettings, token, input),

@@ -63,6 +63,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
 }, testInfo) => {
   test.setTimeout(process.env.CI ? 300_000 : 150_000);
   let receivedOperations = 0;
+  let conflictOpen = true;
   const receivedChatMessages: string[] = [];
   const chat = {
     branchId: null,
@@ -158,6 +159,81 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       });
       return;
     }
+    if (request.method === 'GET' && request.url?.endsWith('/conflicts')) {
+      respond(response, {
+        apiVersion: 'v1',
+        conflicts: conflictOpen
+          ? [
+              {
+                baseRevision: 0,
+                candidate: { name: 'Филиал устройства' },
+                candidateOperation: 'UPSERT',
+                canonical: { name: 'Филиал сервера' },
+                canonicalOperation: 'UPSERT',
+                canonicalRevision: 1,
+                createdAt: new Date().toISOString(),
+                differences: [
+                  { candidate: 'Филиал устройства', canonical: 'Филиал сервера', field: 'name' },
+                ],
+                entityId: 'branch-conflict',
+                entityType: 'BRANCH',
+                id: 'conflict-e2e',
+                sourceDeviceId: 'other-device',
+                sourceDeviceName: 'Второй компьютер',
+                status: 'OPEN',
+              },
+            ]
+          : [],
+      });
+      return;
+    }
+    if (request.method === 'POST' && request.url?.endsWith('/conflicts/conflict-e2e/resolve')) {
+      conflictOpen = false;
+      respond(response, {
+        apiVersion: 'v1',
+        conflict: {
+          baseRevision: 0,
+          candidate: { name: 'Филиал устройства' },
+          candidateOperation: 'UPSERT',
+          canonical: { name: 'Филиал сервера' },
+          canonicalOperation: 'UPSERT',
+          canonicalRevision: 1,
+          createdAt: new Date().toISOString(),
+          differences: [
+            { candidate: 'Филиал устройства', canonical: 'Филиал сервера', field: 'name' },
+          ],
+          entityId: 'branch-conflict',
+          entityType: 'BRANCH',
+          id: 'conflict-e2e',
+          sourceDeviceId: 'other-device',
+          status: 'RESOLVED',
+        },
+      });
+      return;
+    }
+    if (request.method === 'POST' && request.url?.endsWith('/reconciliation/preview')) {
+      respond(response, {
+        ambiguous: [],
+        apiVersion: 'v1',
+        divergent: [],
+        identical: [],
+        localOnly: [],
+        serverOnly: [],
+        serverCursor: 0,
+      });
+      return;
+    }
+    if (request.method === 'POST' && request.url?.endsWith('/maintenance/journal')) {
+      respond(response, {
+        activeDeviceCount: 1,
+        apiVersion: 'v1',
+        deleted: 0,
+        maximumCursor: 0,
+        minimumAcknowledgedCursor: 0,
+        safeThrough: 0,
+      });
+      return;
+    }
     const operations = Array.isArray(body.operations) ? body.operations : [];
     receivedOperations += operations.length;
     respond(response, {
@@ -223,6 +299,15 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await expect(diagnostics.getByText('Сервер доступен', { exact: true })).toBeVisible();
     await expect(diagnostics.getByText('Устройство авторизовано', { exact: true })).toBeVisible();
     await expect(diagnostics).not.toContainText('e2e-token');
+    const conflictCenter = page.getByTestId('integration-conflicts');
+    await expect(conflictCenter.getByRole('cell', { name: 'Филиал сервера' })).toBeVisible();
+    await conflictCenter.getByRole('button', { name: 'Оставить текущую версию' }).click();
+    await page.getByRole('button', { name: 'Подтвердить решение' }).click();
+    await expect(
+      page.getByText('Конфликт разрешён. Новая версия будет получена активными устройствами.'),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Сверить данные' }).click();
+    await expect(page.getByTestId('integration-reconciliation')).toContainText('Совпадает: 0');
     await page.getByRole('link', { name: 'Чаты' }).click();
     await expect(page.getByRole('heading', { level: 2, name: 'Чаты' })).toBeVisible();
     await expect(page.getByText('Анна Клиент', { exact: true }).first()).toBeVisible();

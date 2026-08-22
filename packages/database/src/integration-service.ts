@@ -6,19 +6,24 @@ import type {
   ChatSendInput,
   ChatSummary,
   IntegrationInitialSyncPreview,
+  IntegrationConflictResolutionInput,
+  IntegrationConflictSummary,
   IntegrationDiagnosticCheck,
   IntegrationDiagnostics,
   IntegrationDeviceSummary,
   IntegrationLogEntry,
+  IntegrationJournalMaintenanceResult,
   IntegrationPairInput,
   IntegrationDeviceRenameInput,
   IntegrationSettingsInput,
   IntegrationStatus,
+  IntegrationReconciliationPreview,
   SubscriptionFreezeInput,
   WebActionSummary,
 } from '@arava/shared';
 import type { Gender, SyncOperation } from '@prisma/client';
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 
@@ -45,6 +50,7 @@ const SETTINGS = {
   lastInboundSync: 'integration.lastInboundSync',
   lastOutboundSync: 'integration.lastOutboundSync',
   inboundCursor: 'integration.inboundCursor',
+  reconciliationApproved: 'integration.reconciliationApproved',
 } as const;
 
 export type SyncEntityType =
@@ -339,6 +345,87 @@ function parseInboundChange(value: unknown): InboundChange {
   };
 }
 
+function parseManagedConflict(value: unknown): IntegrationConflictSummary {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    typeof value.entityType !== 'string' ||
+    typeof value.entityId !== 'string' ||
+    typeof value.baseRevision !== 'number' ||
+    typeof value.canonicalRevision !== 'number' ||
+    !isRecord(value.canonical) ||
+    !isRecord(value.candidate) ||
+    !Array.isArray(value.differences) ||
+    typeof value.sourceDeviceId !== 'string' ||
+    typeof value.createdAt !== 'string' ||
+    (value.canonicalOperation !== 'UPSERT' && value.canonicalOperation !== 'ARCHIVE') ||
+    (value.candidateOperation !== 'UPSERT' && value.candidateOperation !== 'ARCHIVE') ||
+    (value.status !== 'OPEN' && value.status !== 'RESOLVED')
+  )
+    throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверный конфликт.');
+  const differences = value.differences.map((item) => {
+    if (!isRecord(item) || typeof item.field !== 'string')
+      throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверные различия.');
+    return { candidate: item.candidate, canonical: item.canonical, field: item.field };
+  });
+  return {
+    baseRevision: value.baseRevision,
+    candidate: value.candidate,
+    candidateOperation: value.candidateOperation,
+    canonical: value.canonical,
+    canonicalOperation: value.canonicalOperation,
+    canonicalRevision: value.canonicalRevision,
+    createdAt: value.createdAt,
+    differences,
+    entityId: value.entityId,
+    entityType: value.entityType,
+    id: value.id,
+    sourceDeviceId: value.sourceDeviceId,
+    ...(typeof value.sourceDeviceName === 'string'
+      ? { sourceDeviceName: value.sourceDeviceName }
+      : {}),
+    status: value.status,
+  };
+}
+
+function parseReconciliationPreview(value: unknown): IntegrationReconciliationPreview {
+  if (!isRecord(value) || typeof value.serverCursor !== 'number')
+    throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверную сверку.');
+  const parseItems = (items: unknown) => {
+    if (!Array.isArray(items))
+      throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверную сверку.');
+    return items.map((item) => {
+      if (
+        !isRecord(item) ||
+        typeof item.entityId !== 'string' ||
+        typeof item.entityType !== 'string' ||
+        typeof item.reason !== 'string'
+      )
+        throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверную сверку.');
+      return { entityId: item.entityId, entityType: item.entityType, reason: item.reason };
+    });
+  };
+  return {
+    ambiguous: parseItems(value.ambiguous),
+    divergent: parseItems(value.divergent),
+    identical: parseItems(value.identical),
+    localOnly: parseItems(value.localOnly),
+    serverOnly: parseItems(value.serverOnly),
+    serverCursor: value.serverCursor,
+  };
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (isRecord(value))
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(',')}}`;
+  if (value === undefined) return 'null';
+  return JSON.stringify(value);
+}
+
 function invalidChatResponse(): never {
   throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверные данные чата.');
 }
@@ -460,7 +547,7 @@ export class IntegrationApiClient {
     path: string,
     deviceId: string,
     token: string | undefined,
-    method: 'GET' | 'PATCH' | 'POST',
+    method: 'DELETE' | 'GET' | 'PATCH' | 'POST',
     body?: unknown,
     context?: CrmChatRequestContext,
   ): Promise<unknown> {
@@ -758,6 +845,7 @@ export class IntegrationApiClient {
         {
           conflictCount: entry.conflictCount,
           deviceId: entry.deviceId,
+          errorCount: typeof entry.errorCount === 'number' ? entry.errorCount : 0,
           lastInboundCursor: entry.lastInboundCursor,
           ...(typeof entry.lastInboundSyncAt === 'string'
             ? { lastInboundSyncAt: entry.lastInboundSyncAt }
@@ -777,18 +865,147 @@ export class IntegrationApiClient {
 
   async renameDevice(
     baseUrl: string,
-    deviceId: string,
+    currentDeviceId: string,
     token: string,
+    targetDeviceId: string,
     input: Pick<IntegrationDeviceRenameInput, 'displayName'>,
+    context: CrmChatRequestContext,
   ): Promise<void> {
     await this.request(
       baseUrl,
-      `devices/${encodeURIComponent(deviceId)}`,
-      deviceId,
+      `devices/${encodeURIComponent(targetDeviceId)}`,
+      currentDeviceId,
       token,
       'PATCH',
       input,
+      context,
     );
+  }
+
+  async revokeDevice(
+    baseUrl: string,
+    currentDeviceId: string,
+    token: string,
+    targetDeviceId: string,
+    context: CrmChatRequestContext,
+  ): Promise<void> {
+    await this.request(
+      baseUrl,
+      `devices/${encodeURIComponent(targetDeviceId)}`,
+      currentDeviceId,
+      token,
+      'DELETE',
+      undefined,
+      context,
+    );
+  }
+
+  async listConflicts(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+  ): Promise<IntegrationConflictSummary[]> {
+    const payload = await this.request(
+      baseUrl,
+      'conflicts',
+      deviceId,
+      token,
+      'GET',
+      undefined,
+      context,
+    );
+    if (!isRecord(payload) || !Array.isArray(payload.conflicts))
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер вернул неверный список конфликтов.',
+      );
+    return payload.conflicts.map(parseManagedConflict);
+  }
+
+  async resolveConflict(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    conflictId: string,
+    input: IntegrationConflictResolutionInput,
+    context: CrmChatRequestContext,
+  ): Promise<IntegrationConflictSummary> {
+    const payload = await this.request(
+      baseUrl,
+      `conflicts/${encodeURIComponent(conflictId)}/resolve`,
+      deviceId,
+      token,
+      'POST',
+      input,
+      context,
+    );
+    if (!isRecord(payload))
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер не подтвердил решение конфликта.',
+      );
+    return parseManagedConflict(payload.conflict);
+  }
+
+  async reconciliationPreview(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    entities: { entityId: string; entityType: string; payloadHash: string }[],
+    context: CrmChatRequestContext,
+  ): Promise<IntegrationReconciliationPreview> {
+    const payload = await this.request(
+      baseUrl,
+      'reconciliation/preview',
+      deviceId,
+      token,
+      'POST',
+      { entities },
+      context,
+    );
+    return parseReconciliationPreview(payload);
+  }
+
+  async pruneJournal(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+  ): Promise<IntegrationJournalMaintenanceResult> {
+    const payload = await this.request(
+      baseUrl,
+      'maintenance/journal',
+      deviceId,
+      token,
+      'POST',
+      {},
+      context,
+    );
+    if (
+      !isRecord(payload) ||
+      ![
+        'activeDeviceCount',
+        'deleted',
+        'maximumCursor',
+        'minimumAcknowledgedCursor',
+        'safeThrough',
+      ].every((key) => typeof payload[key] === 'number')
+    )
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер вернул неверный результат обслуживания журнала.',
+      );
+    return {
+      activeDeviceCount: Number(payload.activeDeviceCount),
+      deleted: Number(payload.deleted),
+      maximumCursor: Number(payload.maximumCursor),
+      minimumAcknowledgedCursor: Number(payload.minimumAcknowledgedCursor),
+      safeThrough: Number(payload.safeThrough),
+    };
   }
 
   async uploadPublicationMedia(
@@ -1080,6 +1297,15 @@ export class IntegrationService {
       throw new DomainError('AUTHORIZATION', 'Настраивать интеграцию может только владелец.');
     }
     return actor;
+  }
+
+  private ownerContext(actor: AuthenticatedUser): CrmChatRequestContext {
+    return {
+      branchIds: actor.branchIds,
+      name: actor.fullName,
+      role: 'OWNER',
+      userId: actor.id,
+    };
   }
 
   private async setting(key: string): Promise<string | undefined> {
@@ -1552,6 +1778,20 @@ export class IntegrationService {
             'WORKING',
             'Открытые конфликты не обнаружены.',
           ),
+      values.get(SETTINGS.lastState) === 'RECONCILIATION_REQUIRED'
+        ? diagnosticCheck(
+            'reconciliation',
+            'Требуется безопасная сверка данных',
+            'WARNING',
+            'На устройстве и сервере есть независимо заполненные данные.',
+            'Откройте сверку данных и подтвердите безопасное согласование.',
+          )
+        : diagnosticCheck(
+            'reconciliation',
+            'Первичное состояние согласовано',
+            'WORKING',
+            'Опасная несогласованная инициализация не обнаружена.',
+          ),
     ];
     let displayName: string | undefined;
     const unavailableRemoteChecks = (detail: string, action: string) => {
@@ -1864,7 +2104,7 @@ export class IntegrationService {
     token: string,
     input: IntegrationDeviceRenameInput,
   ): Promise<IntegrationStatus> {
-    await this.assertOwner(token);
+    const actor = await this.assertOwner(token);
     const displayName = sanitizeDisplayName(input.displayName);
     const [baseUrl, tokenValue, enabledValue] = await Promise.all([
       this.setting(SETTINGS.baseUrl),
@@ -1877,8 +2117,76 @@ export class IntegrationService {
         'Сначала подключите CRM к сайту в настройках интеграции.',
       );
     }
-    await this.api.renameDevice(baseUrl, input.deviceId, tokenValue, { displayName });
+    const currentDeviceId = await this.credentials.getDeviceId();
+    await this.api.renameDevice(
+      baseUrl,
+      currentDeviceId,
+      tokenValue,
+      input.deviceId,
+      { displayName },
+      this.ownerContext(actor),
+    );
     return this.systemStatus();
+  }
+
+  async revokeDevice(token: string, targetDeviceId: string): Promise<IntegrationStatus> {
+    const actor = await this.assertOwner(token);
+    const connection = await this.integrationConnection();
+    if (connection.deviceId === targetDeviceId)
+      throw new DomainError('CONFLICT', 'Текущее устройство нельзя отозвать из этого окна.');
+    await this.api.revokeDevice(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      targetDeviceId,
+      this.ownerContext(actor),
+    );
+    return this.systemStatus();
+  }
+
+  async listConflicts(token: string): Promise<IntegrationConflictSummary[]> {
+    const actor = await this.assertOwner(token);
+    const connection = await this.integrationConnection();
+    return this.api.listConflicts(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      this.ownerContext(actor),
+    );
+  }
+
+  async resolveConflict(
+    token: string,
+    conflictId: string,
+    input: IntegrationConflictResolutionInput,
+  ): Promise<IntegrationConflictSummary> {
+    const actor = await this.assertOwner(token);
+    const connection = await this.integrationConnection();
+    const resolved = await this.api.resolveConflict(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      conflictId,
+      input,
+      this.ownerContext(actor),
+    );
+    await this.database.syncConflict.updateMany({
+      data: { resolvedAt: this.now(), status: 'RESOLVED' },
+      where: { serverConflictId: conflictId },
+    });
+    await this.processPending();
+    return resolved;
+  }
+
+  async pruneJournal(token: string): Promise<IntegrationJournalMaintenanceResult> {
+    const actor = await this.assertOwner(token);
+    const connection = await this.integrationConnection();
+    return this.api.pruneJournal(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      this.ownerContext(actor),
+    );
   }
 
   async testConnection(token: string): Promise<IntegrationStatus> {
@@ -1977,6 +2285,118 @@ export class IntegrationService {
     await this.queueInitialSync();
     await this.processPending();
     return this.systemStatus();
+  }
+
+  async reconciliationPreview(token: string): Promise<IntegrationReconciliationPreview> {
+    const actor = await this.assertOwner(token);
+    const connection = await this.integrationConnection();
+    const rows = await this.reconciliationRows();
+    const entities = [] as { entityId: string; entityType: string; payloadHash: string }[];
+    for (const row of rows) {
+      const envelope = await this.buildEnvelope(
+        row.entityType,
+        row.entityId,
+        'UPSERT',
+        `reconciliation-preview:${row.entityType}:${row.entityId}`,
+        0,
+      );
+      entities.push({
+        entityId: row.entityId,
+        entityType: row.entityType,
+        payloadHash: createHash('sha256')
+          .update(stableJson({ operation: envelope.operation, payload: envelope.payload }))
+          .digest('hex'),
+      });
+    }
+    return this.api.reconciliationPreview(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      entities,
+      this.ownerContext(actor),
+    );
+  }
+
+  async confirmReconciliation(token: string): Promise<IntegrationStatus> {
+    await this.assertOwner(token);
+    const preview = await this.reconciliationPreview(token);
+    if (preview.ambiguous.length > 0)
+      throw new DomainError(
+        'CONFLICT',
+        'Сверка содержит неоднозначные записи. Автоматическое объединение запрещено.',
+      );
+    await this.setSetting(SETTINGS.reconciliationApproved, 'true');
+    await this.queueInitialSync();
+    await this.processPending();
+    return this.systemStatus();
+  }
+
+  private async reconciliationRows(): Promise<{ entityId: string; entityType: SyncEntityType }[]> {
+    const { end, start } = this.initialWindow();
+    const [
+      branches,
+      rooms,
+      trainers,
+      groups,
+      students,
+      contacts,
+      memberships,
+      schedules,
+      lessons,
+      substitutions,
+      cards,
+      tariffs,
+      subscriptions,
+      ledgers,
+      attendance,
+      notes,
+      publications,
+    ] = await Promise.all([
+      this.database.branch.findMany({ select: { id: true } }),
+      this.database.room.findMany({ select: { id: true } }),
+      this.database.user.findMany({ select: { id: true }, where: { role: 'COACH' } }),
+      this.database.danceGroup.findMany({ select: { id: true } }),
+      this.database.student.findMany({ select: { id: true } }),
+      this.database.studentContact.findMany({ select: { id: true } }),
+      this.database.enrollment.findMany({ select: { id: true } }),
+      this.database.weeklySchedule.findMany({ select: { id: true } }),
+      this.database.lesson.findMany({
+        select: { id: true },
+        where: { startsAt: { gte: start, lte: end } },
+      }),
+      this.database.trainerSubstitution.findMany({ select: { id: true } }),
+      this.database.membershipCard.findMany({ select: { id: true } }),
+      this.database.tariff.findMany({ select: { id: true } }),
+      this.database.subscription.findMany({ select: { id: true } }),
+      this.database.subscriptionLedger.findMany({ select: { id: true } }),
+      this.database.attendance.findMany({ select: { lessonId: true, studentId: true } }),
+      this.database.studentNote.findMany({ select: { id: true } }),
+      this.database.publication.findMany({ select: { id: true } }),
+    ]);
+    const map = (rows: { id: string }[], entityType: SyncEntityType) =>
+      rows.map(({ id }) => ({ entityId: id, entityType }));
+    return [
+      ...map(branches, 'BRANCH'),
+      ...map(rooms, 'ROOM'),
+      ...map(trainers, 'TRAINER'),
+      ...map(groups, 'GROUP'),
+      ...map(students, 'STUDENT_IDENTITY'),
+      ...map(contacts, 'STUDENT_CONTACT'),
+      ...map(memberships, 'GROUP_MEMBERSHIP'),
+      ...map(schedules, 'SCHEDULE'),
+      ...map(lessons, 'LESSON'),
+      ...map(substitutions, 'SUBSTITUTION'),
+      ...map(cards, 'CARD'),
+      ...map(tariffs, 'TARIFF'),
+      ...map(subscriptions, 'SUBSCRIPTION'),
+      ...map(ledgers, 'SUBSCRIPTION_LEDGER'),
+      ...attendance.map(({ lessonId, studentId }) => ({
+        entityId: `${lessonId}:${studentId}`,
+        entityType: 'ATTENDANCE' as const,
+      })),
+      ...map(notes, 'STUDENT_NOTE'),
+      ...map(publications, 'PUBLICATION'),
+    ];
   }
 
   async queueInitialSync(): Promise<void> {
@@ -2360,11 +2780,12 @@ export class IntegrationService {
         pendingCount,
       });
       if (cursor === 0 && page.canonicalCount > 0) {
-        const [knownEntities, localEntities] = await Promise.all([
+        const [knownEntities, localEntities, reconciliationApproved] = await Promise.all([
           this.database.syncEntityState.count(),
           this.countLocalOperationalEntities(),
+          this.setting(SETTINGS.reconciliationApproved),
         ]);
-        if (knownEntities === 0 && localEntities > 0) {
+        if (knownEntities === 0 && localEntities > 0 && reconciliationApproved !== 'true') {
           throw new IntegrationApiError(
             'RECONCILIATION_REQUIRED',
             false,
@@ -2397,6 +2818,13 @@ export class IntegrationService {
           where: { key: SETTINGS.lastState },
         }),
         this.database.appSetting.deleteMany({ where: { key: SETTINGS.lastError } }),
+        ...(cursor > 0
+          ? [
+              this.database.appSetting.deleteMany({
+                where: { key: SETTINGS.reconciliationApproved },
+              }),
+            ]
+          : []),
       ]);
       if (!page.hasMore) break;
     }

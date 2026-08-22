@@ -133,6 +133,11 @@ const integrationRenameSchema = z.object({
   deviceId: z.string().trim().min(1),
   displayName: z.string().trim().min(1).max(64),
 });
+const integrationConflictResolutionSchema = z.object({
+  expectedCanonicalRevision: z.number().int().positive(),
+  idempotencyKey: z.string().trim().min(8).max(160),
+  resolution: z.enum(['KEEP_CANONICAL', 'ACCEPT_CANDIDATE']),
+});
 
 export interface BackupIpcDependencies {
   backup?: BackupService;
@@ -361,6 +366,25 @@ export function createIpcHandlers(
           deviceId: String(unsafeId),
         }),
       ),
+    [IPC_CHANNELS.integrationRevokeDevice]: (unsafeToken, unsafeId) =>
+      requireIntegration().revokeDevice(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.integrationListConflicts]: (unsafeToken) =>
+      requireIntegration().listConflicts(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationResolveConflict]: (unsafeToken, unsafeId, unsafeInput) =>
+      requireIntegration().resolveConflict(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        integrationConflictResolutionSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.integrationReconciliationPreview]: (unsafeToken) =>
+      requireIntegration().reconciliationPreview(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationConfirmReconciliation]: (unsafeToken) =>
+      requireIntegration().confirmReconciliation(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationPruneJournal]: (unsafeToken) =>
+      requireIntegration().pruneJournal(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationTestConnection]: (unsafeToken) =>
       requireIntegration().testConnection(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationSyncNow]: (unsafeToken) =>
