@@ -84,6 +84,7 @@ function sameRequest(operation: OperationRecord, input: PaymentOperationCreateIn
 export interface TrustedPaymentCompletion {
   paymentMethod: Extract<PaymentMethod, 'ONLINE' | 'SBP' | 'ACQUIRING'>;
   providerOperationId?: string | undefined;
+  providerResultId?: string | undefined;
 }
 
 export class PaymentOperationService {
@@ -248,7 +249,8 @@ export class PaymentOperationService {
         amount: locked.amount,
         branchId: locked.branchId,
         comment: locked.purpose,
-        externalReference: completion.providerOperationId ?? locked.id,
+        externalReference:
+          completion.providerResultId ?? completion.providerOperationId ?? locked.id,
         paidAt: new Date().toISOString(),
         paymentMethod: completion.paymentMethod,
         studentId: locked.studentId,

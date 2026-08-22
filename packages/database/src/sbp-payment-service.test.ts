@@ -26,9 +26,10 @@ function gateway(status: SbpGatewayPayment['status']): SbpGatewayPayment {
     amountKopecks: operation.amount,
     aravaOperationId: operation.id,
     currency: 'RUB',
-    provider: 'TBANK_SBP',
-    providerOperationId: 'tbank-100',
-    qrPayload: status === 'WAITING' ? 'https://qr.nspk.ru/test' : null,
+    provider: 'AQSI_SBP',
+    providerOperationId: 'aqsi-100',
+    providerResultId: status === 'SUCCEEDED' ? 'slip-100' : null,
+    qrPayload: null,
     status,
     updatedAt: '2026-08-22T10:01:00.000Z',
   };
@@ -58,7 +59,12 @@ function setup(remoteStatus: SbpGatewayPayment['status']) {
   const integration = {
     refreshSbpPayment: vi.fn(() => Promise.resolve(gateway(remoteStatus))),
     sbpProviderHealth: vi.fn(() =>
-      Promise.resolve({ configured: true, provider: 'TBANK_SBP' as const }),
+      Promise.resolve({
+        apiReachable: true,
+        configured: true,
+        deviceConfigured: true,
+        provider: 'AQSI_SBP' as const,
+      }),
     ),
     startSbpPayment: vi.fn(() => Promise.resolve(gateway(remoteStatus))),
   };
@@ -76,13 +82,13 @@ describe('SbpPaymentService', () => {
   it('starts a waiting operation without creating a canonical payment', async () => {
     const { operations, service } = setup('WAITING');
     const result = await service.start('session', operation.id);
-    expect(result.qrPayload).toContain('qr.nspk.ru');
+    expect(result.qrPayload).toBeNull();
     expect(operations.transition).toHaveBeenCalledWith(
       'session',
       operation.id,
       'WAITING_FOR_PAYMENT',
       undefined,
-      'tbank-100',
+      'aqsi-100',
     );
     expect(operations.finalizeTrusted).not.toHaveBeenCalled();
   });
@@ -92,7 +98,8 @@ describe('SbpPaymentService', () => {
     await service.start('session', operation.id);
     expect(operations.finalizeTrusted).toHaveBeenCalledWith(operation.id, {
       paymentMethod: 'SBP',
-      providerOperationId: 'tbank-100',
+      providerOperationId: 'aqsi-100',
+      providerResultId: 'slip-100',
     });
   });
 

@@ -9,7 +9,6 @@ import {
   type SubscriptionSummary,
 } from '@arava/shared';
 import { Button, Dialog, Input, Label, Select, Textarea } from '@arava/ui';
-import QRCode from 'qrcode';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
@@ -77,8 +76,8 @@ export function PaymentDialog({
   const [validationError, setValidationError] = useState<string>();
   const [mode, setMode] = useState<'MANUAL' | 'SBP'>('MANUAL');
   const [sbpAvailable, setSbpAvailable] = useState(false);
+  const [sbpDeviceName, setSbpDeviceName] = useState<string>();
   const [sbpPayment, setSbpPayment] = useState<SbpGatewayPayment>();
-  const [qrDataUrl, setQrDataUrl] = useState<string>();
   const [sbpBusy, setSbpBusy] = useState(false);
   const [sbpError, setSbpError] = useState<string>();
   const attemptKey = useRef(crypto.randomUUID());
@@ -94,26 +93,22 @@ export function PaymentDialog({
     });
     setMode('MANUAL');
     setSbpPayment(undefined);
-    setQrDataUrl(undefined);
+    setSbpDeviceName(undefined);
     setSbpError(undefined);
     attemptKey.current = crypto.randomUUID();
     void getDesktopApi()
       .paymentOperations.sbpHealth(getSessionToken())
-      .then(({ configured }) => setSbpAvailable(configured))
+      .then((health) => {
+        setSbpAvailable(health.configured && health.deviceConfigured && health.apiReachable);
+        setSbpDeviceName(
+          health.selectedDeviceName ??
+            (health.selectedDeviceId
+              ? `Касса aQsi #${String(health.selectedDeviceId)}`
+              : undefined),
+        );
+      })
       .catch(() => setSbpAvailable(false));
   }, [branches, fixedStudent, open, reset]);
-
-  useEffect(() => {
-    if (!sbpPayment?.qrPayload) {
-      setQrDataUrl(undefined);
-      return;
-    }
-    void QRCode.toDataURL(sbpPayment.qrPayload, {
-      errorCorrectionLevel: 'M',
-      margin: 2,
-      width: 320,
-    }).then(setQrDataUrl);
-  }, [sbpPayment?.qrPayload]);
 
   useEffect(() => {
     if (
@@ -193,6 +188,24 @@ export function PaymentDialog({
     }
   };
 
+  const cancelSbp = async () => {
+    if (!sbpPayment) return;
+    setSbpBusy(true);
+    setSbpError(undefined);
+    try {
+      setSbpPayment(
+        await getDesktopApi().paymentOperations.cancelSbp(
+          getSessionToken(),
+          sbpPayment.aravaOperationId,
+        ),
+      );
+    } catch (caught) {
+      setSbpError(getErrorMessage(caught, 'Не удалось отменить ожидание оплаты.'));
+    } finally {
+      setSbpBusy(false);
+    }
+  };
+
   return (
     <Dialog
       closeLabel={t('common.closeDialog')}
@@ -210,7 +223,7 @@ export function PaymentDialog({
           onClick={() => setMode('SBP')}
           variant={mode === 'SBP' ? 'primary' : 'ghost'}
         >
-          СБП
+          СБП через aQsi
         </Button>
       </div>
       <form
@@ -327,18 +340,15 @@ export function PaymentDialog({
         </div>
         {mode === 'SBP' ? (
           <div className="rounded-2xl border border-border bg-muted/30 p-5 text-center">
-            {qrDataUrl &&
-            sbpPayment &&
+            {sbpPayment &&
             !['SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED'].includes(sbpPayment.status) ? (
               <>
-                <img
-                  alt="QR-код для оплаты через СБП"
-                  className="mx-auto h-64 w-64"
-                  src={qrDataUrl}
-                />
-                <p className="mt-3 font-medium">Отсканируйте QR-код в приложении банка</p>
+                <p className="font-semibold">Ожидаем оплату на кассе aQsi</p>
                 <p className="mt-1 text-lg font-semibold">
                   {formatRubles(sbpPayment.amountKopecks)}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {sbpDeviceName ?? `Касса aQsi #${String(sbpPayment.deviceId ?? '')}`}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {values.comment?.trim() ? values.comment.trim() : 'Оплата через СБП'}
@@ -359,17 +369,18 @@ export function PaymentDialog({
               </>
             ) : (
               <>
-                <p className="font-medium">Оплата через СБП</p>
+                <p className="font-medium">СБП через aQsi</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  CRM создаст динамический QR-код T‑Bank.
+                  QR-код появится на выбранной физической кассе aQsi.
                 </p>
+                {sbpDeviceName ? <p className="mt-2 text-sm font-medium">{sbpDeviceName}</p> : null}
               </>
             )}
           </div>
         ) : null}
         {!sbpAvailable && mode === 'MANUAL' ? (
           <p className="text-xs text-muted-foreground">
-            СБП станет доступна после настройки T‑Bank на сервере.
+            СБП станет доступна после настройки API и кассы aQsi на сервере.
           </p>
         ) : null}
         {validationError || error || sbpError ? (
@@ -391,7 +402,6 @@ export function PaymentDialog({
             <Button
               onClick={() => {
                 setSbpPayment(undefined);
-                setQrDataUrl(undefined);
                 attemptKey.current = crypto.randomUUID();
               }}
               type="button"
@@ -400,7 +410,7 @@ export function PaymentDialog({
             </Button>
           ) : (
             <div className="flex gap-2">
-              {sbpPayment?.qrPayload ? (
+              {sbpPayment ? (
                 <Button
                   disabled={sbpBusy}
                   onClick={() => void refreshSbp()}
@@ -410,17 +420,20 @@ export function PaymentDialog({
                   Обновить статус
                 </Button>
               ) : null}
-              <Button
-                disabled={sbpBusy || Boolean(sbpPayment?.qrPayload)}
-                onClick={() => void startSbp()}
-                type="button"
-              >
-                {sbpBusy
-                  ? 'Создаём QR…'
-                  : sbpPayment?.qrPayload
-                    ? 'Ожидаем оплату'
-                    : 'Показать QR-код'}
-              </Button>
+              {sbpPayment ? (
+                <Button
+                  disabled={sbpBusy}
+                  onClick={() => void cancelSbp()}
+                  type="button"
+                  variant="ghost"
+                >
+                  Отменить ожидание
+                </Button>
+              ) : (
+                <Button disabled={sbpBusy} onClick={() => void startSbp()} type="button">
+                  {sbpBusy ? 'Передаём на кассу…' : 'Начать оплату на aQsi'}
+                </Button>
+              )}
             </div>
           )}
         </div>

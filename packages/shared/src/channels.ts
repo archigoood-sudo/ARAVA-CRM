@@ -305,7 +305,10 @@ export const IPC_CHANNELS = {
   paymentOperationGet: 'payment-operation:get',
   paymentOperationListStudent: 'payment-operation:list-student',
   paymentOperationRefreshSbp: 'payment-operation:refresh-sbp',
+  paymentOperationCancelSbp: 'payment-operation:cancel-sbp',
+  paymentOperationSbpDevices: 'payment-operation:sbp-devices',
   paymentOperationSbpHealth: 'payment-operation:sbp-health',
+  paymentOperationSbpSelectDevice: 'payment-operation:sbp-select-device',
   paymentOperationStartSbp: 'payment-operation:start-sbp',
   paymentOperationTestComplete: 'payment-operation:test-complete',
   refundCreate: 'refund:create',
@@ -880,8 +883,10 @@ export interface SbpGatewayPayment {
   currency: 'RUB';
   error?: { code?: string | null; message: string } | null;
   expiresAt?: string | null;
-  provider: 'TBANK_SBP';
+  deviceId?: number | null;
+  provider: 'AQSI_SBP';
   providerOperationId?: string | null;
+  providerResultId?: string | null;
   providerStatus?: string | null;
   qrPayload?: string | null;
   status: SbpGatewayStatus;
@@ -889,8 +894,26 @@ export interface SbpGatewayPayment {
 }
 
 export interface SbpProviderHealth {
+  apiReachable: boolean;
   configured: boolean;
-  provider: 'TBANK_SBP';
+  deviceConfigured: boolean;
+  provider: 'AQSI_SBP';
+  selectedDeviceId?: number | null;
+  selectedDeviceName?: string | null;
+}
+
+export interface AqsiDeviceSummary {
+  deviceId: number;
+  imei?: string | null;
+  model?: string | null;
+  name: string;
+  selected: boolean;
+  serialNumber?: string | null;
+}
+
+export interface AqsiDeviceList {
+  devices: AqsiDeviceSummary[];
+  selectedDeviceId?: number | null;
 }
 
 export interface PaymentInput {
@@ -2429,11 +2452,14 @@ export interface AravaDesktopApi {
       id: string,
       input: PaymentOperationReasonInput,
     ) => Promise<PaymentOperationSummary>;
+    cancelSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
     create: (token: string, input: PaymentOperationCreateInput) => Promise<PaymentOperationSummary>;
     get: (token: string, id: string) => Promise<PaymentOperationSummary>;
     listStudent: (token: string, studentId: string) => Promise<PaymentOperationSummary[]>;
     refreshSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
+    sbpDevices: (token: string) => Promise<AqsiDeviceList>;
     sbpHealth: (token: string) => Promise<SbpProviderHealth>;
+    sbpSelectDevice: (token: string, deviceId: number) => Promise<AqsiDeviceSummary>;
     startSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
     testComplete: (
       token: string,

@@ -160,7 +160,14 @@ describe('Sprint 4.5A multi-device integration', () => {
         return;
       }
       if (request.url?.endsWith('/payments/provider-health')) {
-        json(response, 200, { configured: true, provider: 'TBANK_SBP' });
+        json(response, 200, {
+          apiReachable: true,
+          configured: true,
+          deviceConfigured: true,
+          provider: 'AQSI_SBP',
+          selectedDeviceId: 77,
+          selectedDeviceName: 'aQsi 5Ф · TEST-77',
+        });
         return;
       }
       if (request.url?.endsWith('/health')) {
@@ -610,7 +617,9 @@ describe('Sprint 4.5A multi-device integration', () => {
         'conflicts',
         'chat-api',
         'publication-api',
-        'payment-provider',
+        'aqsi-configured',
+        'aqsi-reachable',
+        'aqsi-device',
       ]),
     );
     const serialized = JSON.stringify(result);

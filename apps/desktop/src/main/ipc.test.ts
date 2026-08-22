@@ -895,15 +895,20 @@ describe('Electron IPC boundary', () => {
     const gatewayService = {
       refreshSbpPayment: vi.fn(),
       sbpProviderHealth: vi.fn(() =>
-        Promise.resolve({ configured: true, provider: 'TBANK_SBP' as const }),
+        Promise.resolve({
+          apiReachable: true,
+          configured: true,
+          deviceConfigured: true,
+          provider: 'AQSI_SBP' as const,
+        }),
       ),
       startSbpPayment: vi.fn(() =>
         Promise.resolve({
           amountKopecks: 12_000,
           aravaOperationId: (sbpOperation as { id: string }).id,
           currency: 'RUB' as const,
-          provider: 'TBANK_SBP' as const,
-          providerOperationId: 'tbank-ipc-1',
+          provider: 'AQSI_SBP' as const,
+          providerOperationId: 'aqsi-ipc-1',
           status: 'SUCCEEDED' as const,
           updatedAt: new Date().toISOString(),
         }),
@@ -916,8 +921,10 @@ describe('Electron IPC boundary', () => {
       sbpHandlers[IPC_CHANNELS.paymentOperationSbpHealth]?.(coachSession.token),
     ).rejects.toThrow(t('domain.authorization.permissionDenied'));
     expect(await sbpHandlers[IPC_CHANNELS.paymentOperationSbpHealth]?.(owner.token)).toEqual({
+      apiReachable: true,
       configured: true,
-      provider: 'TBANK_SBP',
+      deviceConfigured: true,
+      provider: 'AQSI_SBP',
     });
     expect(
       await sbpHandlers[IPC_CHANNELS.paymentOperationStartSbp]?.(
@@ -930,7 +937,7 @@ describe('Electron IPC boundary', () => {
         owner.token,
         (sbpOperation as { id: string }).id,
       ),
-    ).toMatchObject({ providerOperationId: 'tbank-ipc-1', status: 'SUCCEEDED' });
+    ).toMatchObject({ providerOperationId: 'aqsi-ipc-1', status: 'SUCCEEDED' });
     await expect(
       handlers[IPC_CHANNELS.paymentOperationTestComplete]?.(
         owner.token,
@@ -940,6 +947,12 @@ describe('Electron IPC boundary', () => {
     ).rejects.toThrow('Тестовый платёжный провайдер отключён');
     process.env.ARAVA_E2E_PAYMENT_PROVIDER = 'memory';
     try {
+      await expect(
+        handlers[IPC_CHANNELS.paymentOperationSbpDevices]?.(coachSession.token),
+      ).rejects.toThrow('только владелец');
+      expect(await handlers[IPC_CHANNELS.paymentOperationSbpDevices]?.(owner.token)).toMatchObject({
+        selectedDeviceId: 101,
+      });
       const completed = await handlers[IPC_CHANNELS.paymentOperationTestComplete]?.(
         owner.token,
         (operation as { id: string }).id,

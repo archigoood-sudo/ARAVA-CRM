@@ -34,6 +34,15 @@ export class SbpPaymentService {
     return gateway;
   }
 
+  async cancel(token: string, operationId: string): Promise<SbpGatewayPayment> {
+    const operation = await this.operations.get(token, operationId);
+    if (operation.providerType !== 'SBP')
+      throw new DomainError('VALIDATION', 'Операция не предназначена для оплаты через СБП.');
+    const gateway = await this.integration.cancelSbpPayment(token, operation);
+    await this.applyGatewayState(token, operationId, gateway);
+    return gateway;
+  }
+
   private async applyGatewayState(
     token: string,
     operationId: string,
@@ -60,6 +69,7 @@ export class SbpPaymentService {
         ...(gateway.providerOperationId
           ? { providerOperationId: gateway.providerOperationId }
           : {}),
+        ...(gateway.providerResultId ? { providerResultId: gateway.providerResultId } : {}),
       });
       return;
     }
@@ -69,7 +79,7 @@ export class SbpPaymentService {
     ) {
       await this.operations.failTrusted(
         operationId,
-        gateway.error?.message ?? 'T‑Bank отклонил оплату.',
+        gateway.error?.message ?? 'aQsi отклонил оплату.',
       );
       return;
     }

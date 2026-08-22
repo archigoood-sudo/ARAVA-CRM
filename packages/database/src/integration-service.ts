@@ -1,4 +1,6 @@
 import type {
+  AqsiDeviceList,
+  AqsiDeviceSummary,
   AuthenticatedUser,
   ChatListQuery,
   ChatListResult,
@@ -294,7 +296,7 @@ function parseSbpGatewayPayment(
     'EXPIRED',
   ]);
   if (
-    payload.provider !== 'TBANK_SBP' ||
+    payload.provider !== 'AQSI_SBP' ||
     payload.aravaOperationId !== expected.id ||
     payload.currency !== 'RUB' ||
     payload.amountKopecks !== expected.amount ||
@@ -321,9 +323,13 @@ function parseSbpGatewayPayment(
     currency: 'RUB',
     error,
     ...(typeof payload.expiresAt === 'string' ? { expiresAt: payload.expiresAt } : {}),
-    provider: 'TBANK_SBP',
+    ...(Number.isSafeInteger(payload.deviceId) ? { deviceId: payload.deviceId as number } : {}),
+    provider: 'AQSI_SBP',
     ...(typeof payload.providerOperationId === 'string'
       ? { providerOperationId: payload.providerOperationId }
+      : {}),
+    ...(typeof payload.providerResultId === 'string'
+      ? { providerResultId: payload.providerResultId }
       : {}),
     ...(typeof payload.providerStatus === 'string'
       ? { providerStatus: payload.providerStatus }
@@ -331,6 +337,45 @@ function parseSbpGatewayPayment(
     ...(typeof payload.qrPayload === 'string' ? { qrPayload: payload.qrPayload } : {}),
     status: payload.status as SbpGatewayPayment['status'],
     updatedAt: payload.updatedAt,
+  };
+}
+
+function parseAqsiDevice(payload: unknown): AqsiDeviceSummary {
+  if (
+    !isRecord(payload) ||
+    !Number.isSafeInteger(payload.deviceId) ||
+    typeof payload.name !== 'string' ||
+    typeof payload.selected !== 'boolean'
+  ) {
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Сервер вернул неверные данные кассы aQsi.',
+    );
+  }
+  return {
+    deviceId: payload.deviceId as number,
+    ...(typeof payload.imei === 'string' ? { imei: payload.imei } : {}),
+    ...(typeof payload.model === 'string' ? { model: payload.model } : {}),
+    name: payload.name,
+    selected: payload.selected,
+    ...(typeof payload.serialNumber === 'string' ? { serialNumber: payload.serialNumber } : {}),
+  };
+}
+
+function parseAqsiDevices(payload: unknown): AqsiDeviceList {
+  if (!isRecord(payload) || !Array.isArray(payload.devices)) {
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Сервер вернул неверный список касс aQsi.',
+    );
+  }
+  return {
+    devices: payload.devices.map(parseAqsiDevice),
+    ...(Number.isSafeInteger(payload.selectedDeviceId)
+      ? { selectedDeviceId: payload.selectedDeviceId as number }
+      : {}),
   };
 }
 
@@ -616,7 +661,7 @@ export class IntegrationApiClient {
     path: string,
     deviceId: string,
     token: string | undefined,
-    method: 'DELETE' | 'GET' | 'PATCH' | 'POST',
+    method: 'DELETE' | 'GET' | 'PATCH' | 'POST' | 'PUT',
     body?: unknown,
     context?: CrmChatRequestContext,
   ): Promise<unknown> {
@@ -739,14 +784,64 @@ export class IntegrationApiClient {
     if (
       !isRecord(payload) ||
       typeof payload.configured !== 'boolean' ||
-      payload.provider !== 'TBANK_SBP'
+      typeof payload.apiReachable !== 'boolean' ||
+      payload.provider !== 'AQSI_SBP' ||
+      typeof payload.deviceConfigured !== 'boolean'
     )
       throw new IntegrationApiError(
         'INVALID_RESPONSE',
         false,
         'Сервер вернул неверный статус СБП.',
       );
-    return { configured: payload.configured, provider: 'TBANK_SBP' };
+    return {
+      apiReachable: payload.apiReachable,
+      configured: payload.configured,
+      deviceConfigured: payload.deviceConfigured,
+      provider: 'AQSI_SBP',
+      ...(Number.isSafeInteger(payload.selectedDeviceId)
+        ? { selectedDeviceId: payload.selectedDeviceId as number }
+        : {}),
+      ...(typeof payload.selectedDeviceName === 'string'
+        ? { selectedDeviceName: payload.selectedDeviceName }
+        : {}),
+    };
+  }
+
+  async listAqsiDevices(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+  ): Promise<AqsiDeviceList> {
+    const payload = await this.request(
+      baseUrl,
+      'payments/aqsi/devices',
+      deviceId,
+      token,
+      'GET',
+      undefined,
+      context,
+    );
+    return parseAqsiDevices(payload);
+  }
+
+  async selectAqsiDevice(
+    baseUrl: string,
+    sourceDeviceId: string,
+    token: string,
+    aqsiDeviceId: number,
+    context: CrmChatRequestContext,
+  ): Promise<AqsiDeviceSummary> {
+    const payload = await this.request(
+      baseUrl,
+      'payments/aqsi/devices',
+      sourceDeviceId,
+      token,
+      'PUT',
+      { deviceId: aqsiDeviceId },
+      context,
+    );
+    return parseAqsiDevice(payload);
   }
 
   async createSbpPayment(
@@ -788,6 +883,25 @@ export class IntegrationApiClient {
       deviceId,
       token,
       'GET',
+      undefined,
+      context,
+    );
+    return parseSbpGatewayPayment(payload, operation);
+  }
+
+  async cancelSbpPayment(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    operation: PaymentOperationSummary,
+    context: CrmChatRequestContext,
+  ): Promise<SbpGatewayPayment> {
+    const payload = await this.request(
+      baseUrl,
+      `payments/${encodeURIComponent(operation.id)}/cancel`,
+      deviceId,
+      token,
+      'POST',
       undefined,
       context,
     );
@@ -1512,6 +1626,29 @@ export class IntegrationService {
     );
   }
 
+  async listAqsiDevices(token: string): Promise<AqsiDeviceList> {
+    const actor = await this.assertOwner(token);
+    const connection = await this.integrationConnection();
+    return this.api.listAqsiDevices(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      this.actorContext(actor),
+    );
+  }
+
+  async selectAqsiDevice(token: string, aqsiDeviceId: number): Promise<AqsiDeviceSummary> {
+    const actor = await this.assertOwner(token);
+    const connection = await this.integrationConnection();
+    return this.api.selectAqsiDevice(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      aqsiDeviceId,
+      this.actorContext(actor),
+    );
+  }
+
   async startSbpPayment(
     token: string,
     operation: PaymentOperationSummary,
@@ -1538,6 +1675,23 @@ export class IntegrationService {
     assertBranchAccess(actor, operation.branchId);
     const connection = await this.integrationConnection();
     return this.api.getSbpPayment(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      operation,
+      this.actorContext(actor),
+    );
+  }
+
+  async cancelSbpPayment(
+    token: string,
+    operation: PaymentOperationSummary,
+  ): Promise<SbpGatewayPayment> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'payments:manage');
+    assertBranchAccess(actor, operation.branchId);
+    const connection = await this.integrationConnection();
+    return this.api.cancelSbpPayment(
       connection.baseUrl,
       connection.deviceId,
       connection.token,
@@ -2082,7 +2236,9 @@ export class IntegrationService {
         ['device-recognized', 'Сервер распознаёт это устройство'],
         ['chat-api', 'Сервис чатов доступен'],
         ['publication-api', 'Сервис публикаций доступен'],
-        ['payment-provider', 'Оплата через СБП настроена'],
+        ['aqsi-configured', 'API aQsi настроен'],
+        ['aqsi-reachable', 'API aQsi доступен'],
+        ['aqsi-device', 'Касса aQsi выбрана'],
       ] as const) {
         checks.push(diagnosticCheck(id, label, 'WARNING', detail, action));
       }
@@ -2285,40 +2441,69 @@ export class IntegrationService {
           }
         }
         if (paymentProbe.status === 'fulfilled') {
+          const health = paymentProbe.value;
           checks.push(
-            paymentProbe.value.configured
+            health.configured
               ? diagnosticCheck(
-                  'payment-provider',
-                  'Оплата через СБП настроена',
+                  'aqsi-configured',
+                  'API aQsi настроен',
                   'WORKING',
-                  'Сервер готов создавать динамические QR-коды T‑Bank.',
+                  'API-ключ aQsi задан на сервере.',
                 )
               : diagnosticCheck(
-                  'payment-provider',
-                  'Оплата через СБП не настроена',
+                  'aqsi-configured',
+                  'API aQsi не настроен',
                   'WARNING',
-                  'На сервере не заданы реквизиты терминала T‑Bank.',
-                  'Настройте T‑Bank на сервере ARAVA-WEB.',
+                  'На сервере не задан AQSI_API_KEY.',
+                  'Настройте API-ключ aQsi на ARAVA-WEB.',
+                ),
+            health.apiReachable
+              ? diagnosticCheck(
+                  'aqsi-reachable',
+                  'API aQsi доступен',
+                  'WORKING',
+                  'aQsi ответил на безопасный запрос списка касс.',
+                )
+              : diagnosticCheck(
+                  'aqsi-reachable',
+                  'API aQsi недоступен',
+                  'WARNING',
+                  'Не удалось связаться с aQsi.',
+                  'Проверьте интернет и настройки aQsi на сервере.',
+                ),
+            health.deviceConfigured
+              ? diagnosticCheck(
+                  'aqsi-device',
+                  'Касса aQsi выбрана',
+                  'WORKING',
+                  health.selectedDeviceName ??
+                    `Выбрана касса #${String(health.selectedDeviceId ?? '')}.`,
+                )
+              : diagnosticCheck(
+                  'aqsi-device',
+                  'Касса aQsi не выбрана',
+                  'WARNING',
+                  'Оплата не начнётся без выбранной физической кассы.',
+                  'Выберите кассу aQsi в настройках интеграции.',
                 ),
           );
         } else {
           const failure = diagnosticFailure(paymentProbe.reason);
-          checks.push(
-            diagnosticCheck(
-              'payment-provider',
-              'Оплата через СБП недоступна',
-              'WARNING',
-              failure.detail,
-              failure.action,
-            ),
-          );
+          for (const [id, label] of [
+            ['aqsi-configured', 'API aQsi настроен'],
+            ['aqsi-reachable', 'API aQsi доступен'],
+            ['aqsi-device', 'Касса aQsi выбрана'],
+          ] as const)
+            checks.push(diagnosticCheck(id, label, 'WARNING', failure.detail, failure.action));
         }
       } else {
         for (const [id, label] of [
           ['device-recognized', 'Сервер распознаёт это устройство'],
           ['chat-api', 'Сервис чатов доступен'],
           ['publication-api', 'Сервис публикаций доступен'],
-          ['payment-provider', 'Оплата через СБП настроена'],
+          ['aqsi-configured', 'API aQsi настроен'],
+          ['aqsi-reachable', 'API aQsi доступен'],
+          ['aqsi-device', 'Касса aQsi выбрана'],
         ] as const) {
           if (checks.some((check) => check.id === id)) continue;
           checks.push(

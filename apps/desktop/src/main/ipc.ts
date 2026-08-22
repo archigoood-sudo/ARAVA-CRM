@@ -826,8 +826,53 @@ export function createIpcHandlers(
     [IPC_CHANNELS.paymentOperationSbpHealth]: async (unsafeToken) => {
       const token = await paymentManagerToken(unsafeToken);
       return process.env.ARAVA_E2E_PAYMENT_PROVIDER === 'memory'
-        ? { configured: true, provider: 'TBANK_SBP' as const }
+        ? {
+            configured: true,
+            deviceConfigured: true,
+            apiReachable: true,
+            provider: 'AQSI_SBP' as const,
+            selectedDeviceId: 101,
+            selectedDeviceName: 'aQsi 5Ф · E2E-001',
+          }
         : requireSbpPayments().health(token);
+    },
+    [IPC_CHANNELS.paymentOperationSbpDevices]: async (unsafeToken) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER === 'memory') {
+        const actor = await service.authenticate(token);
+        if (actor.role !== 'OWNER') throw new Error('Настраивать кассу может только владелец.');
+        return {
+          devices: [
+            {
+              deviceId: 101,
+              model: 'aQsi 5Ф',
+              name: 'aQsi 5Ф · E2E-001',
+              selected: true,
+              serialNumber: 'E2E-001',
+            },
+          ],
+          selectedDeviceId: 101,
+        };
+      }
+      return requireIntegration().listAqsiDevices(token);
+    },
+    [IPC_CHANNELS.paymentOperationSbpSelectDevice]: async (unsafeToken, unsafeDeviceId) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const deviceId = Number(unsafeDeviceId);
+      if (!Number.isSafeInteger(deviceId) || deviceId < 1)
+        throw new Error('Некорректная касса aQsi.');
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER === 'memory') {
+        const actor = await service.authenticate(token);
+        if (actor.role !== 'OWNER') throw new Error('Настраивать кассу может только владелец.');
+        return {
+          deviceId,
+          model: 'aQsi 5Ф',
+          name: 'aQsi 5Ф · E2E-001',
+          selected: true,
+          serialNumber: 'E2E-001',
+        };
+      }
+      return requireIntegration().selectAqsiDevice(token, deviceId);
     },
     [IPC_CHANNELS.paymentOperationStartSbp]: async (unsafeToken, unsafeId) => {
       const token = await paymentManagerToken(unsafeToken);
@@ -847,9 +892,9 @@ export function createIpcHandlers(
         amountKopecks: operation.amount,
         aravaOperationId: id,
         currency: 'RUB' as const,
-        provider: 'TBANK_SBP' as const,
+        deviceId: 101,
+        provider: 'AQSI_SBP' as const,
         providerOperationId: `e2e-${id}`,
-        qrPayload: 'https://qr.nspk.ru/ARAVA-E2E',
         status: 'WAITING' as const,
         updatedAt: new Date().toISOString(),
       };
@@ -868,9 +913,30 @@ export function createIpcHandlers(
         amountKopecks: operation.amount,
         aravaOperationId: id,
         currency: 'RUB' as const,
-        provider: 'TBANK_SBP' as const,
+        deviceId: 101,
+        provider: 'AQSI_SBP' as const,
         providerOperationId: operation.providerOperationId,
+        providerResultId: `slip-${id}`,
         status: 'SUCCEEDED' as const,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+    [IPC_CHANNELS.paymentOperationCancelSbp]: async (unsafeToken, unsafeId) => {
+      const token = await paymentManagerToken(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
+        return requireSbpPayments().cancel(token, id);
+      const operation = await paymentOperations.get(token, id);
+      if (operation.status !== 'SUCCEEDED')
+        await paymentOperations.cancel(token, id, 'Ожидание оплаты отменено пользователем.');
+      return {
+        amountKopecks: operation.amount,
+        aravaOperationId: id,
+        currency: 'RUB' as const,
+        deviceId: 101,
+        provider: 'AQSI_SBP' as const,
+        providerOperationId: operation.providerOperationId,
+        status: 'CANCELLED' as const,
         updatedAt: new Date().toISOString(),
       };
     },

@@ -14,6 +14,7 @@ import {
   Dialog,
   Input,
   Label,
+  Select,
   Table,
   TableBody,
   TableCell,
@@ -169,6 +170,12 @@ export function IntegrationSettings() {
     queryFn: () => getDesktopApi().integration.listConflicts(getSessionToken()),
     queryKey: queryKeys.integrationConflicts,
   });
+  const aqsiDevices = useQuery({
+    enabled: Boolean(status.data?.isPaired),
+    queryFn: () => getDesktopApi().paymentOperations.sbpDevices(getSessionToken()),
+    queryKey: ['integration', 'aqsi-devices'],
+    retry: false,
+  });
 
   useEffect(() => {
     if (!status.data) return;
@@ -235,6 +242,18 @@ export function IntegrationSettings() {
     mutationFn: () => getDesktopApi().integration.diagnose(getSessionToken()),
     onError: (error) => setNotice(errorMessage(error)),
     onSuccess: () => setNotice(undefined),
+  });
+  const selectAqsiDevice = useMutation({
+    mutationFn: (deviceId: number) =>
+      getDesktopApi().paymentOperations.sbpSelectDevice(getSessionToken(), deviceId),
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: async (device) => {
+      setNotice(`Касса «${device.name}» выбрана для оплаты через СБП.`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['integration', 'aqsi-devices'] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.integrationStatus }),
+      ]);
+    },
   });
   const revoke = useMutation({
     mutationFn: (deviceId: string) =>
@@ -535,6 +554,61 @@ export function IntegrationSettings() {
         </Dialog>
 
         {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+
+        <div
+          className="rounded-2xl border border-border bg-background p-5"
+          data-testid="aqsi-settings"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="font-semibold">Касса aQsi</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                API-ключ хранится только на ARAVA-WEB. CRM получает безопасный список касс.
+              </p>
+            </div>
+            <Badge>
+              {aqsiDevices.isSuccess
+                ? aqsiDevices.data.selectedDeviceId
+                  ? 'Касса выбрана'
+                  : 'Касса не выбрана'
+                : aqsiDevices.isError
+                  ? 'API не настроен или недоступен'
+                  : 'Проверка…'}
+            </Badge>
+          </div>
+          {aqsiDevices.data?.devices.length ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+              <div className="space-y-2">
+                <Label htmlFor="aqsi-device">Касса для оплаты</Label>
+                <Select
+                  id="aqsi-device"
+                  onChange={(event) => selectAqsiDevice.mutate(Number(event.target.value))}
+                  value={String(aqsiDevices.data.selectedDeviceId ?? '')}
+                >
+                  <option value="">Выберите кассу</option>
+                  {aqsiDevices.data.devices.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.name} · ID {device.deviceId}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <Button
+                disabled={aqsiDevices.isFetching}
+                onClick={() => void aqsiDevices.refetch()}
+                variant="outline"
+              >
+                Обновить список
+              </Button>
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-muted-foreground">
+              {aqsiDevices.isError
+                ? errorMessage(aqsiDevices.error)
+                : 'После настройки AQSI_API_KEY на сервере здесь появятся доступные кассы.'}
+            </p>
+          )}
+        </div>
 
         {!status.data?.isPaired ? (
           <div className="rounded-2xl border border-border p-5">
