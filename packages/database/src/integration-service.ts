@@ -157,6 +157,8 @@ interface RemoteWebAction {
   crmStudentId?: string;
   crmSubscriptionId?: string;
   marks?: { crmStudentId: string; status: string }[];
+  profileChanges?: { firstName?: string; lastName?: string; phone?: string };
+  profilePayloadValid?: boolean;
   reason?: string;
   receivedAt: string;
 }
@@ -1346,6 +1348,31 @@ export class IntegrationApiClient {
           }))
         : undefined;
       const reason = optionalString(actionPayload.reason) ?? optionalString(entry.reason);
+      const profilePayload = isRecord(entry.payload) ? entry.payload : entry;
+      const profileAllowedKeys = new Set([
+        'crmStudentId',
+        'studentId',
+        'firstName',
+        'lastName',
+        'phone',
+        ...(isRecord(entry.payload)
+          ? []
+          : ['id', 'externalActionId', 'type', 'actionType', 'createdAt', 'receivedAt', 'reason']),
+      ]);
+      const profileFieldNames = ['firstName', 'lastName', 'phone'] as const;
+      const profileChanges: { firstName?: string; lastName?: string; phone?: string } = {};
+      let profilePayloadValid = Object.keys(profilePayload).every((key) =>
+        profileAllowedKeys.has(key),
+      );
+      let profileFieldCount = 0;
+      for (const field of profileFieldNames) {
+        if (!Object.hasOwn(profilePayload, field)) continue;
+        profileFieldCount += 1;
+        const value = profilePayload[field];
+        if (typeof value !== 'string') profilePayloadValid = false;
+        else profileChanges[field] = value;
+      }
+      profilePayloadValid &&= profileFieldCount > 0;
       return [
         {
           actionType,
@@ -1355,6 +1382,9 @@ export class IntegrationApiClient {
           ...(crmTrainerId ? { crmTrainerId } : {}),
           ...(crmLessonId ? { crmLessonId } : {}),
           ...(marks ? { marks } : {}),
+          ...(actionType === 'CLIENT_PROFILE_UPDATE_REQUEST'
+            ? { profileChanges, profilePayloadValid }
+            : {}),
           ...(reason ? { reason: reason.slice(0, 500) } : {}),
           receivedAt,
         },
@@ -1550,11 +1580,42 @@ export class IntegrationService {
 
   private async actionSummary(id: string, actor: AuthenticatedUser): Promise<WebActionSummary> {
     const action = await this.database.webAction.findUnique({ where: { id } });
-    if (
-      action?.actionType !== 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST' ||
-      !action.crmStudentId ||
-      !action.crmSubscriptionId
-    )
+    if (!action?.crmStudentId) throw new DomainError('NOT_FOUND', 'Заявка с сайта не найдена.');
+    if (action.actionType === 'CLIENT_PROFILE_UPDATE_REQUEST') {
+      const student = await this.database.student.findUnique({
+        where: { id: action.crmStudentId },
+      });
+      const branchIds = accessibleBranchIds(actor);
+      if (student && branchIds && !branchIds.includes(student.branchId))
+        throw new DomainError('AUTHORIZATION', 'Нет доступа к филиалу этой заявки.');
+      if (!student && branchIds)
+        throw new DomainError('AUTHORIZATION', 'Нет доступа к этой заявке.');
+      let requestedFields: ('firstName' | 'lastName' | 'phone')[] = [];
+      try {
+        const payload = action.payloadJson
+          ? (JSON.parse(action.payloadJson) as unknown)
+          : undefined;
+        if (isRecord(payload) && isRecord(payload.changes)) {
+          const changes = payload.changes;
+          requestedFields = (['firstName', 'lastName', 'phone'] as const).filter((field) =>
+            Object.hasOwn(changes, field),
+          );
+        }
+      } catch {
+        // A damaged payload is displayed without fields and rejected by the processor.
+      }
+      return {
+        actionType: 'CLIENT_PROFILE_UPDATE_REQUEST',
+        externalActionId: action.externalActionId,
+        id: action.id,
+        receivedAt: action.receivedAt.toISOString(),
+        requestedFields,
+        status: action.status as WebActionSummary['status'],
+        studentId: action.crmStudentId,
+        studentName: student ? `${student.lastName} ${student.firstName}` : 'Клиент не найден',
+      };
+    }
+    if (action.actionType !== 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST' || !action.crmSubscriptionId)
       throw new DomainError('NOT_FOUND', 'Заявка с сайта не найдена.');
     const subscription = await this.database.subscription.findUnique({
       include: { student: true, tariff: true },
@@ -1595,25 +1656,23 @@ export class IntegrationService {
       // Locally persisted actions remain available while the website is offline.
     }
     const branchIds = accessibleBranchIds(actor);
+    const accessibleStudentIds = branchIds
+      ? (
+          await this.database.student.findMany({
+            select: { id: true },
+            where: { branchId: { in: branchIds } },
+          })
+        ).map(({ id }) => id)
+      : [];
     const rows = await this.database.webAction.findMany({
       orderBy: { receivedAt: 'desc' },
       take: 100,
       where: {
-        actionType: 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST',
+        actionType: {
+          in: ['CLIENT_SUBSCRIPTION_FREEZE_REQUEST', 'CLIENT_PROFILE_UPDATE_REQUEST'],
+        },
         crmStudentId: { not: null },
-        crmSubscriptionId: { not: null },
-        ...(branchIds
-          ? {
-              crmSubscriptionId: {
-                in: (
-                  await this.database.subscription.findMany({
-                    select: { id: true },
-                    where: { branchId: { in: branchIds } },
-                  })
-                ).map(({ id }) => id),
-              },
-            }
-          : {}),
+        ...(branchIds ? { crmStudentId: { in: accessibleStudentIds } } : {}),
       },
     });
     const summaries = await Promise.all(rows.map(({ id }) => this.actionSummary(id, actor)));
@@ -1702,6 +1761,8 @@ export class IntegrationService {
   ): Promise<WebActionSummary> {
     const actor = await this.assertActionActor(token);
     const summary = await this.actionSummary(id, actor);
+    if (summary.actionType !== 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST')
+      throw new DomainError('CONFLICT', 'Изменение данных клиента обрабатывается автоматически.');
     const action = await this.database.webAction.findUniqueOrThrow({ where: { id } });
     if (action.status === 'SUCCEEDED_ACK_PENDING') {
       await this.acknowledgeWebAction(id);
@@ -1718,7 +1779,9 @@ export class IntegrationService {
 
   async rejectWebAction(token: string, id: string, reason?: string): Promise<WebActionSummary> {
     const actor = await this.assertActionActor(token);
-    await this.actionSummary(id, actor);
+    const summary = await this.actionSummary(id, actor);
+    if (summary.actionType !== 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST')
+      throw new DomainError('CONFLICT', 'Изменение данных клиента обрабатывается автоматически.');
     const current = await this.database.webAction.findUniqueOrThrow({ where: { id } });
     if (current.status !== 'REJECTED_ACK_PENDING') {
       await this.claimLocalAction(id);
@@ -2770,6 +2833,7 @@ export class IntegrationService {
     try {
       await this.pullWebActions(baseUrl, deviceId, token);
       await this.processTrainerAttendanceActions();
+      await this.processClientProfileUpdateActions();
       const acknowledgements = await this.database.webAction.findMany({
         select: { id: true },
         where: {
@@ -2882,7 +2946,11 @@ export class IntegrationService {
         Array.isArray(action.marks) &&
         action.marks.length > 0 &&
         !Number.isNaN(Date.parse(action.receivedAt));
-      if (!validFreeze && !validAttendance) {
+      const recognizedProfileUpdate =
+        action.actionType === 'CLIENT_PROFILE_UPDATE_REQUEST' &&
+        Boolean(action.crmStudentId) &&
+        !Number.isNaN(Date.parse(action.receivedAt));
+      if (!validFreeze && !validAttendance && !recognizedProfileUpdate) {
         try {
           await this.api.claimAction(baseUrl, deviceId, token, action.externalActionId);
           await this.api.completeAction(
@@ -2896,6 +2964,25 @@ export class IntegrationService {
         } catch {
           // The next polling cycle will receive and safely retry this remote action.
         }
+        continue;
+      }
+      if (recognizedProfileUpdate) {
+        const crmStudentId = action.crmStudentId;
+        if (!crmStudentId) continue;
+        await this.database.webAction.upsert({
+          create: {
+            actionType: action.actionType,
+            crmStudentId,
+            externalActionId: action.externalActionId,
+            payloadJson: JSON.stringify({
+              changes: action.profileChanges ?? {},
+              valid: action.profilePayloadValid === true,
+            }),
+            receivedAt: new Date(action.receivedAt),
+          },
+          update: {},
+          where: { externalActionId: action.externalActionId },
+        });
         continue;
       }
       if (validAttendance) {
@@ -2987,6 +3074,70 @@ export class IntegrationService {
             safeError: authoritativeRejection
               ? error.message.slice(0, 300)
               : 'Не удалось безопасно применить посещаемость.',
+            safeResultJson: JSON.stringify({
+              status: authoritativeRejection ? 'REJECTED' : 'FAILED',
+            }),
+            status: authoritativeRejection ? 'REJECTED_ACK_PENDING' : 'FAILED_ACK_PENDING',
+          },
+          where: { id: action.id, status: 'CLAIMED' },
+        });
+        await this.acknowledgeWebAction(action.id);
+      }
+    }
+  }
+
+  private async processClientProfileUpdateActions(): Promise<void> {
+    const actions = await this.database.webAction.findMany({
+      orderBy: { receivedAt: 'asc' },
+      where: {
+        actionType: 'CLIENT_PROFILE_UPDATE_REQUEST',
+        status: { in: ['PENDING', 'CLAIMED'] },
+      },
+    });
+    for (const action of actions) {
+      try {
+        if (action.status === 'PENDING') await this.claimLocalAction(action.id);
+        const payload = action.payloadJson
+          ? (JSON.parse(action.payloadJson) as unknown)
+          : undefined;
+        if (
+          !action.crmStudentId ||
+          !isRecord(payload) ||
+          payload.valid !== true ||
+          !isRecord(payload.changes)
+        )
+          throw new DomainError('VALIDATION', 'Данные изменения профиля не поддерживаются.');
+        const allowed = new Set(['firstName', 'lastName', 'phone']);
+        const entries = Object.entries(payload.changes);
+        if (
+          entries.length === 0 ||
+          entries.some(([key, value]) => !allowed.has(key) || typeof value !== 'string')
+        )
+          throw new DomainError('VALIDATION', 'Данные изменения профиля не поддерживаются.');
+        const changes: { firstName?: string; lastName?: string; phone?: string } = {};
+        for (const [key, value] of entries) {
+          if (key === 'firstName') changes.firstName = value as string;
+          if (key === 'lastName') changes.lastName = value as string;
+          if (key === 'phone') changes.phone = value as string;
+        }
+        await this.application.processClientProfileWebAction(
+          action.id,
+          action.crmStudentId,
+          changes,
+        );
+        await this.acknowledgeWebAction(action.id);
+      } catch (error) {
+        const current = await this.database.webAction.findUnique({ where: { id: action.id } });
+        if (current?.status !== 'CLAIMED') continue;
+        const authoritativeRejection = error instanceof DomainError;
+        await this.database.webAction.update({
+          data: {
+            nextCompletionAttemptAt: this.now(),
+            processedAt: this.now(),
+            processedByUserId: 'WEB_INTEGRATION',
+            safeError: authoritativeRejection
+              ? error.message.slice(0, 300)
+              : 'Не удалось безопасно изменить данные клиента.',
             safeResultJson: JSON.stringify({
               status: authoritativeRejection ? 'REJECTED' : 'FAILED',
             }),

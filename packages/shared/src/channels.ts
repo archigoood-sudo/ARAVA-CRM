@@ -1887,22 +1887,33 @@ export type WebActionStatus =
   | 'CLAIMED'
   | 'SUCCEEDED_ACK_PENDING'
   | 'REJECTED_ACK_PENDING'
+  | 'FAILED_ACK_PENDING'
   | 'SUCCEEDED'
   | 'REJECTED'
   | 'FAILED';
 
-export interface WebActionSummary {
-  actionType: 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST';
+interface WebActionSummaryBase {
   externalActionId: string;
   id: string;
-  reason?: string;
   receivedAt: string;
   status: WebActionStatus;
   studentId: string;
   studentName: string;
+}
+
+export interface SubscriptionFreezeWebActionSummary extends WebActionSummaryBase {
+  actionType: 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST';
+  reason?: string;
   subscriptionId: string;
   subscriptionName: string;
 }
+
+export interface ClientProfileWebActionSummary extends WebActionSummaryBase {
+  actionType: 'CLIENT_PROFILE_UPDATE_REQUEST';
+  requestedFields: ('firstName' | 'lastName' | 'phone')[];
+}
+
+export type WebActionSummary = SubscriptionFreezeWebActionSummary | ClientProfileWebActionSummary;
 
 export interface IntegrationPairInput extends IntegrationSettingsInput {
   pairingCode: string;

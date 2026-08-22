@@ -22,7 +22,7 @@ import type {
   UserSummary,
   UserUpdateInput,
 } from '@arava/shared';
-import { permissionsForRole, t } from '@arava/shared';
+import { permissionsForRole, studentInputSchema, t } from '@arava/shared';
 import { Prisma, type Branch, type Student, type StudentContact, type User } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
@@ -930,6 +930,81 @@ export class ApplicationService {
       return updated;
     });
     return studentSummary(student);
+  }
+
+  async processClientProfileWebAction(
+    actionId: string,
+    studentId: string,
+    changes: { firstName?: string; lastName?: string; phone?: string },
+  ): Promise<StudentSummary> {
+    return this.database.$transaction(async (transaction) => {
+      const action = await transaction.webAction.findUnique({ where: { id: actionId } });
+      if (
+        action?.actionType !== 'CLIENT_PROFILE_UPDATE_REQUEST' ||
+        action.crmStudentId !== studentId ||
+        action.status !== 'CLAIMED'
+      )
+        throw new DomainError('CONFLICT', 'Заявка на изменение профиля уже обработана.');
+      const current = await transaction.student.findUnique({
+        include: { branch: true },
+        where: { id: studentId },
+      });
+      if (!current) throw new DomainError('NOT_FOUND', 'Ученик не найден.');
+      if (current.archivedAt || current.status === 'ARCHIVED')
+        throw new DomainError('VALIDATION', 'Архивного ученика нельзя изменить с сайта.');
+      const candidate = studentInputSchema.safeParse({
+        birthDate: current.birthDate?.toISOString().slice(0, 10),
+        branchId: current.branchId,
+        email: current.email ?? undefined,
+        firstName: changes.firstName ?? current.firstName,
+        gender: current.gender ?? undefined,
+        lastName: changes.lastName ?? current.lastName,
+        middleName: current.middleName ?? undefined,
+        notes: current.notes ?? undefined,
+        phone: Object.hasOwn(changes, 'phone') ? changes.phone : (current.phone ?? undefined),
+        status: current.status,
+      });
+      if (!candidate.success)
+        throw new DomainError(
+          'VALIDATION',
+          candidate.error.issues[0]?.message ?? 'Данные клиента не прошли проверку.',
+        );
+      const systemActor = await transaction.user.findFirst({
+        orderBy: { createdAt: 'asc' },
+        where: { role: 'OWNER' },
+      });
+      if (!systemActor)
+        throw new DomainError('NOT_FOUND', 'Владелец CRM для системной операции не найден.');
+      const updated = await transaction.student.update({
+        data: studentData(candidate.data),
+        include: { branch: true },
+        where: { id: studentId },
+      });
+      const fields = Object.keys(changes).sort();
+      await transaction.auditLog.create({
+        data: {
+          action: 'STUDENT_UPDATED',
+          actorUserId: systemActor.id,
+          detail: JSON.stringify({ fields, source: 'WEB_PROFILE_UPDATE' }),
+          entityId: studentId,
+          entityType: 'Student',
+        },
+      });
+      const completed = await transaction.webAction.updateMany({
+        data: {
+          nextCompletionAttemptAt: new Date(),
+          processedAt: new Date(),
+          processedByUserId: systemActor.id,
+          safeError: null,
+          safeResultJson: JSON.stringify({ fields, status: 'SUCCEEDED' }),
+          status: 'SUCCEEDED_ACK_PENDING',
+        },
+        where: { id: actionId, status: 'CLAIMED' },
+      });
+      if (completed.count !== 1)
+        throw new DomainError('CONFLICT', 'Заявка на изменение профиля уже обработана.');
+      return studentSummary(updated);
+    });
   }
 
   async archiveStudent(token: string, id: string): Promise<StudentSummary> {

@@ -22,6 +22,7 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 const labels: Record<WebActionSummary['status'], string> = {
   CLAIMED: 'Обрабатывается',
   FAILED: 'Ошибка',
+  FAILED_ACK_PENDING: 'Ошибка · отправка результата',
   PENDING: 'Ожидает решения',
   REJECTED: 'Отклонена',
   REJECTED_ACK_PENDING: 'Отклонена · отправка результата',
@@ -32,8 +33,10 @@ const labels: Record<WebActionSummary['status'], string> = {
 export function WebActionsSection() {
   const user = useAuthStore((state) => state.user);
   const queryClient = useQueryClient();
-  const [freezing, setFreezing] = useState<WebActionSummary>();
-  const [rejecting, setRejecting] = useState<WebActionSummary>();
+  const [freezing, setFreezing] =
+    useState<Extract<WebActionSummary, { actionType: 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST' }>>();
+  const [rejecting, setRejecting] =
+    useState<Extract<WebActionSummary, { actionType: 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST' }>>();
   const [reason, setReason] = useState('');
   const actions = useQuery({
     queryFn: () => getDesktopApi().webActions.list(getSessionToken()),
@@ -75,7 +78,7 @@ export function WebActionsSection() {
             </p>
             <h2 className="mt-1 text-xl font-semibold">Заявки с сайта</h2>
             <p className="mt-1 text-sm text-secondary">
-              Запросы клиентов, ожидающие решения администратора.
+              Запросы клиентов и результаты автоматической обработки.
             </p>
           </div>
           <Button onClick={() => void actions.refetch()} size="small" variant="secondary">
@@ -96,10 +99,31 @@ export function WebActionsSection() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="font-semibold">{action.studentName}</p>
-                  <p className="mt-1 text-sm text-secondary">
-                    {action.subscriptionName} · Запрос на заморозку
-                  </p>
-                  {action.reason ? <p className="mt-2 text-sm">Причина: {action.reason}</p> : null}
+                  {action.actionType === 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST' ? (
+                    <>
+                      <p className="mt-1 text-sm text-secondary">
+                        {action.subscriptionName} · Запрос на заморозку
+                      </p>
+                      {action.reason ? (
+                        <p className="mt-2 text-sm">Причина: {action.reason}</p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="mt-1 text-sm text-secondary">
+                      Изменение данных клиента
+                      {action.requestedFields.length
+                        ? ` · ${action.requestedFields
+                            .map((field) =>
+                              field === 'firstName'
+                                ? 'имя'
+                                : field === 'lastName'
+                                  ? 'фамилия'
+                                  : 'телефон',
+                            )
+                            .join(', ')}`
+                        : ''}
+                    </p>
+                  )}
                   <p className="mt-2 text-xs text-secondary">
                     {formatDate(action.receivedAt, {
                       day: 'numeric',
@@ -110,7 +134,8 @@ export function WebActionsSection() {
                 </div>
                 <Badge>{labels[action.status]}</Badge>
               </div>
-              {action.status === 'PENDING' || action.status === 'CLAIMED' ? (
+              {action.actionType === 'CLIENT_SUBSCRIPTION_FREEZE_REQUEST' &&
+              (action.status === 'PENDING' || action.status === 'CLAIMED') ? (
                 <div className="mt-4 flex gap-2">
                   <Button onClick={() => setFreezing(action)} size="small">
                     Одобрить
