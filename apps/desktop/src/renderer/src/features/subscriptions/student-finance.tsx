@@ -78,6 +78,11 @@ export function StudentFinance({
     queryFn: () => getDesktopApi().subscriptions.listStudent(getSessionToken(), student.id),
     queryKey: queryKeys.studentFinance(student.id),
   });
+  const paymentOperations = useQuery({
+    enabled: canManage,
+    queryFn: () => getDesktopApi().paymentOperations.listStudent(getSessionToken(), student.id),
+    queryKey: ['payment-operations', 'student', student.id, user?.id],
+  });
   const tariffs = useQuery({
     queryFn: () => getDesktopApi().tariffs.list(getSessionToken(), { branchId: student.branchId }),
     queryKey: queryKeys.tariffs({ branchId: student.branchId }),
@@ -250,6 +255,47 @@ export function StudentFinance({
           )}
         </CardContent>
       </Card>
+      {canManage ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t('payment.operation.title')}</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t('payment.operation.description')}
+            </p>
+          </CardHeader>
+          <CardContent>
+            {paymentOperations.isLoading ? <LoadingState label={t('common.loading')} /> : null}
+            {paymentOperations.data?.length ? (
+              <div className="space-y-3">
+                {paymentOperations.data.map((operation) => (
+                  <div
+                    className="flex items-center justify-between rounded-2xl border border-border px-4 py-3"
+                    key={operation.id}
+                  >
+                    <div>
+                      <p className="font-medium">{operation.purpose}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {formatDate(operation.createdAt, {
+                          dateStyle: 'medium',
+                          timeStyle: 'short',
+                        })}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <Money amount={operation.amount} className="font-semibold" />
+                      <div className="mt-1">
+                        <Badge>{t(`payment.operation.status.${operation.status}`)}</Badge>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : paymentOperations.isLoading ? null : (
+              <p className="text-sm text-muted-foreground">{t('payment.operation.empty')}</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
       <SubscriptionDialog
         error={error}
         onClose={() => setIssueOpen(false)}

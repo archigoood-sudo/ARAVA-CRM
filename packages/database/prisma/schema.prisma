@@ -77,6 +77,8 @@ enum PaymentMethod {
   CARD
   TRANSFER
   ONLINE
+  SBP
+  ACQUIRING
   OTHER
 }
 
@@ -85,6 +87,22 @@ enum PaymentStatus {
   REFUNDED
   PARTIALLY_REFUNDED
   CANCELLED
+}
+
+enum PaymentOperationStatus {
+  CREATED
+  WAITING_FOR_PAYMENT
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentProviderType {
+  NONE
+  SBP
+  ACQUIRING
 }
 
 enum LedgerOperationType {
@@ -254,7 +272,8 @@ model User {
   attendanceMarks        Attendance[]
   auditLogs              AuditLog[]
   createdSubscriptions   Subscription[]        @relation("SubscriptionCreator")
-  createdPayments        Payment[]             @relation("PaymentCreator")
+  createdPayments          Payment[]          @relation("PaymentCreator")
+  createdPaymentOperations PaymentOperation[] @relation("PaymentOperationCreator")
   createdRefunds         Refund[]              @relation("RefundCreator")
   ledgerEntries          SubscriptionLedger[]  @relation("LedgerCreator")
   createdExpenses        Expense[]             @relation("ExpenseCreator")
@@ -311,6 +330,7 @@ model Branch {
   tariffs            Tariff[]
   subscriptions      Subscription[]
   payments           Payment[]
+  paymentOperations  PaymentOperation[]
   expenseCategories  ExpenseCategory[]
   expenses           Expense[]
   cashRegisters      CashRegister[]
@@ -383,6 +403,7 @@ model Student {
   attendance      Attendance[]
   subscriptions   Subscription[]
   payments        Payment[]
+  paymentOperations PaymentOperation[]
   ledgerEntries   SubscriptionLedger[]
   membershipCards MembershipCard[]
   cardEvents      CardEvent[]
@@ -724,6 +745,7 @@ model Subscription {
   createdByUserId String
   createdByUser   User                 @relation("SubscriptionCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   payments        Payment[]
+  paymentOperations PaymentOperation[]
   ledgerEntries   SubscriptionLedger[]
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
@@ -752,6 +774,7 @@ model Payment {
   createdByUserId   String
   createdByUser     User          @relation("PaymentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   refunds           Refund[]
+  operation         PaymentOperation?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
@@ -762,6 +785,39 @@ model Payment {
   @@index([status, paidAt])
   @@index([createdByUserId, paidAt])
   @@index([externalReference])
+}
+
+model PaymentOperation {
+  id                  String                 @id @default(cuid())
+  idempotencyKey      String                 @unique
+  studentId           String
+  student             Student                @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  subscriptionId      String?
+  subscription        Subscription?          @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  branchId            String
+  branch              Branch                 @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  amount              Int
+  currency            String                 @default("RUB")
+  purpose             String
+  status              PaymentOperationStatus @default(CREATED)
+  providerType        PaymentProviderType     @default(NONE)
+  providerOperationId String?
+  paymentId           String?                @unique
+  payment             Payment?               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  completedAt         DateTime?
+  failureReason       String?
+  cancellationReason  String?
+  createdByUserId     String
+  createdByUser       User                   @relation("PaymentOperationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  @@unique([providerType, providerOperationId])
+  @@index([studentId, createdAt])
+  @@index([subscriptionId, createdAt])
+  @@index([branchId, status, createdAt])
+  @@index([status, updatedAt])
+  @@index([createdByUserId, createdAt])
 }
 
 model Refund {

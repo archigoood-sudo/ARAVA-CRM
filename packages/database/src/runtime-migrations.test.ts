@@ -23,6 +23,7 @@ describe('runtime migrations', () => {
       '20260822000000_trainer_sync_1',
       '20260822010000_web_freeze_actions',
       '20260822020000_trainer_attendance_web_actions',
+      '20260822030000_payment_foundation',
     ]);
   });
 });

@@ -107,6 +107,15 @@ export async function closeDatabase(database: DatabaseClient): Promise<void> {
 export { ApplicationService, isBranchVisibleToUser } from './services';
 export { StudioService } from './studio-service';
 export { FinanceService } from './finance-service';
+export {
+  PaymentOperationService,
+  type TrustedPaymentCompletion,
+} from './payment-operation-service';
+export type {
+  PaymentProviderAdapter,
+  ProviderPaymentRequest,
+  ProviderPaymentState,
+} from './payment-provider';
 export { ManagementService } from './management-service';
 export { CalendarService } from './calendar-service';
 export { CardService } from './card-service';

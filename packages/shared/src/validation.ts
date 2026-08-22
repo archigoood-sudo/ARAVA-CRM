@@ -12,6 +12,7 @@ import {
   GROUP_STATUSES,
   LESSON_STATUSES,
   PAYMENT_METHODS,
+  PAYMENT_PROVIDER_TYPES,
   PAYMENT_STATUSES,
   PAYROLL_PERIOD_STATUSES,
   PAYROLL_TYPES,
@@ -56,6 +57,8 @@ import {
   type OwnerRecoveryInput,
   type PasswordChangeInput,
   type PaymentInput,
+  type PaymentOperationCreateInput,
+  type PaymentOperationReasonInput,
   type PaymentListQuery,
   type RefundInput,
   type PayrollAdjustmentInput,
@@ -131,6 +134,7 @@ export const attendanceStatusSchema = z.enum(ATTENDANCE_STATUSES);
 export const tariffTypeSchema = z.enum(TARIFF_TYPES);
 export const paymentMethodSchema = z.enum(PAYMENT_METHODS);
 export const paymentStatusSchema = z.enum(PAYMENT_STATUSES);
+export const paymentProviderTypeSchema = z.enum(PAYMENT_PROVIDER_TYPES);
 export const expensePaymentMethodSchema = z.enum(EXPENSE_PAYMENT_METHODS);
 export const expenseStatusSchema = z.enum(EXPENSE_STATUSES);
 export const cashRegisterTypeSchema = z.enum(CASH_REGISTER_TYPES);
@@ -565,6 +569,21 @@ export const paymentInputSchema: z.ZodType<PaymentInput> = z.object({
   paymentMethod: paymentMethodSchema,
   studentId: z.string().min(1).max(100),
   subscriptionId: optionalIdentifier,
+});
+
+export const paymentOperationCreateSchema: z.ZodType<PaymentOperationCreateInput> = z.object({
+  amount: positiveMoneyAmount,
+  branchId: z.string().min(1).max(100),
+  currency: z.literal('RUB'),
+  idempotencyKey: z.string().trim().min(8).max(200),
+  providerType: paymentProviderTypeSchema,
+  purpose: z.string().trim().min(3, t('validation.required')).max(500),
+  studentId: z.string().min(1).max(100),
+  subscriptionId: optionalIdentifier,
+});
+
+export const paymentOperationReasonSchema: z.ZodType<PaymentOperationReasonInput> = z.object({
+  reason: z.string().trim().min(3, t('validation.required')).max(500),
 });
 
 export const paymentListQuerySchema: z.ZodType<PaymentListQuery> = z

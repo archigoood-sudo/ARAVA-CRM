@@ -58,7 +58,12 @@ async function ensurePaymentRegister(
   branchId: string,
   paymentMethod: PaymentInput['paymentMethod'],
 ) {
-  const type = paymentMethod === 'CASH' ? 'CASH' : paymentMethod === 'ONLINE' ? 'ONLINE' : 'BANK';
+  const type =
+    paymentMethod === 'CASH'
+      ? 'CASH'
+      : ['ONLINE', 'SBP', 'ACQUIRING'].includes(paymentMethod)
+        ? 'ONLINE'
+        : 'BANK';
   const name =
     type === 'CASH' ? 'Основная касса' : type === 'ONLINE' ? 'Онлайн-касса' : 'Расчётный счёт';
   const existing = await client.cashRegister.findFirst({
@@ -191,6 +196,69 @@ function paymentSummary(payment: PaymentRecord): PaymentSummary {
     subscriptionName: payment.subscription?.tariff.name,
     updatedAt: payment.updatedAt.toISOString(),
   };
+}
+
+export async function createCanonicalPayment(
+  client: Prisma.TransactionClient,
+  actor: AuthenticatedUser,
+  input: PaymentInput,
+): Promise<{ id: string }> {
+  assertPermission(actor, 'payments:manage');
+  if (!Number.isInteger(input.amount) || input.amount <= 0)
+    throw new DomainError('VALIDATION', t('validation.moneyPositive'));
+  assertBranchAccess(actor, input.branchId);
+  const student = await client.student.findUnique({ where: { id: input.studentId } });
+  if (!student) throw new DomainError('NOT_FOUND', t('domain.notFound.student'));
+  if (student.branchId !== input.branchId)
+    throw new DomainError('VALIDATION', t('domain.validation.paymentBranch'));
+  if (input.subscriptionId) {
+    const subscription = await client.subscription.findUnique({
+      include: subscriptionInclude,
+      where: { id: input.subscriptionId },
+    });
+    if (!subscription) throw new DomainError('NOT_FOUND', t('domain.notFound.subscription'));
+    if (subscription.studentId !== input.studentId || subscription.branchId !== input.branchId)
+      throw new DomainError('VALIDATION', t('domain.validation.paymentSubscription'));
+    if (input.amount > subscriptionSummary(subscription).debt)
+      throw new DomainError('VALIDATION', t('domain.validation.paymentExceedsDebt'));
+  }
+  const created = await client.payment.create({
+    data: {
+      amount: input.amount,
+      branchId: input.branchId,
+      comment: optionalValue(input.comment),
+      createdByUserId: actor.id,
+      externalReference: optionalValue(input.externalReference),
+      paidAt: new Date(input.paidAt),
+      paymentMethod: input.paymentMethod,
+      studentId: input.studentId,
+      subscriptionId: input.subscriptionId ?? null,
+    },
+  });
+  const register = await ensurePaymentRegister(client, input.branchId, input.paymentMethod);
+  await client.cashTransaction.create({
+    data: {
+      amount: input.amount,
+      branchId: input.branchId,
+      cashRegisterId: register.id,
+      comment: optionalValue(input.comment) ?? 'Оплата ученика',
+      createdByUserId: actor.id,
+      occurredAt: new Date(input.paidAt),
+      sourceId: created.id,
+      sourceType: 'PAYMENT',
+      type: 'INCOME',
+    },
+  });
+  await client.auditLog.create({
+    data: {
+      action: 'PAYMENT_CREATED',
+      actorUserId: actor.id,
+      detail: JSON.stringify({ amount: input.amount, subscriptionId: input.subscriptionId }),
+      entityId: created.id,
+      entityType: 'Payment',
+    },
+  });
+  return created;
 }
 
 export class FinanceService {
@@ -550,63 +618,9 @@ export class FinanceService {
 
   async createPayment(token: string, input: PaymentInput): Promise<PaymentDetail> {
     const actor = await this.application.authenticate(token);
-    assertPermission(actor, 'payments:manage');
-    if (!Number.isInteger(input.amount) || input.amount <= 0)
-      throw new DomainError('VALIDATION', t('validation.moneyPositive'));
-    assertBranchAccess(actor, input.branchId);
-    const student = await this.database.student.findUnique({ where: { id: input.studentId } });
-    if (!student) throw new DomainError('NOT_FOUND', t('domain.notFound.student'));
-    if (student.branchId !== input.branchId)
-      throw new DomainError('VALIDATION', t('domain.validation.paymentBranch'));
-    const payment = await this.database.$transaction(async (transaction) => {
-      if (input.subscriptionId) {
-        const subscription = await transaction.subscription.findUnique({
-          include: subscriptionInclude,
-          where: { id: input.subscriptionId },
-        });
-        if (!subscription) throw new DomainError('NOT_FOUND', t('domain.notFound.subscription'));
-        if (subscription.studentId !== input.studentId || subscription.branchId !== input.branchId)
-          throw new DomainError('VALIDATION', t('domain.validation.paymentSubscription'));
-        if (input.amount > subscriptionSummary(subscription).debt)
-          throw new DomainError('VALIDATION', t('domain.validation.paymentExceedsDebt'));
-      }
-      const created = await transaction.payment.create({
-        data: {
-          amount: input.amount,
-          branchId: input.branchId,
-          comment: optionalValue(input.comment),
-          createdByUserId: actor.id,
-          externalReference: optionalValue(input.externalReference),
-          paidAt: new Date(input.paidAt),
-          paymentMethod: input.paymentMethod,
-          studentId: input.studentId,
-          subscriptionId: input.subscriptionId ?? null,
-        },
-      });
-      const register = await ensurePaymentRegister(
-        transaction,
-        input.branchId,
-        input.paymentMethod,
-      );
-      await transaction.cashTransaction.create({
-        data: {
-          amount: input.amount,
-          branchId: input.branchId,
-          cashRegisterId: register.id,
-          comment: optionalValue(input.comment) ?? 'Оплата ученика',
-          createdByUserId: actor.id,
-          occurredAt: new Date(input.paidAt),
-          sourceId: created.id,
-          sourceType: 'PAYMENT',
-          type: 'INCOME',
-        },
-      });
-      await this.audit(transaction, actor.id, 'PAYMENT_CREATED', 'Payment', created.id, {
-        amount: input.amount,
-        subscriptionId: input.subscriptionId,
-      });
-      return created;
-    });
+    const payment = await this.database.$transaction((transaction) =>
+      createCanonicalPayment(transaction, actor, input),
+    );
     return this.getPayment(token, payment.id);
   }
 

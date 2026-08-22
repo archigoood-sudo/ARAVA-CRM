@@ -6,6 +6,7 @@ import {
   FinanceService,
   GlobalSearchService,
   ManagementService,
+  PaymentOperationService,
   PublicationService,
   StudioService,
   StudentProfileService,
@@ -55,6 +56,9 @@ import {
   passwordChangeSchema,
   paymentInputSchema,
   paymentListQuerySchema,
+  paymentMethodSchema,
+  paymentOperationCreateSchema,
+  paymentOperationReasonSchema,
   publicationInputSchema,
   payrollAdjustmentInputSchema,
   payrollPaymentInputSchema,
@@ -158,6 +162,7 @@ export function createIpcHandlers(
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
   const finance = new FinanceService(database, service);
+  const paymentOperations = new PaymentOperationService(database, service);
   const management = new ManagementService(database, service);
   const calendar = new CalendarService(database, service);
   const cards = new CardService(database, service);
@@ -783,6 +788,45 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
       ),
+    [IPC_CHANNELS.paymentOperationCreate]: (unsafeToken, unsafeInput) =>
+      paymentOperations.create(
+        sessionTokenSchema.parse(unsafeToken),
+        paymentOperationCreateSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.paymentOperationGet]: (unsafeToken, unsafeId) =>
+      paymentOperations.get(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.paymentOperationListStudent]: (unsafeToken, unsafeStudentId) =>
+      paymentOperations.listStudent(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+      ),
+    [IPC_CHANNELS.paymentOperationCancel]: (unsafeToken, unsafeId, unsafeInput) =>
+      paymentOperations.cancel(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        paymentOperationReasonSchema.parse(unsafeInput).reason,
+      ),
+    [IPC_CHANNELS.paymentOperationTestComplete]: async (
+      unsafeToken,
+      unsafeId,
+      unsafePaymentMethod,
+    ) => {
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
+        throw new Error('Тестовый платёжный провайдер отключён.');
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      const paymentMethod = paymentMethodSchema.parse(unsafePaymentMethod);
+      if (paymentMethod !== 'ONLINE' && paymentMethod !== 'SBP' && paymentMethod !== 'ACQUIRING')
+        throw new Error('Тестовый провайдер поддерживает только безналичную оплату.');
+      const operation = await paymentOperations.get(token, id);
+      if (operation.status === 'CREATED')
+        await paymentOperations.transition(token, id, 'WAITING_FOR_PAYMENT');
+      await paymentOperations.finalizeTrusted(id, { paymentMethod });
+      return paymentOperations.get(token, id);
+    },
     [IPC_CHANNELS.refundCreate]: (unsafeToken, unsafePaymentId, unsafeInput) =>
       finance.createRefund(
         sessionTokenSchema.parse(unsafeToken),

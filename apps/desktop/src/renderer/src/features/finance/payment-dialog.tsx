@@ -1,5 +1,5 @@
 import {
-  PAYMENT_METHODS,
+  MANUAL_PAYMENT_METHODS,
   paymentInputSchema,
   t,
   type BranchSummary,
@@ -155,7 +155,7 @@ export function PaymentDialog({
           <div className="space-y-2">
             <Label htmlFor="payment-method">{t('payment.method')}</Label>
             <Select id="payment-method" {...register('paymentMethod')}>
-              {PAYMENT_METHODS.map((method) => (
+              {MANUAL_PAYMENT_METHODS.map((method) => (
                 <option key={method} value={method}>
                   {t(`payment.method.${method}`)}
                 </option>
@@ -174,6 +174,10 @@ export function PaymentDialog({
         <div className="space-y-2">
           <Label htmlFor="payment-comment">{t('payment.comment')}</Label>
           <Textarea id="payment-comment" {...register('comment')} />
+        </div>
+        <div className="rounded-2xl border border-dashed border-border bg-muted/35 px-4 py-3">
+          <p className="text-sm font-medium">СБП и эквайринг</p>
+          <p className="mt-1 text-xs text-muted-foreground">{t('payment.onlineSoon')}</p>
         </div>
         {validationError || error ? (
           <p className="text-sm text-red-600">{validationError ?? error}</p>

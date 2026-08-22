@@ -28,8 +28,17 @@ export const SUBSCRIPTION_STATUSES = [
   'USED_UP',
 ] as const;
 export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
-export const PAYMENT_METHODS = ['CASH', 'CARD', 'TRANSFER', 'ONLINE', 'OTHER'] as const;
+export const PAYMENT_METHODS = [
+  'CASH',
+  'CARD',
+  'TRANSFER',
+  'ONLINE',
+  'SBP',
+  'ACQUIRING',
+  'OTHER',
+] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+export const MANUAL_PAYMENT_METHODS = ['CASH', 'CARD', 'TRANSFER', 'ONLINE', 'OTHER'] as const;
 export const PAYMENT_STATUSES = [
   'COMPLETED',
   'REFUNDED',
@@ -37,6 +46,18 @@ export const PAYMENT_STATUSES = [
   'CANCELLED',
 ] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+export const PAYMENT_OPERATION_STATUSES = [
+  'CREATED',
+  'WAITING_FOR_PAYMENT',
+  'PROCESSING',
+  'SUCCEEDED',
+  'FAILED',
+  'CANCELLED',
+  'EXPIRED',
+] as const;
+export type PaymentOperationStatus = (typeof PAYMENT_OPERATION_STATUSES)[number];
+export const PAYMENT_PROVIDER_TYPES = ['NONE', 'SBP', 'ACQUIRING'] as const;
+export type PaymentProviderType = (typeof PAYMENT_PROVIDER_TYPES)[number];
 export const LEDGER_OPERATION_TYPES = [
   'PURCHASE',
   'LESSON_WRITE_OFF',
@@ -279,6 +300,11 @@ export const IPC_CHANNELS = {
   paymentCreate: 'payment:create',
   paymentGet: 'payment:get',
   paymentList: 'payment:list',
+  paymentOperationCancel: 'payment-operation:cancel',
+  paymentOperationCreate: 'payment-operation:create',
+  paymentOperationGet: 'payment-operation:get',
+  paymentOperationListStudent: 'payment-operation:list-student',
+  paymentOperationTestComplete: 'payment-operation:test-complete',
   refundCreate: 'refund:create',
   financeEmployees: 'finance:employees',
   financeStats: 'finance:stats',
@@ -810,6 +836,36 @@ export interface StudentFinanceSummary {
   lowBalance: number;
   subscriptions: SubscriptionSummary[];
   totalDebt: number;
+}
+
+export interface PaymentOperationCreateInput {
+  amount: number;
+  branchId: string;
+  currency: 'RUB';
+  idempotencyKey: string;
+  providerType: PaymentProviderType;
+  purpose: string;
+  studentId: string;
+  subscriptionId?: string | undefined;
+}
+
+export interface PaymentOperationSummary extends PaymentOperationCreateInput {
+  cancellationReason?: string | undefined;
+  completedAt?: string | undefined;
+  createdAt: string;
+  createdByName: string;
+  failureReason?: string | undefined;
+  id: string;
+  paymentId?: string | undefined;
+  providerOperationId?: string | undefined;
+  status: PaymentOperationStatus;
+  studentName: string;
+  subscriptionName?: string | undefined;
+  updatedAt: string;
+}
+
+export interface PaymentOperationReasonInput {
+  reason: string;
 }
 
 export interface PaymentInput {
@@ -2330,6 +2386,21 @@ export interface AravaDesktopApi {
     create: (token: string, input: PaymentInput) => Promise<PaymentDetail>;
     get: (token: string, id: string) => Promise<PaymentDetail>;
     list: (token: string, query: PaymentListQuery) => Promise<PaymentSummary[]>;
+  };
+  paymentOperations: {
+    cancel: (
+      token: string,
+      id: string,
+      input: PaymentOperationReasonInput,
+    ) => Promise<PaymentOperationSummary>;
+    create: (token: string, input: PaymentOperationCreateInput) => Promise<PaymentOperationSummary>;
+    get: (token: string, id: string) => Promise<PaymentOperationSummary>;
+    listStudent: (token: string, studentId: string) => Promise<PaymentOperationSummary[]>;
+    testComplete: (
+      token: string,
+      id: string,
+      paymentMethod: PaymentMethod,
+    ) => Promise<PaymentOperationSummary>;
   };
   refunds: {
     create: (token: string, paymentId: string, input: RefundInput) => Promise<PaymentDetail>;

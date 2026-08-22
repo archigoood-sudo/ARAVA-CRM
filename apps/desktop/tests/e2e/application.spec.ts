@@ -103,7 +103,7 @@ test('вход, создание филиала, ученика и контак�
     await subscriptionDialog.getByRole('button', { name: 'Выдать абонемент' }).click();
     await expect(window.getByRole('button', { name: /Абонемент E2E/u })).toBeVisible();
 
-    await window.getByRole('button', { name: 'Принять платёж' }).click();
+    await window.getByRole('button', { name: 'Принять оплату' }).first().click();
     const paymentDialog = window.getByRole('dialog');
     await paymentDialog.getByLabel('Абонемент').selectOption({ label: 'Абонемент E2E' });
     await paymentDialog.getByLabel('Сумма, ₽').fill('3000');

@@ -716,4 +716,18 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'CREATE INDEX "WebAction_crmLessonId_idx" ON "WebAction"("crmLessonId")',
     ],
   },
+  {
+    id: '20260822030000_payment_foundation',
+    statements: [
+      'CREATE TABLE "PaymentOperation" (\n  "id" TEXT NOT NULL PRIMARY KEY,\n  "idempotencyKey" TEXT NOT NULL,\n  "studentId" TEXT NOT NULL,\n  "subscriptionId" TEXT,\n  "branchId" TEXT NOT NULL,\n  "amount" INTEGER NOT NULL,\n  "currency" TEXT NOT NULL DEFAULT \'RUB\',\n  "purpose" TEXT NOT NULL,\n  "status" TEXT NOT NULL DEFAULT \'CREATED\',\n  "providerType" TEXT NOT NULL DEFAULT \'NONE\',\n  "providerOperationId" TEXT,\n  "paymentId" TEXT,\n  "completedAt" DATETIME,\n  "failureReason" TEXT,\n  "cancellationReason" TEXT,\n  "createdByUserId" TEXT NOT NULL,\n  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  "updatedAt" DATETIME NOT NULL,\n  CONSTRAINT "PaymentOperation_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "Student" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT "PaymentOperation_subscriptionId_fkey" FOREIGN KEY ("subscriptionId") REFERENCES "Subscription" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT "PaymentOperation_branchId_fkey" FOREIGN KEY ("branchId") REFERENCES "Branch" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT "PaymentOperation_paymentId_fkey" FOREIGN KEY ("paymentId") REFERENCES "Payment" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT "PaymentOperation_createdByUserId_fkey" FOREIGN KEY ("createdByUserId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE\n)',
+      'CREATE UNIQUE INDEX "PaymentOperation_idempotencyKey_key" ON "PaymentOperation"("idempotencyKey")',
+      'CREATE UNIQUE INDEX "PaymentOperation_paymentId_key" ON "PaymentOperation"("paymentId")',
+      'CREATE UNIQUE INDEX "PaymentOperation_providerType_providerOperationId_key" ON "PaymentOperation"("providerType", "providerOperationId")',
+      'CREATE INDEX "PaymentOperation_studentId_createdAt_idx" ON "PaymentOperation"("studentId", "createdAt")',
+      'CREATE INDEX "PaymentOperation_subscriptionId_createdAt_idx" ON "PaymentOperation"("subscriptionId", "createdAt")',
+      'CREATE INDEX "PaymentOperation_branchId_status_createdAt_idx" ON "PaymentOperation"("branchId", "status", "createdAt")',
+      'CREATE INDEX "PaymentOperation_status_updatedAt_idx" ON "PaymentOperation"("status", "updatedAt")',
+      'CREATE INDEX "PaymentOperation_createdByUserId_createdAt_idx" ON "PaymentOperation"("createdByUserId", "createdAt")',
+    ],
+  },
 ];

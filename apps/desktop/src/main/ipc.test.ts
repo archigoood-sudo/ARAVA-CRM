@@ -838,6 +838,72 @@ describe('Electron IPC boundary', () => {
     ).rejects.toThrow(t('domain.authorization.permissionDenied'));
   });
 
+  it('keeps payment operations permission-aware and trusted completion test-only', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!PaymentIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Оплата IPC' });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Ирина',
+      lastName: 'Оплата',
+      status: 'ACTIVE',
+    });
+    const coach = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'coach-payment-ipc@arava.local',
+      fullName: 'Тренер оплаты IPC',
+      password: 'Coach!PaymentIpc2026',
+      role: 'COACH',
+    });
+    const coachSession = await service.login({
+      email: coach.email,
+      password: 'Coach!PaymentIpc2026',
+    });
+    await service.changePassword(coachSession.token, {
+      currentPassword: 'Coach!PaymentIpc2026',
+      newPassword: 'Coach!ChangedPaymentIpc2026',
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    const operation = await handlers[IPC_CHANNELS.paymentOperationCreate]?.(owner.token, {
+      amount: 10_000,
+      branchId: branch.id,
+      currency: 'RUB',
+      idempotencyKey: 'payment-ipc-operation-1',
+      providerType: 'SBP',
+      purpose: 'Проверка IPC оплаты',
+      studentId: student.id,
+    });
+    expect(operation).toMatchObject({ status: 'CREATED' });
+    await expect(
+      handlers[IPC_CHANNELS.paymentOperationListStudent]?.(coachSession.token, student.id),
+    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
+    await expect(
+      handlers[IPC_CHANNELS.paymentOperationTestComplete]?.(
+        owner.token,
+        (operation as { id: string }).id,
+        'SBP',
+      ),
+    ).rejects.toThrow('Тестовый платёжный провайдер отключён');
+    process.env.ARAVA_E2E_PAYMENT_PROVIDER = 'memory';
+    try {
+      const completed = await handlers[IPC_CHANNELS.paymentOperationTestComplete]?.(
+        owner.token,
+        (operation as { id: string }).id,
+        'SBP',
+      );
+      expect(completed).toMatchObject({ status: 'SUCCEEDED' });
+      expect(await database.payment.count()).toBe(1);
+    } finally {
+      delete process.env.ARAVA_E2E_PAYMENT_PROVIDER;
+    }
+  });
+
   it('keeps backup filesystem operations narrow and OWNER-only at the IPC boundary', async () => {
     const owner = await service.login({
       email: INITIAL_OWNER_EMAIL,
