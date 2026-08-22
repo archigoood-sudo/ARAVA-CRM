@@ -341,6 +341,8 @@ export function createIpcHandlers(
 
     [IPC_CHANNELS.integrationGetStatus]: (unsafeToken) =>
       requireIntegration().getStatus(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationDiagnose]: (unsafeToken) =>
+      requireIntegration().diagnose(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationUpdateSettings]: (unsafeToken, unsafeInput) =>
       requireIntegration().updateSettings(
         sessionTokenSchema.parse(unsafeToken),

@@ -1,4 +1,4 @@
-import type { IntegrationConnectionState } from '@arava/shared';
+import type { IntegrationConnectionState, IntegrationDiagnosticLevel } from '@arava/shared';
 import {
   Badge,
   Button,
@@ -18,7 +18,17 @@ import {
   TableRow,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Cable, CloudCog, Pencil, RefreshCw, ShieldCheck } from 'lucide-react';
+import {
+  Cable,
+  CheckCircle2,
+  CloudCog,
+  Pencil,
+  RefreshCw,
+  ShieldCheck,
+  Stethoscope,
+  TriangleAlert,
+  XCircle,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -61,6 +71,16 @@ const entityLabels: Record<string, string> = {
   SUBSTITUTION: 'Замена тренера',
   TARIFF: 'Тариф',
   TRAINER: 'Тренер',
+};
+const diagnosticOverallLabels = {
+  ERROR: 'Обнаружены ошибки',
+  HEALTHY: 'Синхронизация работает',
+  WARNING: 'Есть предупреждения',
+} as const;
+const diagnosticLevelLabels: Record<IntegrationDiagnosticLevel, string> = {
+  ERROR: 'Ошибка',
+  WARNING: 'Предупреждение',
+  WORKING: 'Работает',
 };
 
 function errorMessage(error: unknown): string {
@@ -161,6 +181,11 @@ export function IntegrationSettings() {
       setEditingDisplayName('');
       await refresh();
     },
+  });
+  const diagnostics = useMutation({
+    mutationFn: () => getDesktopApi().integration.diagnose(getSessionToken()),
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: () => setNotice(undefined),
   });
 
   const prepare = async () => {
@@ -392,6 +417,14 @@ export function IntegrationSettings() {
           >
             <RefreshCw className="size-4" /> Синхронизировать сейчас
           </Button>
+          <Button
+            disabled={diagnostics.isPending}
+            onClick={() => diagnostics.mutate()}
+            variant="outline"
+          >
+            <Stethoscope className="size-4" />
+            {diagnostics.isPending ? 'Выполняется диагностика…' : 'Запустить диагностику'}
+          </Button>
           <Button disabled={preview.isFetching} onClick={() => void prepare()} variant="outline">
             <CloudCog className="size-4" /> Первичная синхронизация
           </Button>
@@ -399,6 +432,60 @@ export function IntegrationSettings() {
             {showLog ? 'Скрыть журнал' : 'Журнал синхронизации'}
           </Button>
         </div>
+
+        {diagnostics.data ? (
+          <div
+            className="space-y-4 rounded-2xl border border-border bg-background p-5"
+            data-testid="integration-diagnostics"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-lg font-semibold">
+                  {diagnosticOverallLabels[diagnostics.data.overall]}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Проверено {dateTime(diagnostics.data.checkedAt)} · Устройство{' '}
+                  {diagnostics.data.device.displayName ??
+                    formatShortDeviceId(diagnostics.data.device.deviceId)}
+                </p>
+              </div>
+              <Badge>{diagnosticOverallLabels[diagnostics.data.overall]}</Badge>
+            </div>
+            <div className="grid gap-2 lg:grid-cols-2">
+              {diagnostics.data.checks.map((check) => {
+                const Icon =
+                  check.status === 'WORKING'
+                    ? CheckCircle2
+                    : check.status === 'WARNING'
+                      ? TriangleAlert
+                      : XCircle;
+                const color =
+                  check.status === 'WORKING'
+                    ? 'text-success'
+                    : check.status === 'WARNING'
+                      ? 'text-amber-600'
+                      : 'text-destructive';
+                return (
+                  <div className="flex gap-3 rounded-xl bg-muted/60 p-3" key={check.id}>
+                    <Icon aria-hidden className={`mt-0.5 size-5 shrink-0 ${color}`} />
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold">{check.label}</p>
+                        <span className={`text-xs font-medium ${color}`}>
+                          {diagnosticLevelLabels[check.status]}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">{check.detail}</p>
+                      {check.action ? (
+                        <p className="mt-1 text-xs font-medium">Что делать: {check.action}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
 
         {preview.data ? (
           <div className="rounded-2xl border border-accent/50 bg-accent/10 p-5">

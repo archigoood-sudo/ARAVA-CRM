@@ -218,6 +218,7 @@ export const IPC_CHANNELS = {
   groupUpdate: 'group:update',
   globalSearch: 'global-search:query',
   integrationConfirmInitialSync: 'integration:confirm-initial-sync',
+  integrationDiagnose: 'integration:diagnose',
   integrationGetStatus: 'integration:get-status',
   integrationListLog: 'integration:list-log',
   integrationPair: 'integration:pair',
@@ -1818,6 +1819,26 @@ export interface IntegrationStatus {
   devices: IntegrationDeviceSummary[];
 }
 
+export type IntegrationDiagnosticLevel = 'WORKING' | 'WARNING' | 'ERROR';
+
+export interface IntegrationDiagnosticCheck {
+  action?: string;
+  detail: string;
+  id: string;
+  label: string;
+  status: IntegrationDiagnosticLevel;
+}
+
+export interface IntegrationDiagnostics {
+  checkedAt: string;
+  checks: IntegrationDiagnosticCheck[];
+  device: {
+    deviceId: string;
+    displayName?: string;
+  };
+  overall: 'HEALTHY' | 'WARNING' | 'ERROR';
+}
+
 export interface IntegrationDeviceSummary {
   conflictCount: number;
   deviceId: string;
@@ -1981,6 +2002,7 @@ export interface AravaDesktopApi {
   };
   integration: {
     confirmInitialSync: (token: string) => Promise<IntegrationStatus>;
+    diagnose: (token: string) => Promise<IntegrationDiagnostics>;
     getStatus: (token: string) => Promise<IntegrationStatus>;
     listLog: (token: string) => Promise<IntegrationLogEntry[]>;
     pair: (token: string, input: IntegrationPairInput) => Promise<IntegrationStatus>;

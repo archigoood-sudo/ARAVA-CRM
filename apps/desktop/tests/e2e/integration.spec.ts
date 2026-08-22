@@ -142,7 +142,20 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       return;
     }
     if (request.url?.endsWith('/devices')) {
-      respond(response, { apiVersion: 'v1', devices: [] });
+      const deviceId = String(request.headers['x-arava-device-id'] ?? 'e2e-device');
+      respond(response, {
+        apiVersion: 'v1',
+        devices: [
+          {
+            conflictCount: 0,
+            deviceId,
+            displayName: 'Диагностическое устройство',
+            lastInboundCursor: 0,
+            pendingCount: 0,
+            status: 'ACTIVE',
+          },
+        ],
+      });
       return;
     }
     const operations = Array.isArray(body.operations) ? body.operations : [];
@@ -202,6 +215,14 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await expect(page.getByText('Устройство подключено к сайту.')).toBeVisible();
     await page.getByRole('button', { name: 'Проверить соединение' }).click();
     await expect(page.getByText('Соединение с сайтом установлено.')).toBeVisible();
+    await page.getByRole('button', { name: 'Запустить диагностику' }).click();
+    const diagnostics = page.getByTestId('integration-diagnostics');
+    await expect(
+      diagnostics.getByText('Есть предупреждения', { exact: true }).first(),
+    ).toBeVisible();
+    await expect(diagnostics.getByText('Сервер доступен', { exact: true })).toBeVisible();
+    await expect(diagnostics.getByText('Устройство авторизовано', { exact: true })).toBeVisible();
+    await expect(diagnostics).not.toContainText('e2e-token');
     await page.getByRole('link', { name: 'Чаты' }).click();
     await expect(page.getByRole('heading', { level: 2, name: 'Чаты' })).toBeVisible();
     await expect(page.getByText('Анна Клиент', { exact: true }).first()).toBeVisible();

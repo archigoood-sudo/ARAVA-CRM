@@ -62,6 +62,7 @@ const desktopApi: AravaDesktopApi = {
   },
   integration: {
     confirmInitialSync: (token) => invoke(IPC_CHANNELS.integrationConfirmInitialSync, token),
+    diagnose: (token) => invoke(IPC_CHANNELS.integrationDiagnose, token),
     getStatus: (token) => invoke(IPC_CHANNELS.integrationGetStatus, token),
     listLog: (token) => invoke(IPC_CHANNELS.integrationListLog, token),
     pair: (token, input) => invoke(IPC_CHANNELS.integrationPair, token, input),

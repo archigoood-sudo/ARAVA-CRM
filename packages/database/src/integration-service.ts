@@ -1,10 +1,13 @@
 import type {
+  AuthenticatedUser,
   ChatListQuery,
   ChatListResult,
   ChatMessagePage,
   ChatSendInput,
   ChatSummary,
   IntegrationInitialSyncPreview,
+  IntegrationDiagnosticCheck,
+  IntegrationDiagnostics,
   IntegrationDeviceSummary,
   IntegrationLogEntry,
   IntegrationPairInput,
@@ -132,6 +135,11 @@ interface ApiErrorBody {
   message?: string;
 }
 
+interface IntegrationHealthDetails {
+  apiVersion: string;
+  deviceStatus?: string;
+}
+
 interface BatchAcknowledgement {
   accepted: SyncAcknowledgement[];
   apiVersion: string;
@@ -178,6 +186,54 @@ class IntegrationApiError extends Error {
     super(message);
     this.name = 'IntegrationApiError';
   }
+}
+
+function diagnosticFailure(error: unknown): { action: string; detail: string } {
+  const code = error instanceof IntegrationApiError ? error.errorCode : 'UNKNOWN';
+  if (code === 'TIMEOUT') {
+    return {
+      action: 'Проверьте интернет и повторите диагностику.',
+      detail: 'Сервер не ответил за отведённое время.',
+    };
+  }
+  if (code === 'NETWORK_UNAVAILABLE') {
+    return {
+      action: 'Проверьте интернет и адрес API сайта.',
+      detail: 'Не удалось установить соединение с сервером.',
+    };
+  }
+  if (code === 'DEVICE_REVOKED') {
+    return {
+      action: 'Подключите устройство заново.',
+      detail: 'Сервер отозвал это устройство.',
+    };
+  }
+  if (code === 'AUTH_REQUIRED' || code === 'ACCESS_DENIED' || code === 'HTTP_401') {
+    return {
+      action: 'Подключите устройство заново.',
+      detail: 'Сервер не принял авторизацию устройства.',
+    };
+  }
+  if (code === 'ENDPOINT_NOT_FOUND') {
+    return {
+      action: 'Проверьте совместимость версии ARAVA-WEB.',
+      detail: 'Сервис отсутствует на текущей версии сайта.',
+    };
+  }
+  return {
+    action: 'Повторите проверку позже или обратитесь к администратору сайта.',
+    detail: 'Сервис сайта не прошёл проверку.',
+  };
+}
+
+function diagnosticCheck(
+  id: string,
+  label: string,
+  status: IntegrationDiagnosticCheck['status'],
+  detail: string,
+  action?: string,
+): IntegrationDiagnosticCheck {
+  return { ...(action ? { action } : {}), detail, id, label, status };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -477,6 +533,86 @@ export class IntegrationApiClient {
       );
     }
     return optionalString(payload.deviceToken);
+  }
+
+  async inspectHealth(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+  ): Promise<IntegrationHealthDetails> {
+    const payload = await this.request(baseUrl, 'health', deviceId, token, 'GET');
+    if (!isRecord(payload) || !optionalString(payload.apiVersion)) {
+      throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверный ответ.');
+    }
+    return {
+      apiVersion: String(payload.apiVersion),
+      ...(typeof payload.deviceStatus === 'string' ? { deviceStatus: payload.deviceStatus } : {}),
+    };
+  }
+
+  async probeChat(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+  ): Promise<void> {
+    await this.probeEndpoint(baseUrl, 'chats?limit=1', deviceId, token, 'GET', context);
+  }
+
+  async probePublications(baseUrl: string, deviceId: string, token: string): Promise<void> {
+    await this.probeEndpoint(baseUrl, 'publications/media', deviceId, token, 'OPTIONS');
+  }
+
+  private async probeEndpoint(
+    baseUrl: string,
+    path: string,
+    deviceId: string,
+    token: string,
+    method: 'GET' | 'OPTIONS',
+    context?: CrmChatRequestContext,
+  ): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      'X-ARAVA-API-Version': INTEGRATION_API_VERSION,
+      'X-ARAVA-Device-ID': deviceId,
+    };
+    if (context) {
+      headers['X-ARAVA-CRM-Context'] = Buffer.from(JSON.stringify(context), 'utf8').toString(
+        'base64url',
+      );
+    }
+    try {
+      const response = await this.fetchImplementation(this.endpoint(baseUrl, path), {
+        headers,
+        method,
+        signal: controller.signal,
+      });
+      if (response.ok || (method === 'OPTIONS' && response.status === 405)) return;
+      const code =
+        response.status === 401
+          ? 'AUTH_REQUIRED'
+          : response.status === 403
+            ? 'ACCESS_DENIED'
+            : response.status === 404
+              ? 'ENDPOINT_NOT_FOUND'
+              : `HTTP_${String(response.status)}`;
+      throw new IntegrationApiError(
+        code,
+        response.status === 429 || response.status >= 500,
+        'Сервис сайта недоступен.',
+      );
+    } catch (error) {
+      if (error instanceof IntegrationApiError) throw error;
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new IntegrationApiError('TIMEOUT', true, 'Сервер не ответил вовремя.');
+      }
+      throw new IntegrationApiError('NETWORK_UNAVAILABLE', true, 'Нет соединения с сайтом.');
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async syncBatch(
@@ -847,11 +983,12 @@ export class IntegrationService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  private async assertOwner(token: string): Promise<void> {
+  private async assertOwner(token: string): Promise<AuthenticatedUser> {
     const actor = await this.application.authenticate(token);
     if (actor.role !== 'OWNER') {
       throw new DomainError('AUTHORIZATION', 'Настраивать интеграцию может только владелец.');
     }
+    return actor;
   }
 
   private async setting(key: string): Promise<string | undefined> {
@@ -1022,6 +1159,354 @@ export class IntegrationService {
       inboundCursor: Number(inboundCursor ?? 0),
       pendingCount,
       syncInProgress: this.processing,
+    };
+  }
+
+  async diagnose(token: string): Promise<IntegrationDiagnostics> {
+    const actor = await this.assertOwner(token);
+    const checkedAt = this.now().toISOString();
+    const [deviceId, deviceToken, settings, outboxCounts, conflictCount] = await Promise.all([
+      this.credentials.getDeviceId(),
+      this.credentials.getToken(),
+      this.database.appSetting.findMany({ where: { key: { startsWith: 'integration.' } } }),
+      this.database.syncOutbox.groupBy({
+        _count: true,
+        by: ['status'],
+        where: { status: { in: ['PENDING', 'PROCESSING', 'FAILED'] } },
+      }),
+      this.database.syncConflict.count({ where: { status: 'OPEN' } }),
+    ]);
+    const values = new Map(settings.map(({ key, value }) => [key, value]));
+    const count = (status: 'PENDING' | 'PROCESSING' | 'FAILED') =>
+      outboxCounts.find((entry) => entry.status === status)?._count ?? 0;
+    const pendingCount = count('PENDING') + count('PROCESSING');
+    const failedCount = count('FAILED');
+    const inboundCursor = Number(values.get(SETTINGS.inboundCursor) ?? 0);
+    const lastInboundSync = values.get(SETTINGS.lastInboundSync);
+    const lastOutboundSync = values.get(SETTINGS.lastOutboundSync);
+    const enabled = values.get(SETTINGS.enabled) === 'true';
+    const baseUrl = values.get(SETTINGS.baseUrl);
+    const checks: IntegrationDiagnosticCheck[] = [
+      diagnosticCheck(
+        'device-identity',
+        'Идентификатор устройства доступен',
+        'WORKING',
+        `Устройство ${deviceId.slice(0, 8)}… готово к проверке.`,
+      ),
+      diagnosticCheck(
+        'outbox-access',
+        'Исходящая очередь доступна',
+        'WORKING',
+        'Локальная очередь синхронизации читается без ошибок.',
+      ),
+      pendingCount > 0
+        ? diagnosticCheck(
+            'outbox-pending',
+            'Изменения ожидают отправки',
+            'WARNING',
+            `${String(pendingCount)} изменений ещё не отправлено.`,
+            'Запустите синхронизацию сейчас.',
+          )
+        : diagnosticCheck(
+            'outbox-pending',
+            'Очередь отправки обработана',
+            'WORKING',
+            'Ожидающих изменений нет.',
+          ),
+      failedCount > 0
+        ? diagnosticCheck(
+            'outbox-failed',
+            'Есть ошибки отправки',
+            'ERROR',
+            `${String(failedCount)} изменений завершились ошибкой.`,
+            'Запустите синхронизацию сейчас и проверьте результат.',
+          )
+        : diagnosticCheck(
+            'outbox-failed',
+            'Ошибок отправки нет',
+            'WORKING',
+            'В исходящей очереди нет ошибочных операций.',
+          ),
+      diagnosticCheck(
+        'outbound-last-success',
+        'Последняя исходящая синхронизация',
+        lastOutboundSync ? 'WORKING' : 'WARNING',
+        lastOutboundSync
+          ? `Успешно: ${new Date(lastOutboundSync).toLocaleString('ru-RU')}.`
+          : 'Исходящая синхронизация ещё не выполнялась.',
+        lastOutboundSync ? undefined : 'Запустите синхронизацию сейчас.',
+      ),
+      diagnosticCheck(
+        'inbound-cursor',
+        'Состояние входящей синхронизации доступно',
+        'WORKING',
+        `Текущая позиция входящего журнала: ${String(inboundCursor)}.`,
+      ),
+      diagnosticCheck(
+        'inbound-last-success',
+        'Последняя входящая синхронизация',
+        lastInboundSync ? 'WORKING' : 'WARNING',
+        lastInboundSync
+          ? `Успешно: ${new Date(lastInboundSync).toLocaleString('ru-RU')}.`
+          : 'Входящая синхронизация ещё не выполнялась.',
+        lastInboundSync ? undefined : 'Запустите синхронизацию сейчас.',
+      ),
+      conflictCount > 0
+        ? diagnosticCheck(
+            'conflicts',
+            'Есть неразрешённые конфликты',
+            'WARNING',
+            `Открытых конфликтов: ${String(conflictCount)}.`,
+            'Разрешите конфликты перед дальнейшей работой.',
+          )
+        : diagnosticCheck(
+            'conflicts',
+            'Неразрешённых конфликтов нет',
+            'WORKING',
+            'Открытые конфликты не обнаружены.',
+          ),
+    ];
+    let displayName: string | undefined;
+    const unavailableRemoteChecks = (detail: string, action: string) => {
+      for (const [id, label] of [
+        ['server', 'Сервер доступен'],
+        ['integration-health', 'Сервис синхронизации отвечает'],
+        ['api-version', 'Версия API совместима'],
+        ['device-auth', 'Устройство авторизовано'],
+        ['device-status', 'Устройство не отозвано'],
+        ['device-recognized', 'Сервер распознаёт это устройство'],
+        ['chat-api', 'Сервис чатов доступен'],
+        ['publication-api', 'Сервис публикаций доступен'],
+      ] as const) {
+        checks.push(diagnosticCheck(id, label, 'WARNING', detail, action));
+      }
+    };
+
+    if (!enabled) {
+      unavailableRemoteChecks(
+        'Интеграция выключена, удалённые проверки не выполнялись.',
+        'Включите интеграцию в настройках.',
+      );
+    } else if (!baseUrl || !deviceToken) {
+      unavailableRemoteChecks(
+        'Устройство ещё не подключено к сайту.',
+        'Подключите устройство с помощью кода подключения.',
+      );
+    } else {
+      let remoteReady = false;
+      try {
+        const health = await this.api.inspectHealth(baseUrl, deviceId, deviceToken);
+        checks.push(
+          diagnosticCheck('server', 'Сервер доступен', 'WORKING', 'Сервер ARAVA-WEB ответил.'),
+          diagnosticCheck(
+            'integration-health',
+            'Сервис синхронизации отвечает',
+            'WORKING',
+            'Проверка состояния интеграции выполнена.',
+          ),
+          health.apiVersion === INTEGRATION_API_VERSION
+            ? diagnosticCheck(
+                'api-version',
+                'Версия API совместима',
+                'WORKING',
+                `Используется API ${INTEGRATION_API_VERSION}.`,
+              )
+            : diagnosticCheck(
+                'api-version',
+                'Версия API несовместима',
+                'ERROR',
+                `CRM ожидает ${INTEGRATION_API_VERSION}, сервер сообщил ${health.apiVersion}.`,
+                'Обновите CRM или ARAVA-WEB до совместимых версий.',
+              ),
+          diagnosticCheck(
+            'device-auth',
+            'Устройство авторизовано',
+            'WORKING',
+            'Сервер принял текущую авторизацию устройства.',
+          ),
+        );
+        if (health.deviceStatus === 'ACTIVE') {
+          checks.push(
+            diagnosticCheck(
+              'device-status',
+              'Устройство не отозвано',
+              'WORKING',
+              'Статус устройства на сервере: активно.',
+            ),
+          );
+        } else if (health.deviceStatus === 'REVOKED') {
+          checks.push(
+            diagnosticCheck(
+              'device-status',
+              'Устройство отозвано',
+              'ERROR',
+              'Сервер запретил синхронизацию этого устройства.',
+              'Подключите устройство заново.',
+            ),
+          );
+        } else {
+          checks.push(
+            diagnosticCheck(
+              'device-status',
+              'Статус устройства требует проверки',
+              'WARNING',
+              'Сервер не подтвердил активный статус устройства.',
+              'Проверьте устройство на сервере или подключите его заново.',
+            ),
+          );
+        }
+        remoteReady = health.apiVersion === INTEGRATION_API_VERSION;
+      } catch (error) {
+        const failure = diagnosticFailure(error);
+        const serverReached =
+          error instanceof IntegrationApiError &&
+          error.errorCode !== 'NETWORK_UNAVAILABLE' &&
+          error.errorCode !== 'TIMEOUT';
+        checks.push(
+          diagnosticCheck(
+            'server',
+            'Сервер доступен',
+            serverReached ? 'WORKING' : 'ERROR',
+            serverReached ? 'Сервер ответил, но отклонил запрос.' : failure.detail,
+            serverReached ? undefined : failure.action,
+          ),
+          diagnosticCheck(
+            'integration-health',
+            'Сервис синхронизации отвечает',
+            'ERROR',
+            failure.detail,
+            failure.action,
+          ),
+          diagnosticCheck(
+            'api-version',
+            'Версия API совместима',
+            'WARNING',
+            'Версию API не удалось проверить.',
+            failure.action,
+          ),
+          diagnosticCheck(
+            'device-auth',
+            'Устройство авторизовано',
+            'ERROR',
+            failure.detail,
+            failure.action,
+          ),
+          diagnosticCheck(
+            'device-status',
+            'Устройство не отозвано',
+            'WARNING',
+            'Статус устройства не удалось проверить.',
+            failure.action,
+          ),
+        );
+      }
+
+      if (remoteReady) {
+        try {
+          const devices = await this.api.listDevices(baseUrl, deviceId, deviceToken);
+          const currentDevice = devices.find((device) => device.deviceId === deviceId);
+          displayName = currentDevice?.displayName ?? currentDevice?.name;
+          if (!currentDevice) {
+            checks.push(
+              diagnosticCheck(
+                'device-recognized',
+                'Сервер не распознаёт это устройство',
+                'ERROR',
+                'Текущий идентификатор отсутствует в списке устройств сервера.',
+                'Подключите устройство заново.',
+              ),
+            );
+          } else if (currentDevice.status === 'REVOKED') {
+            checks.push(
+              diagnosticCheck(
+                'device-recognized',
+                'Устройство отозвано',
+                'ERROR',
+                'Сервер распознал устройство, но его доступ отозван.',
+                'Подключите устройство заново.',
+              ),
+            );
+          } else {
+            checks.push(
+              diagnosticCheck(
+                'device-recognized',
+                'Сервер распознаёт это устройство',
+                'WORKING',
+                'Идентификатор устройства найден среди активных подключений.',
+              ),
+            );
+          }
+        } catch (error) {
+          const failure = diagnosticFailure(error);
+          checks.push(
+            diagnosticCheck(
+              'device-recognized',
+              'Сервер распознаёт это устройство',
+              'ERROR',
+              failure.detail,
+              failure.action,
+            ),
+          );
+        }
+
+        const context: CrmChatRequestContext = {
+          branchIds: actor.branchIds,
+          name: actor.fullName,
+          role: actor.role,
+          userId: actor.id,
+        };
+        const [chatProbe, publicationProbe] = await Promise.allSettled([
+          this.api.probeChat(baseUrl, deviceId, deviceToken, context),
+          this.api.probePublications(baseUrl, deviceId, deviceToken),
+        ]);
+        for (const [id, label, result] of [
+          ['chat-api', 'Сервис чатов доступен', chatProbe],
+          ['publication-api', 'Сервис публикаций доступен', publicationProbe],
+        ] as const) {
+          if (result.status === 'fulfilled') {
+            checks.push(
+              diagnosticCheck(
+                id,
+                label,
+                'WORKING',
+                'Защищённый endpoint ответил без записи данных.',
+              ),
+            );
+          } else {
+            const failure = diagnosticFailure(result.reason);
+            checks.push(diagnosticCheck(id, label, 'ERROR', failure.detail, failure.action));
+          }
+        }
+      } else {
+        for (const [id, label] of [
+          ['device-recognized', 'Сервер распознаёт это устройство'],
+          ['chat-api', 'Сервис чатов доступен'],
+          ['publication-api', 'Сервис публикаций доступен'],
+        ] as const) {
+          if (checks.some((check) => check.id === id)) continue;
+          checks.push(
+            diagnosticCheck(
+              id,
+              label,
+              'WARNING',
+              'Проверка пропущена из-за недоступной или несовместимой интеграции.',
+              'Исправьте основное подключение и повторите диагностику.',
+            ),
+          );
+        }
+      }
+    }
+
+    const overall = checks.some(({ status }) => status === 'ERROR')
+      ? 'ERROR'
+      : checks.some(({ status }) => status === 'WARNING')
+        ? 'WARNING'
+        : 'HEALTHY';
+    return {
+      checkedAt,
+      checks,
+      device: { deviceId, ...(displayName ? { displayName } : {}) },
+      overall,
     };
   }
 

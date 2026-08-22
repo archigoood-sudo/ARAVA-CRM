@@ -72,6 +72,9 @@ describe('Sprint 4.5A multi-device integration', () => {
   let database: DatabaseClient;
   let directory: string;
   let integration: IntegrationService;
+  let failedProbe: 'CHAT' | 'PUBLICATION' | undefined;
+  let healthApiVersion: string;
+  let healthDeviceStatus: string;
   let mode: ServerMode;
   let now: Date;
   let ownerToken: string;
@@ -97,6 +100,9 @@ describe('Sprint 4.5A multi-device integration', () => {
     canonical = new Map();
     changes = [];
     deviceList = [];
+    failedProbe = undefined;
+    healthApiVersion = 'v1';
+    healthDeviceStatus = 'ACTIVE';
     mode = 'SUCCESS';
     now = new Date('2030-08-18T10:00:00.000Z');
     received = [];
@@ -153,10 +159,34 @@ describe('Sprint 4.5A multi-device integration', () => {
       }
       if (request.url?.endsWith('/health')) {
         json(response, 200, {
-          apiVersion: 'v1',
-          deviceStatus: 'ACTIVE',
+          apiVersion: healthApiVersion,
+          deviceStatus: healthDeviceStatus,
           serverTimestamp: now.toISOString(),
         });
+        return;
+      }
+      if (request.method === 'GET' && request.url?.startsWith('/api/integration/v1/chats')) {
+        if (failedProbe === 'CHAT') {
+          json(response, 503, { code: 'TEMPORARY_ERROR' });
+          return;
+        }
+        json(response, 200, {
+          conversations: [],
+          serverTimestamp: now.toISOString(),
+          totalUnread: 0,
+        });
+        return;
+      }
+      if (
+        request.method === 'OPTIONS' &&
+        request.url?.endsWith('/api/integration/v1/publications/media')
+      ) {
+        if (failedProbe === 'PUBLICATION') {
+          json(response, 503, { code: 'TEMPORARY_ERROR' });
+          return;
+        }
+        response.writeHead(204);
+        response.end();
         return;
       }
       if (request.url?.includes('/changes?')) {
@@ -414,6 +444,176 @@ describe('Sprint 4.5A multi-device integration', () => {
     const device = status.devices.find((item) => item.deviceId === targetDeviceId);
     expect(device?.displayName).toBeUndefined();
     expect(device?.name).toBe('Старый сервер');
+  });
+
+  it('returns a fully healthy read-only diagnostic without exposing credentials', async () => {
+    await pair();
+    deviceList.push({
+      conflictCount: 0,
+      deviceId: credentials.deviceId,
+      displayName: 'Ресепшен',
+      lastInboundCursor: 0,
+      pendingCount: 0,
+      status: 'ACTIVE',
+    });
+    await application.createBranch(ownerToken, { name: 'Диагностика' });
+    await integration.processPending();
+    const before = {
+      conflicts: await database.syncConflict.count(),
+      cursor: await database.appSetting.findUnique({ where: { key: 'integration.inboundCursor' } }),
+      outbox: await database.syncOutbox.findMany({ orderBy: { id: 'asc' } }),
+      token: await credentials.getToken(),
+    };
+
+    const result = await integration.diagnose(ownerToken);
+
+    expect(result.overall).toBe('HEALTHY');
+    expect(result.device).toEqual({ deviceId: credentials.deviceId, displayName: 'Ресепшен' });
+    expect(result.checks.every(({ status }) => status === 'WORKING')).toBe(true);
+    expect(result.checks.map(({ id }) => id)).toEqual(
+      expect.arrayContaining([
+        'server',
+        'integration-health',
+        'api-version',
+        'device-auth',
+        'device-status',
+        'device-recognized',
+        'outbox-access',
+        'outbox-pending',
+        'outbox-failed',
+        'outbound-last-success',
+        'inbound-cursor',
+        'inbound-last-success',
+        'conflicts',
+        'chat-api',
+        'publication-api',
+      ]),
+    );
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain('device-secret');
+    expect(serialized).not.toContain('Authorization');
+    expect(serialized).not.toContain('Bearer');
+    expect({
+      conflicts: await database.syncConflict.count(),
+      cursor: await database.appSetting.findUnique({ where: { key: 'integration.inboundCursor' } }),
+      outbox: await database.syncOutbox.findMany({ orderBy: { id: 'asc' } }),
+      token: await credentials.getToken(),
+    }).toEqual(before);
+  });
+
+  it('reports pending, failed outbox items and unresolved conflicts from local state', async () => {
+    await pair();
+    await application.createBranch(ownerToken, { name: 'Очередь диагностики' });
+    const pending = await integration.diagnose(ownerToken);
+    expect(pending.checks.find(({ id }) => id === 'outbox-pending')).toMatchObject({
+      status: 'WARNING',
+    });
+
+    await database.syncOutbox.updateMany({ data: { status: 'FAILED' } });
+    await database.syncConflict.create({
+      data: {
+        baseRevision: 0,
+        candidateOperation: 'UPSERT',
+        candidatePayloadJson: '{}',
+        canonicalOperation: 'UPSERT',
+        canonicalPayloadJson: '{}',
+        canonicalRevision: 1,
+        entityId: 'diagnostic-entity',
+        entityType: 'BRANCH',
+        serverConflictId: 'diagnostic-conflict',
+      },
+    });
+    const unhealthy = await integration.diagnose(ownerToken);
+    expect(unhealthy.overall).toBe('ERROR');
+    expect(unhealthy.checks.find(({ id }) => id === 'outbox-failed')).toMatchObject({
+      status: 'ERROR',
+    });
+    expect(unhealthy.checks.find(({ id }) => id === 'conflicts')).toMatchObject({
+      status: 'WARNING',
+    });
+  });
+
+  it('returns complete safe results for offline, timeout and revoked-device failures', async () => {
+    await pair();
+    const offlineService = new IntegrationService(
+      database,
+      application,
+      credentials,
+      new IntegrationApiClient(() => Promise.reject(new Error('private network details'))),
+      () => now,
+    );
+    const offline = await offlineService.diagnose(ownerToken);
+    expect(offline.overall).toBe('ERROR');
+    expect(offline.checks.find(({ id }) => id === 'server')).toMatchObject({ status: 'ERROR' });
+    expect(JSON.stringify(offline)).not.toContain('private network details');
+
+    mode = 'SLOW';
+    const timeoutService = new IntegrationService(
+      database,
+      application,
+      credentials,
+      new IntegrationApiClient(globalThis.fetch, 10),
+      () => now,
+    );
+    const timeout = await timeoutService.diagnose(ownerToken);
+    const timeoutHealth = timeout.checks.find(({ id }) => id === 'integration-health');
+    expect(timeoutHealth?.detail).toContain('не ответил');
+    expect(timeoutHealth?.status).toBe('ERROR');
+
+    mode = 'REVOKED';
+    const revoked = await integration.diagnose(ownerToken);
+    const revokedAuth = revoked.checks.find(({ id }) => id === 'device-auth');
+    expect(revokedAuth?.detail).toContain('отозвал');
+    expect(revokedAuth?.status).toBe('ERROR');
+  });
+
+  it('reports incompatible API and independent chat/publication endpoint failures', async () => {
+    await pair();
+    healthApiVersion = 'v2';
+    const incompatible = await integration.diagnose(ownerToken);
+    expect(incompatible.checks.find(({ id }) => id === 'api-version')).toMatchObject({
+      status: 'ERROR',
+    });
+
+    healthApiVersion = 'v1';
+    failedProbe = 'CHAT';
+    const chatFailure = await integration.diagnose(ownerToken);
+    expect(chatFailure.checks.find(({ id }) => id === 'chat-api')).toMatchObject({
+      status: 'ERROR',
+    });
+    expect(chatFailure.checks.find(({ id }) => id === 'publication-api')).toMatchObject({
+      status: 'WORKING',
+    });
+
+    failedProbe = 'PUBLICATION';
+    const publicationFailure = await integration.diagnose(ownerToken);
+    expect(publicationFailure.checks.find(({ id }) => id === 'chat-api')).toMatchObject({
+      status: 'WORKING',
+    });
+    expect(publicationFailure.checks.find(({ id }) => id === 'publication-api')).toMatchObject({
+      status: 'ERROR',
+    });
+  });
+
+  it('allows diagnostics only to OWNER', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Права диагностики' });
+    for (const role of ['ADMIN', 'COACH'] as const) {
+      const email = `diagnostic-${role.toLowerCase()}@arava.local`;
+      const password = `${role}!Diagnostic2026`;
+      await application.createUser(ownerToken, {
+        branchIds: [branch.id],
+        email,
+        fullName: role,
+        password,
+        role,
+      });
+      const session = await application.login({ email, password });
+      await application.changePassword(session.token, {
+        currentPassword: password,
+        newPassword: `${role}!DiagnosticChanged2026`,
+      });
+      await expect(integration.diagnose(session.token)).rejects.toThrow('только владелец');
+    }
   });
 
   it('rolls back the outbox marker when the local entity transaction rolls back', async () => {

@@ -135,7 +135,12 @@ describe('Electron IPC boundary', () => {
     const handlers = createIpcHandlers(database, service, '/test/arava.db', { integration });
     const ownerStatus = await handlers[IPC_CHANNELS.integrationGetStatus]?.(initial.token);
     expect(JSON.stringify(ownerStatus)).not.toContain(credentials.token);
+    const ownerDiagnostics = await handlers[IPC_CHANNELS.integrationDiagnose]?.(initial.token);
+    expect(JSON.stringify(ownerDiagnostics)).not.toContain(credentials.token);
     await expect(handlers[IPC_CHANNELS.integrationGetStatus]?.(admin.token)).rejects.toThrow(
+      'только владелец',
+    );
+    await expect(handlers[IPC_CHANNELS.integrationDiagnose]?.(admin.token)).rejects.toThrow(
       'только владелец',
     );
     await expect(
