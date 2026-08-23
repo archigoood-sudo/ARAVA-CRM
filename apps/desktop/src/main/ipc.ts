@@ -661,6 +661,16 @@ export function createIpcHandlers(
       ),
     [IPC_CHANNELS.groupGet]: (unsafeToken, unsafeId) =>
       studio.getGroup(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.enrollmentEligibleGroups]: (unsafeToken, unsafeStudentId) =>
+      studio.listEligibleGroupsForStudent(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+      ),
+    [IPC_CHANNELS.enrollmentEligibleStudents]: (unsafeToken, unsafeGroupId) =>
+      studio.listEligibleStudentsForGroup(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeGroupId),
+      ),
     [IPC_CHANNELS.groupCreate]: (unsafeToken, unsafeInput) =>
       studio.createGroup(
         sessionTokenSchema.parse(unsafeToken),

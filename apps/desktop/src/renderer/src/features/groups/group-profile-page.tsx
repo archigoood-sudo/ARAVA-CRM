@@ -37,16 +37,9 @@ export function GroupProfilePage() {
     queryKey: queryKeys.group(groupId),
   });
   const students = useQuery({
-    enabled: Boolean(group.data),
-    queryFn: () =>
-      getDesktopApi().students.list(getSessionToken(), {
-        branchId: group.data?.branchId,
-        page: 1,
-        pageSize: 100,
-        sortBy: 'name',
-        sortDirection: 'asc',
-      }),
-    queryKey: ['group-students', group.data?.branchId],
+    enabled: Boolean(group.data) && canManage,
+    queryFn: () => getDesktopApi().groups.listEligibleStudents(getSessionToken(), groupId),
+    queryKey: ['students', 'eligible-for-group', groupId],
   });
   const add = useMutation({
     mutationFn: (input: EnrollmentInput) =>
@@ -56,7 +49,12 @@ export function GroupProfilePage() {
     mutationFn: (id: string) =>
       getDesktopApi().groups.removeEnrollment(getSessionToken(), groupId, id),
   });
-  const refresh = () => client.invalidateQueries({ queryKey: queryKeys.group(groupId) });
+  const refresh = () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: queryKeys.group(groupId) }),
+      client.invalidateQueries({ queryKey: ['students', 'eligible-for-group', groupId] }),
+      client.invalidateQueries({ queryKey: ['groups', 'list'] }),
+    ]);
   if (group.isLoading) return <LoadingState label={t('group.loading')} />;
   if (!group.data || group.isError)
     return (
@@ -130,7 +128,13 @@ export function GroupProfilePage() {
               </p>
             </div>
             {canManage ? (
-              <Button onClick={() => setDialog(true)} size="small">
+              <Button
+                onClick={() => {
+                  void students.refetch();
+                  setDialog(true);
+                }}
+                size="small"
+              >
                 <Plus className="size-4" />
                 {t('group.action.addParticipant')}
               </Button>
@@ -218,12 +222,7 @@ export function GroupProfilePage() {
         onClose={() => setDialog(false)}
         onSubmit={submit}
         open={dialog}
-        students={(students.data?.items ?? []).filter(
-          (student) =>
-            !detail.participants.some(
-              (participant) => !participant.leftAt && participant.studentId === student.id,
-            ),
-        )}
+        students={students.data ?? []}
       />
     </main>
   );

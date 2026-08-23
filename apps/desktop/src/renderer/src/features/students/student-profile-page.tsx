@@ -102,12 +102,9 @@ export function StudentProfilePage() {
     queryKey: queryKeys.branches(),
   });
   const groups = useQuery({
-    enabled: canManage && Boolean(student.data?.student.branchId),
-    queryFn: () =>
-      getDesktopApi().groups.list(getSessionToken(), {
-        branchId: student.data?.student.branchId,
-      }),
-    queryKey: ['groups', 'student-profile', student.data?.student.branchId],
+    enabled: canManage && Boolean(student.data?.student.id),
+    queryFn: () => getDesktopApi().groups.listEligibleGroups(getSessionToken(), studentId),
+    queryKey: ['groups', 'eligible-for-student', studentId],
   });
   const updateStudent = useMutation({
     mutationFn: (input: StudentInput) =>
@@ -153,6 +150,8 @@ export function StudentProfilePage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.studentFinance(studentId) }),
       queryClient.invalidateQueries({ queryKey: ['cards', 'student-current', studentId] }),
       queryClient.invalidateQueries({ queryKey: ['attention'] }),
+      queryClient.invalidateQueries({ queryKey: ['groups', 'eligible-for-student', studentId] }),
+      queryClient.invalidateQueries({ queryKey: ['groups', 'list'] }),
     ]);
   };
   const saveStudent = async (input: StudentInput) => {
@@ -315,7 +314,14 @@ export function StudentProfilePage() {
               <TicketCheck className="size-4" />{' '}
               {profile.currentSubscription ? 'Продлить абонемент' : 'Оформить абонемент'}
             </Button>
-            <Button onClick={() => setGroupDialog(true)} size="small" variant="outline">
+            <Button
+              onClick={() => {
+                void groups.refetch();
+                setGroupDialog(true);
+              }}
+              size="small"
+              variant="outline"
+            >
               <UsersRound className="size-4" /> Добавить в группу
             </Button>
             <Button onClick={() => setCardAction(true)} size="small" variant="outline">
@@ -794,17 +800,11 @@ export function StudentProfilePage() {
             value={selectedGroupId}
           >
             <option value="">Выберите группу</option>
-            {(groups.data ?? [])
-              .filter(
-                (group) =>
-                  group.status !== 'ARCHIVED' &&
-                  !profile.groups.some(({ groupId }) => groupId === group.id),
-              )
-              .map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.name} · свободно {group.availablePlaces}
-                </option>
-              ))}
+            {(groups.data ?? []).map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name} · свободно {group.availablePlaces}
+              </option>
+            ))}
           </Select>
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
         </div>

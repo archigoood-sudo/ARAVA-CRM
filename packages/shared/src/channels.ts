@@ -290,6 +290,8 @@ export const IPC_CHANNELS = {
   publicationSelectImage: 'publication:select-image',
   publicationUpdate: 'publication:update',
   enrollmentAdd: 'enrollment:add',
+  enrollmentEligibleGroups: 'enrollment:eligible-groups',
+  enrollmentEligibleStudents: 'enrollment:eligible-students',
   enrollmentRemove: 'enrollment:remove',
   scheduleCreate: 'schedule:create',
   scheduleDeactivate: 'schedule:deactivate',
@@ -1458,6 +1460,22 @@ export interface EnrollmentSummary {
   studentPhone?: string | undefined;
 }
 
+export interface GroupMembershipGroupOption {
+  availablePlaces: number;
+  branchId: string;
+  id: string;
+  name: string;
+  status: GroupStatus;
+}
+
+export interface GroupMembershipStudentOption {
+  firstName: string;
+  id: string;
+  lastName: string;
+  middleName?: string | undefined;
+  status: StudentStatus;
+}
+
 export interface StudentGroupMembership {
   groupId: string;
   groupName: string;
@@ -2546,6 +2564,11 @@ export interface AravaDesktopApi {
     archive: (token: string, id: string) => Promise<GroupSummary>;
     create: (token: string, input: GroupInput) => Promise<GroupSummary>;
     get: (token: string, id: string) => Promise<GroupDetail>;
+    listEligibleGroups: (token: string, studentId: string) => Promise<GroupMembershipGroupOption[]>;
+    listEligibleStudents: (
+      token: string,
+      groupId: string,
+    ) => Promise<GroupMembershipStudentOption[]>;
     list: (token: string, query: GroupListQuery) => Promise<GroupSummary[]>;
     removeEnrollment: (token: string, groupId: string, enrollmentId: string) => Promise<void>;
     update: (token: string, id: string, input: GroupInput) => Promise<GroupSummary>;

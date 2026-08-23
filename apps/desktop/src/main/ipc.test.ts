@@ -509,6 +509,18 @@ describe('Electron IPC boundary', () => {
     expect(await handlers[IPC_CHANNELS.groupList]?.(owner.token, { search: 'Грац' })).toMatchObject(
       [{ id: group.id }],
     );
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Мила',
+      lastName: 'Петрова',
+      status: 'ACTIVE',
+    });
+    await expect(
+      handlers[IPC_CHANNELS.enrollmentEligibleGroups]?.(owner.token, student.id),
+    ).resolves.toEqual([expect.objectContaining({ id: group.id })]);
+    await expect(
+      handlers[IPC_CHANNELS.enrollmentEligibleStudents]?.(owner.token, group.id),
+    ).resolves.toEqual([expect.objectContaining({ id: student.id })]);
   });
 
   it('validates trainer profile IPC and returns the permission-aware projection', async () => {

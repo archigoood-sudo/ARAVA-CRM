@@ -1,5 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { enrollmentInputSchema, t, type EnrollmentInput, type StudentSummary } from '@arava/shared';
+import {
+  enrollmentInputSchema,
+  t,
+  type EnrollmentInput,
+  type GroupMembershipStudentOption,
+} from '@arava/shared';
 import { Button, Checkbox, Dialog, Label, Select, Textarea } from '@arava/ui';
 import { useLayoutEffect } from 'react';
 import { useForm } from 'react-hook-form';
@@ -17,7 +22,7 @@ export function EnrollmentDialog({
   onClose: () => void;
   onSubmit: (input: EnrollmentInput) => Promise<void>;
   open: boolean;
-  students: StudentSummary[];
+  students: GroupMembershipStudentOption[];
 }) {
   const {
     formState: { errors, isSubmitting },

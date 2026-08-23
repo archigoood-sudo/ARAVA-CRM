@@ -8,6 +8,8 @@ import type {
   GroupDetail,
   GroupInput,
   GroupListQuery,
+  GroupMembershipGroupOption,
+  GroupMembershipStudentOption,
   GroupSummary,
   LessonCancelInput,
   LessonGenerateInput,
@@ -311,6 +313,74 @@ export class StudioService {
       schedules: schedules.map(scheduleSummary),
       upcomingLessons: lessons.map(lessonSummary),
     };
+  }
+
+  async listEligibleGroupsForStudent(
+    token: string,
+    studentId: string,
+  ): Promise<GroupMembershipGroupOption[]> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'groups:manage');
+    const student = await this.database.student.findUnique({ where: { id: studentId } });
+    if (!student) throw new DomainError('NOT_FOUND', t('domain.notFound.student'));
+    assertBranchAccess(actor, student.branchId);
+    if (student.archivedAt || student.status === 'ARCHIVED')
+      throw new DomainError('VALIDATION', t('domain.validation.studentArchived'));
+    const groups = await this.database.danceGroup.findMany({
+      include: groupInclude,
+      orderBy: { name: 'asc' },
+      where: {
+        archivedAt: null,
+        branchId: student.branchId,
+        enrollments: {
+          none: {
+            leftAt: null,
+            status: { in: CURRENT_ENROLLMENTS },
+            studentId,
+          },
+        },
+        status: { in: ['ACTIVE', 'RECRUITING'] },
+      },
+    });
+    return groups.map((group) => ({
+      availablePlaces: Math.max(0, group.capacity - group._count.enrollments),
+      branchId: group.branchId,
+      id: group.id,
+      name: group.name,
+      status: group.status,
+    }));
+  }
+
+  async listEligibleStudentsForGroup(
+    token: string,
+    groupId: string,
+  ): Promise<GroupMembershipStudentOption[]> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'groups:manage');
+    const group = await this.requireGroup(groupId);
+    assertBranchAccess(actor, group.branchId);
+    const students = await this.database.student.findMany({
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      where: {
+        archivedAt: null,
+        branchId: group.branchId,
+        enrollments: {
+          none: {
+            groupId,
+            leftAt: null,
+            status: { in: CURRENT_ENROLLMENTS },
+          },
+        },
+        status: { not: 'ARCHIVED' },
+      },
+    });
+    return students.map(({ firstName, id, lastName, middleName, status }) => ({
+      firstName,
+      id,
+      lastName,
+      middleName: middleName ?? undefined,
+      status,
+    }));
   }
 
   async createGroup(token: string, input: GroupInput): Promise<GroupSummary> {

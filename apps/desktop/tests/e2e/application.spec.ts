@@ -71,6 +71,12 @@ test('вход, создание филиала, ученика и контак�
     await studentDialog.getByRole('button', { name: 'Добавить ученика' }).click();
     await expect(window.getByRole('link', { name: /Петрова Мила/u })).toBeVisible();
 
+    await window.getByRole('button', { name: 'Добавить ученика' }).click();
+    await studentDialog.getByLabel('Фамилия').fill('Соколова');
+    await studentDialog.getByLabel('Имя').fill('Ирина');
+    await studentDialog.getByRole('button', { name: 'Добавить ученика' }).click();
+    await expect(window.getByRole('link', { name: /Соколова Ирина/u })).toBeVisible();
+
     await window.getByRole('link', { name: /Петрова Мила/u }).click();
     await window.getByRole('button', { name: 'Добавить контакт' }).click();
     const contactDialog = window.getByRole('dialog');
@@ -118,12 +124,39 @@ test('вход, создание филиала, ученика и контак�
     await groupDialog.getByLabel('Филиал').selectOption({ label: 'Центральный филиал' });
     await groupDialog.getByRole('button', { name: 'Сохранить группу' }).click();
     await expect(window.getByText('Импульс E2E').first()).toBeVisible();
-    await window.getByRole('button', { name: 'Действия' }).click();
+
+    await window.getByRole('button', { name: 'Создать группу' }).click();
+    await groupDialog.getByLabel('Название группы').fill('Ритм E2E');
+    await groupDialog.getByLabel('Направление').fill('Контемпорари');
+    await groupDialog.getByLabel('Филиал').selectOption({ label: 'Центральный филиал' });
+    await groupDialog.getByRole('button', { name: 'Сохранить группу' }).click();
+    await expect(window.getByText('Ритм E2E').first()).toBeVisible();
+
+    await window
+      .locator('article')
+      .filter({ hasText: 'Импульс E2E' })
+      .getByRole('button', { name: 'Действия' })
+      .click();
     await window.getByRole('button', { name: 'Добавить ученика' }).click();
     const enrollmentDialog = window.getByRole('dialog');
+    await expect(enrollmentDialog.getByRole('option', { name: 'Петрова Мила' })).toBeAttached();
+    await expect(enrollmentDialog.getByRole('option', { name: 'Соколова Ирина' })).toBeAttached();
     await enrollmentDialog.getByLabel('Выберите ученика').selectOption({ label: 'Петрова Мила' });
     await enrollmentDialog.getByRole('button', { name: 'Добавить в группу' }).click();
     await expect(window.getByText('Петрова Мила')).toBeVisible();
+
+    await window.getByRole('link', { name: 'Ученики' }).click();
+    await window.getByRole('link', { name: /Петрова Мила/u }).click();
+    await window.getByRole('button', { name: 'Добавить в группу' }).click();
+    const groupMembershipDialog = window.getByRole('dialog');
+    const groupMembershipSelect = groupMembershipDialog.getByLabel('Группа');
+    await expect(groupMembershipSelect.getByRole('option', { name: /Ритм E2E/u })).toBeAttached();
+    await expect(groupMembershipSelect.getByRole('option', { name: /Импульс E2E/u })).toHaveCount(
+      0,
+    );
+    await groupMembershipSelect.selectOption({ label: 'Ритм E2E · свободно 20' });
+    await groupMembershipDialog.getByRole('button', { name: 'Добавить в группу' }).click();
+    await expect(groupMembershipDialog).not.toBeVisible();
 
     await window.getByRole('link', { name: 'Расписание' }).click();
     await window.getByRole('button', { name: 'Добавить в расписание' }).click();
