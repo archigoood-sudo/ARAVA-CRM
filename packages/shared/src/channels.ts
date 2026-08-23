@@ -242,6 +242,7 @@ export const IPC_CHANNELS = {
   integrationDiagnose: 'integration:diagnose',
   integrationListConflicts: 'integration:list-conflicts',
   integrationResolveConflict: 'integration:resolve-conflict',
+  integrationRecoverFromServer: 'integration:recover-from-server',
   integrationReconciliationPreview: 'integration:reconciliation-preview',
   integrationConfirmReconciliation: 'integration:confirm-reconciliation',
   integrationRevokeDevice: 'integration:revoke-device',
@@ -2076,6 +2077,15 @@ export interface IntegrationConflictResolutionInput {
   resolution: 'KEEP_CANONICAL' | 'ACCEPT_CANDIDATE';
 }
 
+export interface IntegrationRecoveryResult {
+  backup: BackupEntry;
+  completedAt: string;
+  receivedChanges: number;
+  resolvedConflicts: number;
+  serverCursor: number;
+  status: IntegrationStatus;
+}
+
 export interface IntegrationReconciliationItem {
   entityId: string;
   entityType: string;
@@ -2256,6 +2266,7 @@ export interface AravaDesktopApi {
       conflictId: string,
       input: IntegrationConflictResolutionInput,
     ) => Promise<IntegrationConflictSummary>;
+    recoverFromServer: (token: string) => Promise<IntegrationRecoveryResult>;
     reconciliationPreview: (token: string) => Promise<IntegrationReconciliationPreview>;
     confirmReconciliation: (token: string) => Promise<IntegrationStatus>;
     revokeDevice: (token: string, deviceId: string) => Promise<IntegrationStatus>;

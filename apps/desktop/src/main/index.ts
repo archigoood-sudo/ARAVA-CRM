@@ -48,19 +48,22 @@ async function bootstrap(): Promise<void> {
 
   await initializeDatabase(database);
   const service = new ApplicationService(database);
-  integration = new IntegrationManager(
-    new IntegrationService(
-      database,
-      service,
-      createIntegrationCredentialStore(app.getPath('userData')),
-    ),
-  );
-  await integration.initialize();
   const backups = new BackupService(database, service, {
     databasePath,
     defaultBackupDirectory: join(app.getPath('userData'), 'backups'),
     externalLogPath: join(app.getPath('userData'), 'backup-restore.log'),
   });
+  integration = new IntegrationManager(
+    new IntegrationService(
+      database,
+      service,
+      createIntegrationCredentialStore(app.getPath('userData')),
+      undefined,
+      undefined,
+      (token) => backups.createManualBackup(token),
+    ),
+  );
+  await integration.initialize();
   const automaticBackup = await backups.runAutomaticBackup();
   if (automaticBackup) log.info('Automatic backup created', { file: automaticBackup.fileName });
   customerDisplay = new CustomerDisplayManager(database, service);

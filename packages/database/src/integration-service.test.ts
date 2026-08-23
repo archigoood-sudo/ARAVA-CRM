@@ -57,6 +57,8 @@ function json(response: ServerResponse, status: number, value: unknown) {
 
 describe('Sprint 4.5A multi-device integration', () => {
   let application: ApplicationService;
+  let backupAttempts: number;
+  let backupFailure: Error | undefined;
   let credentials: MemoryCredentials;
   let canonical: Map<
     string,
@@ -88,6 +90,8 @@ describe('Sprint 4.5A multi-device integration', () => {
     database = createDatabaseClient(toSqliteUrl(join(directory, 'integration.db')));
     await initializeDatabase(database);
     application = new ApplicationService(database);
+    backupAttempts = 0;
+    backupFailure = undefined;
     const owner = await application.login({
       email: INITIAL_OWNER_EMAIL,
       password: INITIAL_OWNER_PASSWORD,
@@ -400,6 +404,19 @@ describe('Sprint 4.5A multi-device integration', () => {
       credentials,
       new IntegrationApiClient(),
       () => now,
+      () => {
+        backupAttempts += 1;
+        if (backupFailure) return Promise.reject(backupFailure);
+        return Promise.resolve({
+          createdAt: now.toISOString(),
+          fileName: 'ARAVA-CRM-recovery.arava-backup',
+          id: 'recovery-backup',
+          integrity: 'VALID',
+          location: join(directory, 'ARAVA-CRM-recovery.arava-backup'),
+          size: 1024,
+          type: 'MANUAL',
+        });
+      },
     );
     await integration.initialize();
   });
@@ -736,6 +753,148 @@ describe('Sprint 4.5A multi-device integration', () => {
       resolution: 'KEEP_CANONICAL',
     });
     expect(resolved.status).toBe('RESOLVED');
+    expect(
+      received.filter(
+        ({ method, path }) =>
+          method === 'POST' && String(path).endsWith('/conflicts/conflict-1/resolve'),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('creates a backup and replaces sync-managed local data from the server without pushing', async () => {
+    await pair();
+    const local = await application.createBranch(ownerToken, { name: 'Тестовый филиал' });
+    await database.syncOutbox.deleteMany();
+    changes.push({
+      entityId: 'server-branch',
+      entityType: 'BRANCH',
+      operation: 'UPSERT',
+      payload: {
+        address: 'Серверная улица',
+        isActive: true,
+        name: 'Филиал с сервера',
+        phone: '',
+      },
+      revision: 1,
+      sequence: 1,
+      serverUpdatedAt: now.toISOString(),
+      sourceDeviceId: 'server-device',
+    });
+    canonical.set('BRANCH:server-branch', {
+      operation: 'UPSERT',
+      payload: { isActive: true, name: 'Филиал с сервера' },
+      revision: 1,
+      sequence: 1,
+    });
+    managedConflicts = [
+      {
+        baseRevision: 0,
+        candidate: { name: 'Тестовый филиал' },
+        candidateOperation: 'UPSERT',
+        canonical: { name: 'Филиал с сервера' },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 1,
+        createdAt: now.toISOString(),
+        differences: [
+          { candidate: 'Тестовый филиал', canonical: 'Филиал с сервера', field: 'name' },
+        ],
+        entityId: 'server-branch',
+        entityType: 'BRANCH',
+        id: 'recovery-conflict',
+        sourceDeviceId: credentials.deviceId,
+        status: 'OPEN',
+      },
+    ];
+    received = [];
+    const tokenBefore = credentials.token;
+
+    const result = await integration.recoverFromServer(ownerToken);
+
+    expect(backupAttempts).toBe(1);
+    expect(result).toMatchObject({ receivedChanges: 1, resolvedConflicts: 1, serverCursor: 1 });
+    expect(await database.branch.findUnique({ where: { id: local.id } })).toBeNull();
+    expect(await database.branch.findUnique({ where: { id: 'server-branch' } })).toMatchObject({
+      name: 'Филиал с сервера',
+    });
+    expect(await database.syncOutbox.count()).toBe(0);
+    expect(await database.syncConflict.count()).toBe(0);
+    expect(
+      await database.appSetting.findUniqueOrThrow({
+        where: { key: 'integration.inboundCursor' },
+      }),
+    ).toMatchObject({ value: '1' });
+    expect(credentials.token).toBe(tokenBefore);
+    expect(received.filter(({ method }) => method === 'POST')).toEqual([
+      expect.objectContaining({
+        path: '/api/integration/v1/conflicts/recovery-conflict/resolve',
+        resolution: 'KEEP_CANONICAL',
+      }),
+    ]);
+    expect(received.some(({ path }) => path === '/api/integration/v1/sync')).toBe(false);
+    await expect(application.restoreSession(ownerToken)).resolves.toMatchObject({ role: 'OWNER' });
+  });
+
+  it('sends the explicitly confirmed device version to canonical conflict resolution', async () => {
+    await pair();
+    managedConflicts = [
+      {
+        baseRevision: 1,
+        candidate: { name: 'Версия устройства' },
+        candidateOperation: 'UPSERT',
+        canonical: { name: 'Версия сервера' },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 2,
+        createdAt: now.toISOString(),
+        differences: [
+          { candidate: 'Версия устройства', canonical: 'Версия сервера', field: 'name' },
+        ],
+        entityId: 'branch-device-version',
+        entityType: 'BRANCH',
+        id: 'conflict-device-version',
+        sourceDeviceId: credentials.deviceId,
+        status: 'OPEN',
+      },
+    ];
+    received = [];
+    await integration.resolveConflict(ownerToken, 'conflict-device-version', {
+      expectedCanonicalRevision: 2,
+      idempotencyKey: 'resolve-device-version-once',
+      resolution: 'ACCEPT_CANDIDATE',
+    });
+    expect(received).toContainEqual(
+      expect.objectContaining({
+        method: 'POST',
+        resolution: 'ACCEPT_CANDIDATE',
+      }),
+    );
+  });
+
+  it('aborts recovery before local mutation when the required backup fails', async () => {
+    await pair();
+    const local = await application.createBranch(ownerToken, { name: 'Сохранить локально' });
+    await database.syncOutbox.deleteMany();
+    backupFailure = new Error('backup failed');
+    await expect(integration.recoverFromServer(ownerToken)).rejects.toThrow('backup failed');
+    expect(await database.branch.findUnique({ where: { id: local.id } })).not.toBeNull();
+    expect(backupAttempts).toBe(1);
+  });
+
+  it('blocks recovery when local-only operational records would be orphaned', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Локальные операции' });
+    await database.calendarException.create({
+      data: {
+        branchId: branch.id,
+        endAt: new Date('2030-08-20T12:00:00.000Z'),
+        startAt: new Date('2030-08-20T10:00:00.000Z'),
+        title: 'Локальный выходной',
+        type: 'DAY_OFF',
+      },
+    });
+    await expect(integration.recoverFromServer(ownerToken)).rejects.toThrow(
+      'локальные финансовые или операционные данные',
+    );
+    expect(backupAttempts).toBe(0);
   });
 
   it('returns a fully healthy read-only diagnostic without exposing credentials', async () => {
@@ -909,6 +1068,7 @@ describe('Sprint 4.5A multi-device integration', () => {
       });
       await expect(integration.diagnose(session.token)).rejects.toThrow('только владелец');
       await expect(integration.listConflicts(session.token)).rejects.toThrow('только владелец');
+      await expect(integration.recoverFromServer(session.token)).rejects.toThrow('только владелец');
       await expect(integration.revokeDevice(session.token, 'device-b')).rejects.toThrow(
         'только владелец',
       );

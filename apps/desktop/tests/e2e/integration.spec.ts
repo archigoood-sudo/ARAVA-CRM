@@ -65,6 +65,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
   let receivedOperations = 0;
   const receivedPaymentPaths: string[] = [];
   let conflictOpen = true;
+  let recoveryMode = false;
   const receivedChatMessages: string[] = [];
   const chat = {
     branchId: null,
@@ -134,6 +135,32 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       return;
     }
     if (request.url?.startsWith('/api/integration/v1/changes')) {
+      if (recoveryMode) {
+        respond(response, {
+          apiVersion: 'v1',
+          canonicalCount: 1,
+          changes: [
+            {
+              entityId: 'server-recovery-branch',
+              entityType: 'BRANCH',
+              operation: 'UPSERT',
+              payload: {
+                address: 'Серверная улица',
+                isActive: true,
+                name: 'Филиал после восстановления',
+                phone: '',
+              },
+              revision: 1,
+              sequence: 1,
+              serverUpdatedAt: new Date().toISOString(),
+              sourceDeviceId: 'server-device',
+            },
+          ],
+          cursor: 1,
+          hasMore: false,
+        });
+        return;
+      }
       respond(response, {
         apiVersion: 'v1',
         canonicalCount: 0,
@@ -418,6 +445,33 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       .toBe(0);
     await page.getByRole('button', { name: 'Журнал синхронизации' }).click();
     await expect(page.getByRole('cell', { name: 'Синхронизировано' }).first()).toBeVisible();
+
+    const operationsBeforeRecovery = receivedOperations;
+    recoveryMode = true;
+    await page.getByRole('button', { name: 'Загрузить состояние с сервера' }).click();
+    await expect(
+      page.getByText(
+        'Локальные синхронизируемые данные этого компьютера будут заменены состоянием сервера. Данные на сервере не изменятся.',
+      ),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Подтвердить загрузку' }).click();
+    await expect(page.getByText(/Состояние сервера загружено/u)).toBeVisible();
+    const recovered = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const token = persisted.state?.token ?? '';
+      return {
+        branches: await api.branches.list(token),
+        status: await api.integration.getStatus(token),
+      };
+    });
+    expect(recovered.branches.map(({ name }) => name)).toEqual(['Филиал после восстановления']);
+    expect(recovered.status.inboundCursor).toBe(1);
+    expect(recovered.status.pendingCount).toBe(0);
+    expect(recovered.status.failedCount).toBe(0);
+    expect(receivedOperations).toBe(operationsBeforeRecovery);
   } finally {
     await closeApplication(application);
     await stopServer(server);

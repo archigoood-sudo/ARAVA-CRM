@@ -74,6 +74,7 @@ const desktopApi: AravaDesktopApi = {
     reconciliationPreview: (token) => invoke(IPC_CHANNELS.integrationReconciliationPreview, token),
     resolveConflict: (token, conflictId, input) =>
       invoke(IPC_CHANNELS.integrationResolveConflict, token, conflictId, input),
+    recoverFromServer: (token) => invoke(IPC_CHANNELS.integrationRecoverFromServer, token),
     revokeDevice: (token, deviceId) =>
       invoke(IPC_CHANNELS.integrationRevokeDevice, token, deviceId),
     pruneJournal: (token) => invoke(IPC_CHANNELS.integrationPruneJournal, token),

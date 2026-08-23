@@ -146,6 +146,7 @@ export function IntegrationSettings() {
   const [editingDeviceId, setEditingDeviceId] = useState<string>();
   const [editingDisplayName, setEditingDisplayName] = useState('');
   const [revokingDeviceId, setRevokingDeviceId] = useState<string>();
+  const [recoveryConfirmationOpen, setRecoveryConfirmationOpen] = useState(false);
   const [resolving, setResolving] = useState<{
     conflict: IntegrationConflictSummary;
     resolution: 'KEEP_CANONICAL' | 'ACCEPT_CANDIDATE';
@@ -276,6 +277,17 @@ export function IntegrationSettings() {
     onSuccess: async () => {
       setResolving(undefined);
       setNotice('Конфликт разрешён. Новая версия будет получена активными устройствами.');
+      await refresh();
+    },
+  });
+  const recover = useMutation({
+    mutationFn: () => getDesktopApi().integration.recoverFromServer(getSessionToken()),
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: async (result) => {
+      setRecoveryConfirmationOpen(false);
+      setNotice(
+        `Состояние сервера загружено. Получено изменений: ${String(result.receivedChanges)}. Конфликтов закрыто серверной версией: ${String(result.resolvedConflicts)}. Резервная копия: ${result.backup.fileName} (${result.backup.location}).`,
+      );
       await refresh();
     },
   });
@@ -675,10 +687,52 @@ export function IntegrationSettings() {
           >
             Обслужить журнал
           </Button>
+          <Button
+            className="border-destructive text-destructive hover:bg-destructive/10"
+            disabled={!status.data?.isPaired || recover.isPending}
+            onClick={() => {
+              setNotice(undefined);
+              setRecoveryConfirmationOpen(true);
+            }}
+            variant="outline"
+          >
+            Загрузить состояние с сервера
+          </Button>
           <Button onClick={() => setShowLog((value) => !value)} variant="ghost">
             {showLog ? 'Скрыть журнал' : 'Журнал синхронизации'}
           </Button>
         </div>
+
+        <Dialog
+          closeLabel="Закрыть"
+          description="Это специальное восстановление для нового или тестового компьютера. Обычную синхронизацию используйте для повседневной работы."
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setRecoveryConfirmationOpen(false)} variant="outline">
+                Отмена
+              </Button>
+              <Button disabled={recover.isPending} onClick={() => recover.mutate()}>
+                {recover.isPending ? 'Создаём копию и загружаем…' : 'Подтвердить загрузку'}
+              </Button>
+            </div>
+          }
+          onClose={() => setRecoveryConfirmationOpen(false)}
+          open={recoveryConfirmationOpen}
+          title="Загрузить состояние с сервера?"
+        >
+          <div className="space-y-3 text-sm">
+            <p className="font-semibold text-destructive">
+              Локальные синхронизируемые данные этого компьютера будут заменены состоянием сервера.
+              Данные на сервере не изменятся.
+            </p>
+            <p className="text-muted-foreground">
+              Перед изменением CRM автоматически создаст полную резервную копию. Устройство,
+              авторизация, локальные пользователи и настройки подключения сохранятся. Если найдены
+              локальные финансовые или другие несинхронизируемые записи, операция будет безопасно
+              заблокирована.
+            </p>
+          </div>
+        </Dialog>
 
         {conflicts.data?.length ? (
           <div

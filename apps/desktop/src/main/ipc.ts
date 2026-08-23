@@ -401,6 +401,8 @@ export function createIpcHandlers(
         identifierSchema.parse(unsafeId),
         integrationConflictResolutionSchema.parse(unsafeInput),
       ),
+    [IPC_CHANNELS.integrationRecoverFromServer]: (unsafeToken) =>
+      requireIntegration().recoverFromServer(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationReconciliationPreview]: (unsafeToken) =>
       requireIntegration().reconciliationPreview(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationConfirmReconciliation]: (unsafeToken) =>
@@ -1659,6 +1661,7 @@ export function registerIpcHandlers(
 }
 
 const SYNC_RELEVANT_MUTATIONS = new Set<string>([
+  IPC_CHANNELS.integrationResolveConflict,
   IPC_CHANNELS.attendanceSave,
   IPC_CHANNELS.branchArchive,
   IPC_CHANNELS.branchCreate,

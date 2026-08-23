@@ -147,6 +147,9 @@ describe('Electron IPC boundary', () => {
       'только владелец',
     );
     await expect(
+      handlers[IPC_CHANNELS.integrationRecoverFromServer]?.(admin.token),
+    ).rejects.toThrow('только владелец');
+    await expect(
       handlers[IPC_CHANNELS.integrationUpdateSettings]?.(initial.token, {
         baseUrl: 'file:///tmp/arava',
         enabled: true,

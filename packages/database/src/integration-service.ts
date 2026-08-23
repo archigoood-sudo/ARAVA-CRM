@@ -3,6 +3,7 @@ import type {
   AqsiDeviceSummary,
   AqsiGatewayPayment,
   AuthenticatedUser,
+  BackupEntry,
   ChatListQuery,
   ChatListResult,
   ChatMessagePage,
@@ -21,6 +22,7 @@ import type {
   IntegrationSettingsInput,
   IntegrationStatus,
   IntegrationReconciliationPreview,
+  IntegrationRecoveryResult,
   PaymentOperationSummary,
   SbpGatewayPayment,
   SbpProviderHealth,
@@ -1617,6 +1619,7 @@ export class IntegrationService {
     private readonly credentials: IntegrationCredentialStore,
     private readonly api = new IntegrationApiClient(),
     private readonly now: () => Date = () => new Date(),
+    private readonly createRecoveryBackup?: (token: string) => Promise<BackupEntry>,
   ) {
     this.finance = new FinanceService(database, application);
     this.studio = new StudioService(database, application);
@@ -2739,8 +2742,227 @@ export class IntegrationService {
       data: { resolvedAt: this.now(), status: 'RESOLVED' },
       where: { serverConflictId: conflictId },
     });
-    await this.processPending();
     return resolved;
+  }
+
+  async recoverFromServer(token: string): Promise<IntegrationRecoveryResult> {
+    const actor = await this.assertOwner(token);
+    if (this.processing) {
+      throw new DomainError(
+        'CONFLICT',
+        'Синхронизация уже выполняется. Дождитесь её завершения и повторите загрузку.',
+      );
+    }
+    this.processing = true;
+    try {
+      return await this.recoverFromServerExclusive(token, actor);
+    } finally {
+      this.processing = false;
+    }
+  }
+
+  private async recoverFromServerExclusive(
+    token: string,
+    actor: AuthenticatedUser,
+  ): Promise<IntegrationRecoveryResult> {
+    const connection = await this.integrationConnection();
+    await this.assertRecoveryDoesNotOrphanLocalOnlyData();
+    if (!this.createRecoveryBackup) {
+      throw new DomainError(
+        'CONFLICT',
+        'Сервис резервного копирования недоступен. Загрузка состояния отменена.',
+      );
+    }
+    const backup = await this.createRecoveryBackup(token);
+    const conflicts = await this.api.listConflicts(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      this.ownerContext(actor),
+    );
+    for (const conflict of conflicts) {
+      await this.api.resolveConflict(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        conflict.id,
+        {
+          expectedCanonicalRevision: conflict.canonicalRevision,
+          idempotencyKey: `recovery-${conflict.id}-${String(conflict.canonicalRevision)}`,
+          resolution: 'KEEP_CANONICAL',
+        },
+        this.ownerContext(actor),
+      );
+    }
+    const { changes, cursor } = await this.fetchRecoverySnapshot(connection);
+    const preservedAssignments = await this.database.userBranch.findMany({
+      where: { user: { role: { not: 'COACH' } } },
+    });
+
+    await this.database.$transaction(async (transaction) => {
+      await transaction.appSetting.upsert({
+        create: { key: 'integration.applyingRemote', value: 'true' },
+        update: { value: 'true' },
+        where: { key: 'integration.applyingRemote' },
+      });
+      await transaction.syncOutbox.deleteMany();
+      await transaction.syncConflict.deleteMany();
+      await transaction.syncEntityState.deleteMany();
+      await transaction.cardScanEvent.deleteMany();
+      await transaction.cardEvent.deleteMany();
+      await transaction.attendance.deleteMany();
+      await transaction.subscriptionLedger.updateMany({ data: { reversesLedgerId: null } });
+      await transaction.subscriptionLedger.deleteMany();
+      await transaction.trainerSubstitution.deleteMany();
+      await transaction.membershipCard.deleteMany();
+      await transaction.studentNote.deleteMany();
+      await transaction.studentContact.deleteMany();
+      await transaction.enrollment.deleteMany();
+      await transaction.lesson.deleteMany();
+      await transaction.weeklySchedule.deleteMany();
+      await transaction.subscription.deleteMany();
+      await transaction.tariff.deleteMany();
+      await transaction.danceGroup.deleteMany();
+      await transaction.student.deleteMany();
+      await transaction.userBranch.deleteMany();
+      await transaction.room.deleteMany();
+      await transaction.branch.deleteMany();
+      await transaction.user.updateMany({
+        data: { isActive: false },
+        where: { role: 'COACH' },
+      });
+
+      for (const change of changes) {
+        await this.applyReplica(transaction, change, actor.id);
+        await transaction.syncEntityState.upsert({
+          create: {
+            entityId: change.entityId,
+            entityType: change.entityType,
+            revision: change.revision,
+            serverSequence: change.sequence,
+            serverUpdatedAt: new Date(change.serverUpdatedAt),
+            sourceDeviceId: change.sourceDeviceId,
+          },
+          update: {
+            revision: change.revision,
+            serverSequence: change.sequence,
+            serverUpdatedAt: new Date(change.serverUpdatedAt),
+            sourceDeviceId: change.sourceDeviceId,
+          },
+          where: {
+            entityType_entityId: {
+              entityId: change.entityId,
+              entityType: change.entityType,
+            },
+          },
+        });
+      }
+
+      const availableBranches = new Set(
+        (await transaction.branch.findMany({ select: { id: true } })).map(({ id }) => id),
+      );
+      const assignments = preservedAssignments.filter(({ branchId }) =>
+        availableBranches.has(branchId),
+      );
+      if (assignments.length > 0) {
+        await transaction.userBranch.createMany({ data: assignments });
+      }
+      const completedAt = this.now().toISOString();
+      for (const [key, value] of [
+        [SETTINGS.inboundCursor, String(cursor)],
+        [SETTINGS.lastInboundSync, completedAt],
+        [SETTINGS.lastSuccessfulSync, completedAt],
+        [SETTINGS.lastState, 'CONNECTED'],
+        ['integration.applyingRemote', 'false'],
+      ] as const) {
+        await transaction.appSetting.upsert({
+          create: { key, value },
+          update: { value },
+          where: { key },
+        });
+      }
+      await transaction.appSetting.deleteMany({
+        where: { key: { in: [SETTINGS.lastError, SETTINGS.reconciliationApproved] } },
+      });
+    });
+
+    await this.log(
+      undefined,
+      'SERVER_RECOVERY',
+      'SUCCESS',
+      1,
+      undefined,
+      `Получено изменений: ${String(changes.length)}. Позиция журнала: ${String(cursor)}.`,
+    );
+    return {
+      backup,
+      completedAt: this.now().toISOString(),
+      receivedChanges: changes.length,
+      resolvedConflicts: conflicts.length,
+      serverCursor: cursor,
+      status: await this.systemStatus(),
+    };
+  }
+
+  private async fetchRecoverySnapshot(connection: {
+    baseUrl: string;
+    deviceId: string;
+    token: string;
+  }): Promise<{ changes: InboundChange[]; cursor: number }> {
+    const changes: InboundChange[] = [];
+    let cursor = 0;
+    for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+      const page = await this.api.fetchChanges(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        {
+          after: cursor,
+          conflictCount: 0,
+          pendingCount: 0,
+        },
+      );
+      changes.push(...page.changes);
+      if (page.cursor < cursor || (page.hasMore && page.cursor === cursor)) {
+        throw new IntegrationApiError(
+          'INVALID_RESPONSE',
+          false,
+          'Сервер вернул некорректную позицию журнала.',
+        );
+      }
+      cursor = page.cursor;
+      if (!page.hasMore) return { changes, cursor };
+    }
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Журнал сервера слишком велик для безопасной загрузки за один запуск.',
+    );
+  }
+
+  private async assertRecoveryDoesNotOrphanLocalOnlyData(): Promise<void> {
+    const checks = await Promise.all([
+      this.database.payment.count(),
+      this.database.paymentOperation.count(),
+      this.database.refund.count(),
+      this.database.expense.count(),
+      this.database.expenseCategory.count(),
+      this.database.cashRegister.count(),
+      this.database.cashTransaction.count(),
+      this.database.payrollRule.count(),
+      this.database.payrollPeriod.count(),
+      this.database.payrollAccrual.count(),
+      this.database.roomRental.count(),
+      this.database.roomClosure.count(),
+      this.database.calendarException.count(),
+      this.database.webAction.count(),
+    ]);
+    if (checks.some((count) => count > 0)) {
+      throw new DomainError(
+        'CONFLICT',
+        'На этом компьютере есть локальные финансовые или операционные данные. Автоматическая загрузка заблокирована, чтобы не потерять связанные записи.',
+      );
+    }
   }
 
   async pruneJournal(token: string): Promise<IntegrationJournalMaintenanceResult> {
