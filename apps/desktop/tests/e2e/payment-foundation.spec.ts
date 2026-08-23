@@ -66,7 +66,7 @@ test('платёжная операция становится одним под
         currency: 'RUB',
         idempotencyKey: 'payment-foundation-e2e-operation',
         providerType: 'SBP',
-        purpose: 'Оплата через тестовый контур',
+        purpose: 'Исторический чек с ошибкой',
         studentId: student.id,
         subscriptionId: subscription.id,
       });
@@ -79,7 +79,7 @@ test('платёжная операция становится одним под
     await search.getByRole('button', { name: /Оплатина E2E Анна/u }).click();
     await expect(page.getByText('Операции оплаты')).toBeVisible();
     await expect(page.getByText('Создана')).toBeVisible();
-    await expect(page.getByText('Оплата через тестовый контур')).toBeVisible();
+    await expect(page.getByText('Исторический чек с ошибкой')).toBeVisible();
 
     const result = await page.evaluate(async ({ operationId, studentId, token }) => {
       const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
@@ -99,6 +99,34 @@ test('платёжная операция становится одним под
     expect(result.operation.status).toBe('SUCCEEDED');
     expect(result.payments).toHaveLength(1);
     expect(result.debt).toBe(75_000);
+
+    await page.getByRole('link', { name: 'Главная', exact: true }).click();
+    await page.getByRole('button', { name: 'Поиск по приложению' }).click();
+    search = page.getByRole('region', { name: 'Глобальный поиск' });
+    await search.getByLabel('Поиск по приложению').fill('Оплатина E2E Анна');
+    await search.getByRole('button', { name: /Оплатина E2E Анна/u }).click();
+    await expect(page.getByRole('heading', { name: 'Оплатина E2E Анна' })).toBeVisible();
+    await page
+      .getByRole('button', { name: 'Открыть детали оплаты: Исторический чек с ошибкой' })
+      .click();
+    await expect(page.getByRole('heading', { name: 'Детали оплаты' })).toBeVisible();
+    await expect(page.getByText('Ошибка формирования чека')).toBeVisible();
+    await expect(page.getByText('Тестовая временная ошибка фискализации.')).toBeVisible();
+    await page.getByRole('button', { name: 'Проверить чек' }).click();
+    await expect(page.getByText('Чек сформирован')).toBeVisible();
+    await expect(page.getByText('Фискальный документ')).toBeVisible();
+    const afterHistoricalRetry = await page.evaluate(async ({ studentId, token }) => {
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      return (
+        await api.payments.list(token, {
+          dateFrom: new Date(Date.now() - 86_400_000).toISOString(),
+          dateTo: new Date(Date.now() + 86_400_000).toISOString(),
+        })
+      ).filter(({ studentId: id }) => id === studentId);
+    }, context);
+    expect(afterHistoricalRetry).toHaveLength(1);
+    expect(afterHistoricalRetry.reduce((sum, item) => sum + item.amount, 0)).toBe(25_000);
+    await page.getByRole('button', { name: 'Закрыть' }).last().click();
 
     await page.getByRole('button', { name: 'Принять оплату' }).last().click();
     const cardMode = page.getByRole('button', { name: 'Оплата картой', exact: true });

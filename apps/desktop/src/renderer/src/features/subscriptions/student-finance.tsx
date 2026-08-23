@@ -3,6 +3,7 @@ import {
   t,
   type BranchSummary,
   type PaymentInput,
+  type AqsiGatewayPayment,
   type StudentSummary,
   type SubscriptionAdjustmentInput,
   type SubscriptionCreateInput,
@@ -38,6 +39,7 @@ import {
 import { useEffect, useState } from 'react';
 
 import { PaymentDialog } from '../finance/payment-dialog';
+import { PaymentOperationDetailsDialog } from '../finance/payment-operation-details-dialog';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { queryKeys } from '../../lib/query-keys';
@@ -67,6 +69,8 @@ export function StudentFinance({
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [freezeId, setFreezeId] = useState<string>();
   const [detailId, setDetailId] = useState<string>();
+  const [paymentOperationId, setPaymentOperationId] = useState<string>();
+  const [gatewayPayment, setGatewayPayment] = useState<AqsiGatewayPayment>();
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => {
@@ -82,6 +86,21 @@ export function StudentFinance({
     enabled: canManage,
     queryFn: () => getDesktopApi().paymentOperations.listStudent(getSessionToken(), student.id),
     queryKey: ['payment-operations', 'student', student.id, user?.id],
+  });
+  const selectedPaymentOperation = useQuery({
+    enabled: Boolean(paymentOperationId),
+    queryFn: () =>
+      getDesktopApi().paymentOperations.get(getSessionToken(), paymentOperationId ?? ''),
+    queryKey: ['payment-operations', 'detail', paymentOperationId, user?.id],
+  });
+  const historicalPayment = useQuery({
+    enabled: Boolean(selectedPaymentOperation.data?.paymentId),
+    queryFn: () =>
+      getDesktopApi().payments.get(
+        getSessionToken(),
+        selectedPaymentOperation.data?.paymentId ?? '',
+      ),
+    queryKey: ['payments', 'detail', selectedPaymentOperation.data?.paymentId, user?.id],
   });
   const tariffs = useQuery({
     queryFn: () => getDesktopApi().tariffs.list(getSessionToken(), { branchId: student.branchId }),
@@ -117,6 +136,34 @@ export function StudentFinance({
     mutationFn: (id: string) =>
       getDesktopApi().paymentOperations.refreshAqsi(getSessionToken(), id),
   });
+  const retryFiscalReceipt = useMutation({
+    mutationFn: (id: string) =>
+      getDesktopApi().paymentOperations.retryFiscalReceipt(getSessionToken(), id),
+  });
+  useEffect(() => {
+    const operation = selectedPaymentOperation.data;
+    if (
+      !operation ||
+      !paymentOperationId ||
+      !['SBP', 'ACQUIRING'].includes(operation.providerType)
+    ) {
+      setGatewayPayment(undefined);
+      return;
+    }
+    let cancelled = false;
+    setError(undefined);
+    void getDesktopApi()
+      .paymentOperations.refreshAqsi(getSessionToken(), paymentOperationId)
+      .then((result) => {
+        if (!cancelled) setGatewayPayment(result);
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setError(getErrorMessage(caught, 'Не удалось загрузить данные чека.'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [paymentOperationId, selectedPaymentOperation.data]);
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.studentFinance(student.id) }),
@@ -291,6 +338,18 @@ export function StudentFinance({
                       <div className="mt-1">
                         <Badge>{t(`payment.operation.status.${operation.status}`)}</Badge>
                       </div>
+                      <Button
+                        aria-label={`Открыть детали оплаты: ${operation.purpose}`}
+                        className="mt-2"
+                        onClick={() => {
+                          setError(undefined);
+                          setGatewayPayment(undefined);
+                          setPaymentOperationId(operation.id);
+                        }}
+                        variant="ghost"
+                      >
+                        Детали
+                      </Button>
                       {(operation.providerType === 'SBP' ||
                         operation.providerType === 'ACQUIRING') &&
                       ['WAITING_FOR_PAYMENT', 'PROCESSING'].includes(operation.status) ? (
@@ -348,6 +407,32 @@ export function StudentFinance({
         open={paymentOpen}
         students={[]}
         subscriptions={finance.data?.subscriptions}
+      />
+      <PaymentOperationDetailsDialog
+        busy={refreshAqsi.isPending || retryFiscalReceipt.isPending}
+        error={error}
+        gateway={gatewayPayment}
+        onCheck={() => {
+          const operation = selectedPaymentOperation.data;
+          if (!operation) return;
+          setError(undefined);
+          const action = gatewayPayment?.fiscalReceipt?.canRetry
+            ? retryFiscalReceipt.mutateAsync(operation.id)
+            : refreshAqsi.mutateAsync(operation.id);
+          void action
+            .then((result) => setGatewayPayment(result))
+            .catch((caught: unknown) =>
+              setError(getErrorMessage(caught, 'Не удалось проверить кассовый чек.')),
+            );
+        }}
+        onClose={() => {
+          setPaymentOperationId(undefined);
+          setGatewayPayment(undefined);
+          setError(undefined);
+        }}
+        open={Boolean(paymentOperationId)}
+        operation={selectedPaymentOperation.data}
+        payment={historicalPayment.data}
       />
       <FreezeDialog
         error={error}

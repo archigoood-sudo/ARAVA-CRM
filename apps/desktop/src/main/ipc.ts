@@ -1026,6 +1026,7 @@ export function createIpcHandlers(
       const operation = await paymentOperations.get(token, id);
       const isCard = operation.providerType === 'ACQUIRING';
       const fiscalCompleted = operation.status === 'SUCCEEDED';
+      const fiscalError = fiscalCompleted && operation.purpose === 'Исторический чек с ошибкой';
       if (!fiscalCompleted)
         await paymentOperations.finalizeTrusted(id, {
           paymentMethod: isCard ? 'ACQUIRING' : 'SBP',
@@ -1038,9 +1039,16 @@ export function createIpcHandlers(
         currency: 'RUB' as const,
         deviceId: 101,
         fiscalReceipt: {
-          canRetry: false,
-          ...(fiscalCompleted ? { fiscalDocumentNumber: 42, fiscalSign: '987654321' } : {}),
-          status: fiscalCompleted ? ('SUCCEEDED' as const) : ('PROCESSING' as const),
+          canRetry: fiscalError,
+          ...(fiscalCompleted && !fiscalError
+            ? { fiscalDocumentNumber: 42, fiscalSign: '987654321' }
+            : {}),
+          ...(fiscalError ? { message: 'Тестовая временная ошибка фискализации.' } : {}),
+          status: fiscalError
+            ? ('ERROR' as const)
+            : fiscalCompleted
+              ? ('SUCCEEDED' as const)
+              : ('PROCESSING' as const),
           updatedAt: new Date().toISOString(),
         },
         provider: isCard ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
