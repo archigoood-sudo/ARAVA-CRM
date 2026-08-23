@@ -11,6 +11,8 @@ import {
   GENDERS,
   GROUP_STATUSES,
   LESSON_STATUSES,
+  LEAD_SOURCES,
+  LEAD_STATUSES,
   PAYMENT_METHODS,
   PAYMENT_PROVIDER_TYPES,
   PAYMENT_STATUSES,
@@ -48,6 +50,8 @@ import {
   type LessonGenerateInput,
   type LessonInput,
   type LessonListQuery,
+  type LeadCreateInput,
+  type LeadListQuery,
   type RoomClosureInput,
   type RoomInput,
   type RoomRentalInput,
@@ -801,6 +805,24 @@ export const chatSendInputSchema = z.object({
     .max(160)
     .regex(/^[A-Za-z0-9_.:-]+$/u),
   text: z.string().trim().min(1, 'Введите сообщение.').max(1200, 'Сообщение слишком длинное.'),
+});
+
+export const leadStatusSchema = z.enum(LEAD_STATUSES);
+export const leadSourceSchema = z.enum(LEAD_SOURCES);
+export const leadListQuerySchema: z.ZodType<LeadListQuery> = z.object({
+  direction: optionalText(100),
+  search: optionalText(120),
+  source: leadSourceSchema.optional(),
+  status: leadStatusSchema.optional(),
+});
+export const leadCreateInputSchema: z.ZodType<LeadCreateInput> = z.object({
+  branchCrmId: z.string().trim().min(1).max(160).optional(),
+  comment: optionalText(1000),
+  contactName: optionalText(100),
+  direction: optionalText(100),
+  phone: z.string().trim().min(5, 'Укажите корректный телефон.').max(40),
+  studentAge: z.number().int().min(3).max(99).optional(),
+  studentName: z.string().trim().min(1, 'Укажите имя ученика.').max(100),
 });
 export const publicationInputSchema = z
   .object({

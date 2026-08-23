@@ -63,6 +63,8 @@ test('OWNER подключает сайт, выполняет initial/offline sy
 }, testInfo) => {
   test.setTimeout(process.env.CI ? 300_000 : 150_000);
   let receivedOperations = 0;
+  let leadStatus = 'NEW';
+  let convertedStudentId: string | null = null;
   const receivedPaymentPaths: string[] = [];
   let conflictOpen = true;
   let recoveryMode = false;
@@ -80,8 +82,34 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     unreadCount: 1,
     updatedAt: '2026-08-18T12:00:00.000Z',
   };
+  const websiteLead = () => ({
+    branchCrmId: null,
+    childAge: 9,
+    childName: 'Иванова Мария',
+    convertedAt: convertedStudentId ? new Date().toISOString() : null,
+    convertedStudentCrmId: convertedStudentId,
+    createdAt: '2026-08-23T10:00:00.000Z',
+    direction: 'Хип-хоп',
+    existingStudentCandidates: [
+      { crmStudentId: 'student-existing-e2e', displayName: 'Существующая Мария' },
+    ],
+    id: 'lead-e2e',
+    note: 'Позвонить вечером',
+    originalPhone: '+7 999 123-45-67',
+    parentName: 'Анна Иванова',
+    phone: '+79991234567',
+    source: 'WEBSITE',
+    sourceDetail: '/',
+    status: leadStatus,
+    statusHistory: [],
+    updatedAt: new Date().toISOString(),
+    utmCampaign: 'autumn-2026',
+    utmMedium: 'cpc',
+    utmSource: 'search',
+  });
   const server = createServer(async (request, response) => {
-    const body = request.method === 'POST' ? await requestBody(request) : {};
+    const body =
+      request.method === 'POST' || request.method === 'PATCH' ? await requestBody(request) : {};
     if (request.url?.endsWith('/pair')) {
       respond(response, { apiVersion: 'v1', deviceStatus: 'ACTIVE', deviceToken: 'e2e-token' });
       return;
@@ -131,6 +159,29 @@ test('OWNER подключает сайт, выполняет initial/offline sy
         conversations: [chat],
         serverTimestamp: new Date().toISOString(),
         totalUnread: 1,
+      });
+      return;
+    }
+    if (request.url === '/api/integration/v1/leads/lead-e2e/convert' && request.method === 'POST') {
+      convertedStudentId = typeof body.crmStudentId === 'string' ? body.crmStudentId : null;
+      leadStatus = 'CONVERTED';
+      respond(response, { apiVersion: 'v1', lead: websiteLead() });
+      return;
+    }
+    if (request.url === '/api/integration/v1/leads/lead-e2e') {
+      if (request.method === 'PATCH' && typeof body.status === 'string') leadStatus = body.status;
+      respond(response, { apiVersion: 'v1', lead: websiteLead() });
+      return;
+    }
+    if (request.url?.startsWith('/api/integration/v1/leads') && request.method === 'GET') {
+      const statusFilter = new URL(request.url, 'http://localhost').searchParams.get('status');
+      const visible = !statusFilter || statusFilter === leadStatus;
+      respond(response, {
+        apiVersion: 'v1',
+        leads: visible ? [websiteLead()] : [],
+        newCount: leadStatus === 'NEW' ? 1 : 0,
+        serverTimestamp: new Date().toISOString(),
+        summary: { [leadStatus]: 1 },
       });
       return;
     }
@@ -379,6 +430,35 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByLabel('Сообщение').fill('Ответ администратора');
     await page.getByRole('button', { name: 'Отправить' }).click();
     await expect.poll(() => receivedChatMessages).toEqual(['Ответ администратора']);
+    await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      await api.branches.create(persisted.state?.token ?? '', { name: 'Филиал заявок E2E' });
+    });
+    await page.getByRole('link', { name: 'Заявки' }).click();
+    await expect(page.getByRole('link', { name: /Заявки 1/u })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: 'Заявки' })).toBeVisible();
+    await page.getByText('Иванова Мария', { exact: true }).first().click();
+    const leadDetail = page.getByTestId('lead-detail');
+    await expect(leadDetail).toContainText('Позвонить вечером');
+    await leadDetail.getByLabel('Изменить статус заявки').selectOption('CONTACTED');
+    await expect(leadDetail.getByText('Связались', { exact: true }).first()).toBeVisible();
+    await page.reload();
+    await page.getByText('Иванова Мария', { exact: true }).first().click();
+    await expect(
+      page.getByTestId('lead-detail').getByText('Связались', { exact: true }).first(),
+    ).toBeVisible();
+    await expect(page.getByText('Возможно, этот человек уже есть в CRM')).toBeVisible();
+    await page.getByRole('button', { name: 'Всё равно создать нового' }).click();
+    await page.getByRole('button', { name: 'Создать ученика' }).click();
+    await expect(page.getByLabel('Фамилия')).toHaveValue('Иванова');
+    await expect(page.getByLabel('Имя', { exact: true })).toHaveValue('Мария');
+    await expect(page.getByLabel('Заметки')).toHaveValue(/Возраст: 9/u);
+    await page.getByRole('button', { name: 'Добавить ученика' }).click();
+    await expect(page.getByText('Ученик уже создан и связан.')).toBeVisible();
+    expect(convertedStudentId).toBeTruthy();
     await page.getByRole('link', { name: 'Настройки' }).click();
     await page.getByRole('button', { name: 'Первичная синхронизация' }).click();
     await expect(page.getByText('Данные для первичной синхронизации')).toBeVisible();
@@ -398,6 +478,17 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     expect(pendingAfterLocalChange).toBeGreaterThan(0);
     await page.getByRole('button', { name: /Синхронизировать сейчас/u }).click();
     await expect.poll(() => receivedOperations).toBeGreaterThan(0);
+    await expect
+      .poll(async () =>
+        page.evaluate(async () => {
+          const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+            state?: { token?: string };
+          };
+          const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+          return (await api.integration.getStatus(persisted.state?.token ?? '')).pendingCount;
+        }),
+      )
+      .toBe(0);
     const finalStatus = await page.evaluate(async () => {
       const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
         state?: { token?: string };
@@ -405,7 +496,6 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
       return api.integration.getStatus(persisted.state?.token ?? '');
     });
-    expect(finalStatus.pendingCount).toBe(0);
     expect(finalStatus.failedCount).toBe(0);
 
     await stopServer(server);
@@ -472,6 +562,30 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     expect(recovered.status.pendingCount).toBe(0);
     expect(recovered.status.failedCount).toBe(0);
     expect(receivedOperations).toBe(operationsBeforeRecovery);
+
+    await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const token = persisted.state?.token ?? '';
+      const branch = (await api.branches.list(token))[0];
+      if (!branch) throw new Error('branch unavailable');
+      await api.users.create(token, {
+        branchIds: [branch.id],
+        email: 'leads-coach-e2e@arava.local',
+        fullName: 'Тренер заявок E2E',
+        password: 'Coach!LeadsE2E2026',
+        role: 'COACH',
+      });
+      await api.auth.logout(token);
+      localStorage.removeItem('arava-auth');
+      window.location.hash = '#/login';
+    });
+    await page.getByLabel('Электронная почта').fill('leads-coach-e2e@arava.local');
+    await page.getByLabel('Пароль', { exact: true }).fill('Coach!LeadsE2E2026');
+    await page.getByRole('button', { name: 'Войти в рабочее пространство' }).click();
+    await expect(page.getByRole('link', { name: 'Заявки' })).toHaveCount(0);
   } finally {
     await closeApplication(application);
     await stopServer(server);

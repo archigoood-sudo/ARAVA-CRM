@@ -30,6 +30,7 @@ const genderLabels: Record<Gender, string> = {
 export function StudentDialog({
   branches,
   error,
+  initialValues,
   onClose,
   onSubmit,
   open,
@@ -37,6 +38,7 @@ export function StudentDialog({
 }: {
   branches: BranchSummary[];
   error?: string | undefined;
+  initialValues?: Partial<StudentInput> | undefined;
   onClose: () => void;
   onSubmit: (input: StudentInput) => Promise<void>;
   open: boolean;
@@ -69,11 +71,17 @@ export function StudentDialog({
               phone: student.phone,
               status: student.status,
             }
-          : { branchId: defaultBranchId, firstName: '', lastName: '', status: 'ACTIVE' },
+          : {
+              branchId: defaultBranchId,
+              firstName: '',
+              lastName: '',
+              status: 'ACTIVE',
+              ...initialValues,
+            },
       );
     }
     wasOpen.current = open;
-  }, [defaultBranchId, open, reset, student]);
+  }, [defaultBranchId, initialValues, open, reset, student]);
 
   return (
     <Dialog

@@ -6,6 +6,7 @@ import {
   ChevronRight,
   LayoutDashboard,
   Landmark,
+  Inbox,
   MessageCircle,
   Newspaper,
   BarChart3,
@@ -53,6 +54,14 @@ export function Sidebar() {
     refetchInterval: 20_000,
     retry: false,
   });
+  const leadAccessKey = `${user?.id ?? ''}:${user?.role ?? ''}:${[...(user?.branchIds ?? [])].sort().join(',')}`;
+  const leads = useQuery({
+    enabled: Boolean(user && !trainer),
+    queryFn: () => getDesktopApi().leads.list(getSessionToken(), {}),
+    queryKey: queryKeys.leads(leadAccessKey),
+    refetchInterval: 60_000,
+    retry: false,
+  });
   const navigation = [
     { icon: LayoutDashboard, label: t('nav.dashboard'), to: '/dashboard' },
     ...(user?.role === 'COACH'
@@ -67,6 +76,9 @@ export function Sidebar() {
             to: '/attention',
           },
         ]
+      : []),
+    ...(!trainer
+      ? [{ badge: leads.data?.newCount, icon: Inbox, label: 'Заявки', to: '/leads' }]
       : []),
     { icon: UsersRound, label: trainer ? t('nav.myStudents') : t('nav.students'), to: '/students' },
     { icon: Shapes, label: trainer ? t('nav.myGroups') : t('nav.groups'), to: '/groups' },

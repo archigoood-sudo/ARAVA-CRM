@@ -6,6 +6,7 @@ import {
   CardService,
   FinanceService,
   GlobalSearchService,
+  LeadService,
   ManagementService,
   AqsiPaymentService,
   PaymentOperationService,
@@ -57,6 +58,9 @@ import {
   lessonGenerateInputSchema,
   lessonInputSchema,
   lessonListQuerySchema,
+  leadCreateInputSchema,
+  leadListQuerySchema,
+  leadStatusSchema,
   passwordChangeSchema,
   paymentInputSchema,
   paymentListQuerySchema,
@@ -188,6 +192,7 @@ export function createIpcHandlers(
     ? new AqsiPaymentService(paymentOperations, integration)
     : undefined;
   const chats = integration ? new ChatService(database, service, integration) : undefined;
+  const leads = integration ? new LeadService(service, integration) : undefined;
   const requireIntegration = () => {
     if (!integration) throw new Error('Сервис интеграции не инициализирован.');
     return integration;
@@ -195,6 +200,10 @@ export function createIpcHandlers(
   const requireChats = () => {
     if (!chats) throw new Error('Сервис чатов не инициализирован.');
     return chats;
+  };
+  const requireLeads = () => {
+    if (!leads) throw new Error('Сервис заявок не инициализирован.');
+    return leads;
   };
   const requireAqsiPayments = () => {
     if (!aqsiPayments) throw new Error('Сервис оплаты через aQsi не инициализирован.');
@@ -304,6 +313,31 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeConversationId),
         chatSendInputSchema.parse(unsafeInput),
+      ),
+
+    [IPC_CHANNELS.leadList]: (unsafeToken, unsafeQuery) =>
+      requireLeads().list(
+        sessionTokenSchema.parse(unsafeToken),
+        leadListQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.leadGet]: (unsafeToken, unsafeId) =>
+      requireLeads().get(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.leadCreate]: (unsafeToken, unsafeInput) =>
+      requireLeads().create(
+        sessionTokenSchema.parse(unsafeToken),
+        leadCreateInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.leadUpdateStatus]: (unsafeToken, unsafeId, unsafeStatus) =>
+      requireLeads().updateStatus(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        leadStatusSchema.parse(unsafeStatus),
+      ),
+    [IPC_CHANNELS.leadConvert]: (unsafeToken, unsafeId, unsafeStudentId) =>
+      requireLeads().convert(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        identifierSchema.parse(unsafeStudentId),
       ),
 
     [IPC_CHANNELS.publicationList]: (unsafeToken) =>

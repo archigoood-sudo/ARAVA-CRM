@@ -27,6 +27,7 @@ import {
   HandCoins,
   HardDrive,
   IdCard,
+  Inbox,
   RefreshCw,
   CloudCog,
   UserRoundCog,
@@ -39,6 +40,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { WebActionsSection } from './web-actions-section';
+import { leadAttentionKey } from '../leads/lead-model';
 
 const categories: { icon: typeof BellRing; label: string; value: AttentionCategory }[] = [
   { icon: UsersRound, label: 'Ученики', value: 'STUDENTS' },
@@ -112,6 +114,14 @@ export function AttentionPage() {
     queryFn: () => getDesktopApi().attention.summary(getSessionToken()),
     queryKey: queryKeys.attentionSummary(user?.id),
   });
+  const leadAccessKey = `${user?.id ?? ''}:${user?.role ?? ''}:${[...(user?.branchIds ?? [])].sort().join(',')}`;
+  const newLeads = useQuery({
+    enabled: user?.role !== 'COACH',
+    queryFn: () => getDesktopApi().leads.list(getSessionToken(), { status: 'NEW' }),
+    queryKey: queryKeys.leads(leadAccessKey, { status: 'NEW' }),
+    refetchInterval: 60_000,
+    retry: false,
+  });
 
   if (user?.role === 'COACH') return <Navigate replace to="/dashboard" />;
 
@@ -124,6 +134,48 @@ export function AttentionPage() {
       />
 
       <WebActionsSection />
+
+      {newLeads.data?.leads.length ? (
+        <Card className="mt-7 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                Заявки
+              </p>
+              <h2 className="mt-1 text-lg font-semibold">Новые обращения</h2>
+            </div>
+            <Badge>{newLeads.data.newCount}</Badge>
+          </div>
+          <div className="space-y-3">
+            {newLeads.data.leads.slice(0, 5).map((lead) => (
+              <AttentionCard
+                action={
+                  <Button
+                    onClick={() => navigate(`/leads?leadId=${encodeURIComponent(lead.id)}`)}
+                    size="small"
+                    variant="secondary"
+                  >
+                    Открыть
+                    <ChevronRight className="size-4" />
+                  </Button>
+                }
+                description={[lead.parentName, lead.phone, lead.direction]
+                  .filter(Boolean)
+                  .join(' · ')}
+                icon={<Inbox className="size-4" />}
+                key={leadAttentionKey(lead.id)}
+                meta={formatDate(lead.createdAt, {
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                })}
+                title="Новая заявка"
+                tone="info"
+              />
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       <Card className="mt-7">
         <CardContent className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] gap-3 p-4">

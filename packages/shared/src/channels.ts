@@ -158,6 +158,19 @@ export const PUBLICATION_STATUSES = ['DRAFT', 'PUBLISHED', 'ARCHIVED'] as const;
 export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
 export const PUBLICATION_AUDIENCES = ['ALL_CLIENTS', 'BRANCHES', 'GROUPS', 'TRAINERS'] as const;
 export type PublicationAudienceMode = (typeof PUBLICATION_AUDIENCES)[number];
+export const LEAD_STATUSES = [
+  'NEW',
+  'CONTACTED',
+  'NO_ANSWER',
+  'TRIAL_BOOKED',
+  'TRIAL_ATTENDED',
+  'CONVERTED',
+  'REJECTED',
+  'NOT_RELEVANT',
+] as const;
+export type LeadStatus = (typeof LEAD_STATUSES)[number];
+export const LEAD_SOURCES = ['WEBSITE', 'VK', 'PHONE', 'MANUAL', 'OTHER'] as const;
+export type LeadSource = (typeof LEAD_SOURCES)[number];
 
 export const IPC_CHANNELS = {
   activityList: 'activity:list',
@@ -255,6 +268,11 @@ export const IPC_CHANNELS = {
   integrationSyncNow: 'integration:sync-now',
   integrationTestConnection: 'integration:test-connection',
   integrationUpdateSettings: 'integration:update-settings',
+  leadConvert: 'lead:convert',
+  leadCreate: 'lead:create',
+  leadGet: 'lead:get',
+  leadList: 'lead:list',
+  leadUpdateStatus: 'lead:update-status',
   webActionApprove: 'web-action:approve',
   webActionList: 'web-action:list',
   webActionReject: 'web-action:reject',
@@ -2048,6 +2066,71 @@ export interface IntegrationDeviceSummary {
   status: 'ACTIVE' | 'REVOKED';
 }
 
+export interface LeadListQuery {
+  direction?: string | undefined;
+  search?: string | undefined;
+  source?: LeadSource | undefined;
+  status?: LeadStatus | undefined;
+}
+
+export interface LeadSummary {
+  branchCrmId?: string | undefined;
+  childAge?: number | undefined;
+  childName: string;
+  convertedAt?: string | undefined;
+  convertedStudentCrmId?: string | undefined;
+  createdAt: string;
+  direction?: string | undefined;
+  id: string;
+  note?: string | undefined;
+  originalPhone: string;
+  parentName?: string | undefined;
+  phone: string;
+  source: LeadSource;
+  sourceDetail?: string | undefined;
+  status: LeadStatus;
+  updatedAt: string;
+  utmCampaign?: string | undefined;
+  utmContent?: string | undefined;
+  utmMedium?: string | undefined;
+  utmSource?: string | undefined;
+}
+
+export interface LeadExistingStudentCandidate {
+  crmStudentId: string;
+  displayName: string;
+}
+
+export interface LeadStatusHistoryEntry {
+  actorRole: 'OWNER' | 'ADMIN' | 'COACH';
+  createdAt: string;
+  fromStatus: LeadStatus;
+  id: string;
+  toStatus: LeadStatus;
+}
+
+export interface LeadDetail extends LeadSummary {
+  existingStudentCandidates: LeadExistingStudentCandidate[];
+  statusHistory: LeadStatusHistoryEntry[];
+}
+
+export interface LeadListResult {
+  leads: LeadSummary[];
+  newCount: number;
+  serverTimestamp: string;
+  summary: Record<LeadStatus, number>;
+}
+
+export interface LeadCreateInput {
+  branchCrmId?: string | undefined;
+  comment?: string | undefined;
+  contactName?: string | undefined;
+  direction?: string | undefined;
+  phone: string;
+  studentAge?: number | undefined;
+  studentName: string;
+}
+
 export interface IntegrationConflictDifference {
   candidate: unknown;
   canonical: unknown;
@@ -2292,6 +2375,13 @@ export interface AravaDesktopApi {
     ) => Promise<WebActionSummary>;
     list: (token: string) => Promise<WebActionSummary[]>;
     reject: (token: string, id: string, reason?: string) => Promise<WebActionSummary>;
+  };
+  leads: {
+    convert: (token: string, id: string, crmStudentId: string) => Promise<LeadDetail>;
+    create: (token: string, input: LeadCreateInput) => Promise<LeadDetail>;
+    get: (token: string, id: string) => Promise<LeadDetail>;
+    list: (token: string, query: LeadListQuery) => Promise<LeadListResult>;
+    updateStatus: (token: string, id: string, status: LeadStatus) => Promise<LeadDetail>;
   };
   chats: {
     get: (token: string, conversationId: string) => Promise<ChatSummary>;

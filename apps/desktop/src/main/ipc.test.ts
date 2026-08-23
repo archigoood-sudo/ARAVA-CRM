@@ -206,6 +206,78 @@ describe('Electron IPC boundary', () => {
     );
   });
 
+  it('routes leads through validated IPC and denies COACH direct calls', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!LeadsIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Заявки IPC' });
+    const coach = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'leads-coach-ipc@arava.local',
+      fullName: 'Тренер заявок',
+      password: 'Coach!LeadsIpc2026',
+      role: 'COACH',
+    });
+    const coachSession = await service.login({
+      email: coach.email,
+      password: 'Coach!LeadsIpc2026',
+    });
+    await service.changePassword(coachSession.token, {
+      currentPassword: 'Coach!LeadsIpc2026',
+      newPassword: 'Coach!LeadsIpcChanged2026',
+    });
+    const lead = {
+      childName: 'Мария',
+      createdAt: new Date().toISOString(),
+      existingStudentCandidates: [],
+      id: 'lead-ipc',
+      originalPhone: '+79990000000',
+      phone: '+79990000000',
+      source: 'WEBSITE' as const,
+      status: 'NEW' as const,
+      statusHistory: [],
+      updatedAt: new Date().toISOString(),
+    };
+    const listRemoteLeads = vi.fn().mockResolvedValue({
+      leads: [lead],
+      newCount: 1,
+      serverTimestamp: lead.updatedAt,
+      summary: { NEW: 1 },
+    });
+    const updateRemoteLeadStatus = vi.fn().mockResolvedValue({ ...lead, status: 'CONTACTED' });
+    const integration = {
+      service: {
+        listRemoteLeads,
+        updateRemoteLeadStatus,
+      } as Pick<IntegrationService, 'listRemoteLeads' | 'updateRemoteLeadStatus'>,
+    } as unknown as IntegrationManager;
+    const handlers = createIpcHandlers(database, service, '/test/arava.db', { integration });
+
+    await expect(
+      handlers[IPC_CHANNELS.leadList]?.(owner.token, { search: 'Мария', status: 'NEW' }),
+    ).resolves.toMatchObject({ newCount: 1 });
+    await expect(
+      handlers[IPC_CHANNELS.leadUpdateStatus]?.(owner.token, lead.id, 'CONTACTED'),
+    ).resolves.toMatchObject({ status: 'CONTACTED' });
+    expect(updateRemoteLeadStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'OWNER' }),
+      lead.id,
+      'CONTACTED',
+      expect.stringMatching(/^lead-status:/u),
+    );
+    expect(() =>
+      handlers[IPC_CHANNELS.leadUpdateStatus]?.(owner.token, lead.id, 'INVALID'),
+    ).toThrow();
+    await expect(handlers[IPC_CHANNELS.leadList]?.(coachSession.token, {})).rejects.toThrow(
+      'Тренеру недоступен',
+    );
+  });
+
   it('returns application version and build metadata from system information', async () => {
     const owner = await service.login({
       email: INITIAL_OWNER_EMAIL,

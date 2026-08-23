@@ -23,6 +23,13 @@ import type {
   IntegrationStatus,
   IntegrationReconciliationPreview,
   IntegrationRecoveryResult,
+  LeadCreateInput,
+  LeadDetail,
+  LeadListQuery,
+  LeadListResult,
+  LeadSource,
+  LeadStatus,
+  LeadSummary,
   PaymentOperationSummary,
   SbpGatewayPayment,
   SbpProviderHealth,
@@ -631,6 +638,112 @@ function parseChatMessagePage(value: unknown): ChatMessagePage {
     messages,
     nextCursor: typeof value.nextCursor === 'string' ? value.nextCursor : null,
   };
+}
+
+const leadStatuses = new Set<LeadStatus>([
+  'NEW',
+  'CONTACTED',
+  'NO_ANSWER',
+  'TRIAL_BOOKED',
+  'TRIAL_ATTENDED',
+  'CONVERTED',
+  'REJECTED',
+  'NOT_RELEVANT',
+]);
+const leadSources = new Set<LeadSource>(['WEBSITE', 'VK', 'PHONE', 'MANUAL', 'OTHER']);
+
+function parseLeadSummary(value: unknown): LeadSummary {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    typeof value.childName !== 'string' ||
+    typeof value.phone !== 'string' ||
+    typeof value.originalPhone !== 'string' ||
+    typeof value.status !== 'string' ||
+    !leadStatuses.has(value.status as LeadStatus) ||
+    typeof value.source !== 'string' ||
+    !leadSources.has(value.source as LeadSource) ||
+    typeof value.createdAt !== 'string' ||
+    typeof value.updatedAt !== 'string'
+  ) {
+    throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверную заявку.');
+  }
+  const optional = (input: unknown) =>
+    typeof input === 'string' && input.length > 0 ? input : undefined;
+  return {
+    ...(optional(value.branchCrmId) ? { branchCrmId: optional(value.branchCrmId) } : {}),
+    ...(Number.isInteger(value.childAge) ? { childAge: Number(value.childAge) } : {}),
+    childName: value.childName,
+    ...(optional(value.convertedAt) ? { convertedAt: optional(value.convertedAt) } : {}),
+    ...(optional(value.convertedStudentCrmId)
+      ? { convertedStudentCrmId: optional(value.convertedStudentCrmId) }
+      : {}),
+    createdAt: value.createdAt,
+    ...(optional(value.direction) ? { direction: optional(value.direction) } : {}),
+    id: value.id,
+    ...(optional(value.note) ? { note: optional(value.note) } : {}),
+    originalPhone: value.originalPhone,
+    ...(optional(value.parentName) ? { parentName: optional(value.parentName) } : {}),
+    phone: value.phone,
+    source: value.source as LeadSource,
+    ...(optional(value.sourceDetail) ? { sourceDetail: optional(value.sourceDetail) } : {}),
+    status: value.status as LeadStatus,
+    updatedAt: value.updatedAt,
+    ...(optional(value.utmCampaign) ? { utmCampaign: optional(value.utmCampaign) } : {}),
+    ...(optional(value.utmContent) ? { utmContent: optional(value.utmContent) } : {}),
+    ...(optional(value.utmMedium) ? { utmMedium: optional(value.utmMedium) } : {}),
+    ...(optional(value.utmSource) ? { utmSource: optional(value.utmSource) } : {}),
+  };
+}
+
+function parseLeadDetail(value: unknown): LeadDetail {
+  if (!isRecord(value) || !Array.isArray(value.existingStudentCandidates)) {
+    throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверную заявку.');
+  }
+  const summary = parseLeadSummary(value);
+  const candidates = value.existingStudentCandidates.map((candidate) => {
+    if (
+      !isRecord(candidate) ||
+      typeof candidate.crmStudentId !== 'string' ||
+      typeof candidate.displayName !== 'string'
+    )
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер вернул неверные совпадения.',
+      );
+    return { crmStudentId: candidate.crmStudentId, displayName: candidate.displayName };
+  });
+  const history: LeadDetail['statusHistory'] = Array.isArray(value.statusHistory)
+    ? value.statusHistory.map((entry) => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== 'string' ||
+          typeof entry.createdAt !== 'string' ||
+          typeof entry.fromStatus !== 'string' ||
+          !leadStatuses.has(entry.fromStatus as LeadStatus) ||
+          typeof entry.toStatus !== 'string' ||
+          !leadStatuses.has(entry.toStatus as LeadStatus) ||
+          (entry.actorRole !== 'OWNER' &&
+            entry.actorRole !== 'ADMIN' &&
+            entry.actorRole !== 'COACH')
+        )
+          throw new IntegrationApiError(
+            'INVALID_RESPONSE',
+            false,
+            'Сервер вернул неверную историю заявки.',
+          );
+        return {
+          actorRole:
+            entry.actorRole === 'OWNER' ? 'OWNER' : entry.actorRole === 'ADMIN' ? 'ADMIN' : 'COACH',
+          createdAt: entry.createdAt,
+          fromStatus: entry.fromStatus as LeadStatus,
+          id: entry.id,
+          toStatus: entry.toStatus as LeadStatus,
+        };
+      })
+    : [];
+  return { ...summary, existingStudentCandidates: candidates, statusHistory: history };
 }
 
 export function validateIntegrationBaseUrl(value: string): string {
@@ -1385,6 +1498,139 @@ export class IntegrationApiClient {
     };
   }
 
+  async listLeads(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    query: LeadListQuery,
+  ): Promise<LeadListResult> {
+    const parameters = new URLSearchParams({ limit: '200' });
+    if (query.direction) parameters.set('direction', query.direction);
+    if (query.search) parameters.set('search', query.search);
+    if (query.source) parameters.set('source', query.source);
+    if (query.status) parameters.set('status', query.status);
+    const payload = await this.request(
+      baseUrl,
+      `leads?${parameters.toString()}`,
+      deviceId,
+      token,
+      'GET',
+      undefined,
+      context,
+    );
+    if (
+      !isRecord(payload) ||
+      !Array.isArray(payload.leads) ||
+      typeof payload.newCount !== 'number' ||
+      typeof payload.serverTimestamp !== 'string' ||
+      !isRecord(payload.summary)
+    )
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер вернул неверный список заявок.',
+      );
+    const summaryPayload = payload.summary;
+    const summary = Object.fromEntries(
+      [...leadStatuses].map((status) => [status, Number(summaryPayload[status] ?? 0)]),
+    ) as Record<LeadStatus, number>;
+    return {
+      leads: payload.leads.map(parseLeadSummary),
+      newCount: payload.newCount,
+      serverTimestamp: payload.serverTimestamp,
+      summary,
+    };
+  }
+
+  async getLead(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    leadId: string,
+  ): Promise<LeadDetail> {
+    const payload = await this.request(
+      baseUrl,
+      `leads/${encodeURIComponent(leadId)}`,
+      deviceId,
+      token,
+      'GET',
+      undefined,
+      context,
+    );
+    if (!isRecord(payload))
+      throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверную заявку.');
+    return parseLeadDetail(payload.lead);
+  }
+
+  async createLead(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    input: LeadCreateInput,
+  ): Promise<LeadDetail> {
+    const payload = await this.request(baseUrl, 'leads', deviceId, token, 'POST', input, context);
+    if (!isRecord(payload))
+      throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер не подтвердил заявку.');
+    return parseLeadDetail(payload.lead);
+  }
+
+  async updateLeadStatus(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    leadId: string,
+    status: LeadStatus,
+    idempotencyKey: string,
+  ): Promise<LeadDetail> {
+    const payload = await this.request(
+      baseUrl,
+      `leads/${encodeURIComponent(leadId)}`,
+      deviceId,
+      token,
+      'PATCH',
+      { idempotencyKey, status },
+      context,
+    );
+    if (!isRecord(payload))
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер не подтвердил статус заявки.',
+      );
+    return parseLeadDetail(payload.lead);
+  }
+
+  async convertLead(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    leadId: string,
+    crmStudentId: string,
+    idempotencyKey: string,
+  ): Promise<LeadDetail> {
+    const payload = await this.request(
+      baseUrl,
+      `leads/${encodeURIComponent(leadId)}/convert`,
+      deviceId,
+      token,
+      'POST',
+      { crmStudentId, idempotencyKey },
+      context,
+    );
+    if (!isRecord(payload))
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер не подтвердил конвертацию заявки.',
+      );
+    return parseLeadDetail(payload.lead);
+  }
+
   async getChat(
     baseUrl: string,
     deviceId: string,
@@ -2056,6 +2302,81 @@ export class IntegrationService {
       connection.token,
       context,
       query,
+    );
+  }
+
+  async listRemoteLeads(
+    context: CrmChatRequestContext,
+    query: LeadListQuery,
+  ): Promise<LeadListResult> {
+    const connection = await this.chatConnection();
+    return this.api.listLeads(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      query,
+    );
+  }
+
+  async getRemoteLead(context: CrmChatRequestContext, leadId: string): Promise<LeadDetail> {
+    const connection = await this.chatConnection();
+    return this.api.getLead(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      leadId,
+    );
+  }
+
+  async createRemoteLead(
+    context: CrmChatRequestContext,
+    input: LeadCreateInput,
+  ): Promise<LeadDetail> {
+    const connection = await this.chatConnection();
+    return this.api.createLead(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      input,
+    );
+  }
+
+  async updateRemoteLeadStatus(
+    context: CrmChatRequestContext,
+    leadId: string,
+    status: LeadStatus,
+    idempotencyKey: string,
+  ): Promise<LeadDetail> {
+    const connection = await this.chatConnection();
+    return this.api.updateLeadStatus(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      leadId,
+      status,
+      idempotencyKey,
+    );
+  }
+
+  async convertRemoteLead(
+    context: CrmChatRequestContext,
+    leadId: string,
+    crmStudentId: string,
+    idempotencyKey: string,
+  ): Promise<LeadDetail> {
+    const connection = await this.chatConnection();
+    return this.api.convertLead(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      leadId,
+      crmStudentId,
+      idempotencyKey,
     );
   }
 
