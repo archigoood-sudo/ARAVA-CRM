@@ -163,6 +163,16 @@ interface ApiErrorBody {
 
 interface RemoteWebAction {
   actionType: string;
+  adminStudentChanges?: { firstName?: string; lastName?: string; phone?: string };
+  adminStudentPayloadValid?: boolean;
+  adminTrainerChanges?: {
+    branchIds?: string[];
+    description?: string;
+    displayName?: string;
+    isActive?: boolean;
+    phone?: string;
+  };
+  adminTrainerPayloadValid?: boolean;
   externalActionId: string;
   crmTrainerId?: string;
   crmLessonId?: string;
@@ -1837,6 +1847,59 @@ export class IntegrationApiClient {
         else profileChanges[field] = value;
       }
       profilePayloadValid &&= profileFieldCount > 0;
+      const adminStudentAllowedKeys = new Set(['crmStudentId', 'firstName', 'lastName', 'phone']);
+      const adminStudentChanges: { firstName?: string; lastName?: string; phone?: string } = {};
+      let adminStudentPayloadValid = Object.keys(profilePayload).every((key) =>
+        adminStudentAllowedKeys.has(key),
+      );
+      let adminStudentFieldCount = 0;
+      for (const field of profileFieldNames) {
+        if (!Object.hasOwn(profilePayload, field)) continue;
+        adminStudentFieldCount += 1;
+        const value = profilePayload[field];
+        if (typeof value !== 'string') adminStudentPayloadValid = false;
+        else adminStudentChanges[field] = value;
+      }
+      adminStudentPayloadValid &&= adminStudentFieldCount > 0;
+      const adminTrainerAllowedKeys = new Set([
+        'crmTrainerId',
+        'displayName',
+        'phone',
+        'description',
+        'isActive',
+        'branchIds',
+      ]);
+      const adminTrainerChanges: NonNullable<RemoteWebAction['adminTrainerChanges']> = {};
+      let adminTrainerPayloadValid = Object.keys(profilePayload).every((key) =>
+        adminTrainerAllowedKeys.has(key),
+      );
+      let adminTrainerFieldCount = 0;
+      for (const field of ['displayName', 'phone', 'description'] as const) {
+        if (!Object.hasOwn(profilePayload, field)) continue;
+        adminTrainerFieldCount += 1;
+        const value = profilePayload[field];
+        if (typeof value !== 'string') adminTrainerPayloadValid = false;
+        else adminTrainerChanges[field] = value;
+      }
+      if (Object.hasOwn(profilePayload, 'isActive')) {
+        adminTrainerFieldCount += 1;
+        if (typeof profilePayload.isActive !== 'boolean') adminTrainerPayloadValid = false;
+        else adminTrainerChanges.isActive = profilePayload.isActive;
+      }
+      if (Object.hasOwn(profilePayload, 'branchIds')) {
+        adminTrainerFieldCount += 1;
+        const branchIds: unknown = profilePayload.branchIds;
+        if (
+          !Array.isArray(branchIds) ||
+          branchIds.some((branchId: unknown) => typeof branchId !== 'string')
+        )
+          adminTrainerPayloadValid = false;
+        else
+          adminTrainerChanges.branchIds = branchIds.filter(
+            (branchId: unknown): branchId is string => typeof branchId === 'string',
+          );
+      }
+      adminTrainerPayloadValid &&= adminTrainerFieldCount > 0;
       return [
         {
           actionType,
@@ -1848,6 +1911,12 @@ export class IntegrationApiClient {
           ...(marks ? { marks } : {}),
           ...(actionType === 'CLIENT_PROFILE_UPDATE_REQUEST'
             ? { profileChanges, profilePayloadValid }
+            : {}),
+          ...(actionType === 'ADMIN_STUDENT_UPDATE_REQUEST'
+            ? { adminStudentChanges, adminStudentPayloadValid }
+            : {}),
+          ...(actionType === 'ADMIN_TRAINER_UPDATE_REQUEST'
+            ? { adminTrainerChanges, adminTrainerPayloadValid }
             : {}),
           ...(reason ? { reason: reason.slice(0, 500) } : {}),
           receivedAt,
@@ -3717,6 +3786,8 @@ export class IntegrationService {
       await this.pullWebActions(baseUrl, deviceId, token);
       await this.processTrainerAttendanceActions();
       await this.processClientProfileUpdateActions();
+      await this.processAdminStudentUpdateActions();
+      await this.processAdminTrainerUpdateActions();
       const acknowledgements = await this.database.webAction.findMany({
         select: { id: true },
         where: {
@@ -3833,7 +3904,21 @@ export class IntegrationService {
         action.actionType === 'CLIENT_PROFILE_UPDATE_REQUEST' &&
         Boolean(action.crmStudentId) &&
         !Number.isNaN(Date.parse(action.receivedAt));
-      if (!validFreeze && !validAttendance && !recognizedProfileUpdate) {
+      const recognizedAdminStudentUpdate =
+        action.actionType === 'ADMIN_STUDENT_UPDATE_REQUEST' &&
+        Boolean(action.crmStudentId) &&
+        !Number.isNaN(Date.parse(action.receivedAt));
+      const recognizedAdminTrainerUpdate =
+        action.actionType === 'ADMIN_TRAINER_UPDATE_REQUEST' &&
+        Boolean(action.crmTrainerId) &&
+        !Number.isNaN(Date.parse(action.receivedAt));
+      if (
+        !validFreeze &&
+        !validAttendance &&
+        !recognizedProfileUpdate &&
+        !recognizedAdminStudentUpdate &&
+        !recognizedAdminTrainerUpdate
+      ) {
         try {
           await this.api.claimAction(baseUrl, deviceId, token, action.externalActionId);
           await this.api.completeAction(
@@ -3860,6 +3945,44 @@ export class IntegrationService {
             payloadJson: JSON.stringify({
               changes: action.profileChanges ?? {},
               valid: action.profilePayloadValid === true,
+            }),
+            receivedAt: new Date(action.receivedAt),
+          },
+          update: {},
+          where: { externalActionId: action.externalActionId },
+        });
+        continue;
+      }
+      if (recognizedAdminStudentUpdate) {
+        const crmStudentId = action.crmStudentId;
+        if (!crmStudentId) continue;
+        await this.database.webAction.upsert({
+          create: {
+            actionType: action.actionType,
+            crmStudentId,
+            externalActionId: action.externalActionId,
+            payloadJson: JSON.stringify({
+              changes: action.adminStudentChanges ?? {},
+              valid: action.adminStudentPayloadValid === true,
+            }),
+            receivedAt: new Date(action.receivedAt),
+          },
+          update: {},
+          where: { externalActionId: action.externalActionId },
+        });
+        continue;
+      }
+      if (recognizedAdminTrainerUpdate) {
+        const crmTrainerId = action.crmTrainerId;
+        if (!crmTrainerId) continue;
+        await this.database.webAction.upsert({
+          create: {
+            actionType: action.actionType,
+            crmTrainerId,
+            externalActionId: action.externalActionId,
+            payloadJson: JSON.stringify({
+              changes: action.adminTrainerChanges ?? {},
+              valid: action.adminTrainerPayloadValid === true,
             }),
             receivedAt: new Date(action.receivedAt),
           },
@@ -4031,6 +4154,151 @@ export class IntegrationService {
         await this.acknowledgeWebAction(action.id);
       }
     }
+  }
+
+  private async processAdminStudentUpdateActions(): Promise<void> {
+    const actions = await this.database.webAction.findMany({
+      orderBy: { receivedAt: 'asc' },
+      where: {
+        actionType: 'ADMIN_STUDENT_UPDATE_REQUEST',
+        status: { in: ['PENDING', 'CLAIMED'] },
+      },
+    });
+    for (const action of actions) {
+      try {
+        if (action.status === 'PENDING') await this.claimLocalAction(action.id);
+        const changes = this.validatedAdminStudentChanges(action.payloadJson);
+        if (!action.crmStudentId)
+          throw new DomainError('VALIDATION', 'Идентификатор ученика не указан.');
+        await this.application.processAdminStudentUpdateWebAction(
+          action.id,
+          action.crmStudentId,
+          changes,
+        );
+        await this.acknowledgeWebAction(action.id);
+      } catch (error) {
+        await this.rejectAdminUpdateAction(
+          action.id,
+          error,
+          'Не удалось безопасно изменить данные ученика.',
+        );
+      }
+    }
+  }
+
+  private async processAdminTrainerUpdateActions(): Promise<void> {
+    const actions = await this.database.webAction.findMany({
+      orderBy: { receivedAt: 'asc' },
+      where: {
+        actionType: 'ADMIN_TRAINER_UPDATE_REQUEST',
+        status: { in: ['PENDING', 'CLAIMED'] },
+      },
+    });
+    for (const action of actions) {
+      try {
+        if (action.status === 'PENDING') await this.claimLocalAction(action.id);
+        const changes = this.validatedAdminTrainerChanges(action.payloadJson);
+        if (!action.crmTrainerId)
+          throw new DomainError('VALIDATION', 'Идентификатор тренера не указан.');
+        await this.application.processAdminTrainerUpdateWebAction(
+          action.id,
+          action.crmTrainerId,
+          changes,
+        );
+        await this.acknowledgeWebAction(action.id);
+      } catch (error) {
+        await this.rejectAdminUpdateAction(
+          action.id,
+          error,
+          'Не удалось безопасно изменить данные тренера.',
+        );
+      }
+    }
+  }
+
+  private adminChangesPayload(payloadJson: string | null): Record<string, unknown> {
+    const payload = payloadJson ? (JSON.parse(payloadJson) as unknown) : undefined;
+    if (!isRecord(payload) || payload.valid !== true || !isRecord(payload.changes))
+      throw new DomainError('VALIDATION', 'Данные изменения не поддерживаются.');
+    return payload.changes;
+  }
+
+  private validatedAdminStudentChanges(payloadJson: string | null): {
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+  } {
+    const changes = this.adminChangesPayload(payloadJson);
+    const allowed = new Set(['firstName', 'lastName', 'phone']);
+    const entries = Object.entries(changes);
+    if (
+      entries.length === 0 ||
+      entries.some(([key, value]) => !allowed.has(key) || typeof value !== 'string')
+    )
+      throw new DomainError('VALIDATION', 'Данные изменения не поддерживаются.');
+    return {
+      ...(typeof changes.firstName === 'string' ? { firstName: changes.firstName } : {}),
+      ...(typeof changes.lastName === 'string' ? { lastName: changes.lastName } : {}),
+      ...(typeof changes.phone === 'string' ? { phone: changes.phone } : {}),
+    };
+  }
+
+  private validatedAdminTrainerChanges(payloadJson: string | null): {
+    branchIds?: string[];
+    description?: string;
+    displayName?: string;
+    isActive?: boolean;
+    phone?: string;
+  } {
+    const changes = this.adminChangesPayload(payloadJson);
+    const allowed = new Set(['displayName', 'phone', 'description', 'isActive', 'branchIds']);
+    const entries = Object.entries(changes);
+    const invalid = entries.some(([key, value]) => {
+      if (!allowed.has(key)) return true;
+      if (key === 'isActive') return typeof value !== 'boolean';
+      if (key === 'branchIds')
+        return !Array.isArray(value) || value.some((branchId) => typeof branchId !== 'string');
+      return typeof value !== 'string';
+    });
+    if (entries.length === 0 || invalid)
+      throw new DomainError('VALIDATION', 'Данные изменения не поддерживаются.');
+    return {
+      ...(Array.isArray(changes.branchIds)
+        ? {
+            branchIds: changes.branchIds.filter(
+              (branchId: unknown): branchId is string => typeof branchId === 'string',
+            ),
+          }
+        : {}),
+      ...(typeof changes.description === 'string' ? { description: changes.description } : {}),
+      ...(typeof changes.displayName === 'string' ? { displayName: changes.displayName } : {}),
+      ...(typeof changes.isActive === 'boolean' ? { isActive: changes.isActive } : {}),
+      ...(typeof changes.phone === 'string' ? { phone: changes.phone } : {}),
+    };
+  }
+
+  private async rejectAdminUpdateAction(
+    actionId: string,
+    error: unknown,
+    technicalMessage: string,
+  ): Promise<void> {
+    const current = await this.database.webAction.findUnique({ where: { id: actionId } });
+    if (current?.status !== 'CLAIMED') return;
+    const authoritativeRejection = error instanceof DomainError;
+    await this.database.webAction.update({
+      data: {
+        nextCompletionAttemptAt: this.now(),
+        processedAt: this.now(),
+        processedByUserId: 'WEB_INTEGRATION',
+        safeError: authoritativeRejection ? error.message.slice(0, 300) : technicalMessage,
+        safeResultJson: JSON.stringify({
+          status: authoritativeRejection ? 'REJECTED' : 'FAILED',
+        }),
+        status: authoritativeRejection ? 'REJECTED_ACK_PENDING' : 'FAILED_ACK_PENDING',
+      },
+      where: { id: actionId, status: 'CLAIMED' },
+    });
+    await this.acknowledgeWebAction(actionId);
   }
 
   private async processInboundSafely(

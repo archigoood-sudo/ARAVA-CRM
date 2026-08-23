@@ -22,7 +22,7 @@ import type {
   UserSummary,
   UserUpdateInput,
 } from '@arava/shared';
-import { permissionsForRole, studentInputSchema, t } from '@arava/shared';
+import { permissionsForRole, studentInputSchema, t, userUpdateSchema } from '@arava/shared';
 import { Prisma, type Branch, type Student, type StudentContact, type User } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
@@ -937,10 +937,40 @@ export class ApplicationService {
     studentId: string,
     changes: { firstName?: string; lastName?: string; phone?: string },
   ): Promise<StudentSummary> {
+    return this.processStudentUpdateWebAction(
+      actionId,
+      studentId,
+      changes,
+      'CLIENT_PROFILE_UPDATE_REQUEST',
+      'WEB_PROFILE_UPDATE',
+    );
+  }
+
+  async processAdminStudentUpdateWebAction(
+    actionId: string,
+    studentId: string,
+    changes: { firstName?: string; lastName?: string; phone?: string },
+  ): Promise<StudentSummary> {
+    return this.processStudentUpdateWebAction(
+      actionId,
+      studentId,
+      changes,
+      'ADMIN_STUDENT_UPDATE_REQUEST',
+      'WEB_ADMIN_STUDENT_UPDATE',
+    );
+  }
+
+  private async processStudentUpdateWebAction(
+    actionId: string,
+    studentId: string,
+    changes: { firstName?: string; lastName?: string; phone?: string },
+    actionType: 'CLIENT_PROFILE_UPDATE_REQUEST' | 'ADMIN_STUDENT_UPDATE_REQUEST',
+    source: 'WEB_PROFILE_UPDATE' | 'WEB_ADMIN_STUDENT_UPDATE',
+  ): Promise<StudentSummary> {
     return this.database.$transaction(async (transaction) => {
       const action = await transaction.webAction.findUnique({ where: { id: actionId } });
       if (
-        action?.actionType !== 'CLIENT_PROFILE_UPDATE_REQUEST' ||
+        action?.actionType !== actionType ||
         action.crmStudentId !== studentId ||
         action.status !== 'CLAIMED'
       )
@@ -985,7 +1015,7 @@ export class ApplicationService {
         data: {
           action: 'STUDENT_UPDATED',
           actorUserId: systemActor.id,
-          detail: JSON.stringify({ fields, source: 'WEB_PROFILE_UPDATE' }),
+          detail: JSON.stringify({ fields, source }),
           entityId: studentId,
           entityType: 'Student',
         },
@@ -1004,6 +1034,125 @@ export class ApplicationService {
       if (completed.count !== 1)
         throw new DomainError('CONFLICT', 'Заявка на изменение профиля уже обработана.');
       return studentSummary(updated);
+    });
+  }
+
+  async processAdminTrainerUpdateWebAction(
+    actionId: string,
+    trainerId: string,
+    changes: {
+      branchIds?: string[];
+      description?: string;
+      displayName?: string;
+      isActive?: boolean;
+      phone?: string;
+    },
+  ): Promise<UserSummary> {
+    return this.database.$transaction(async (transaction) => {
+      const action = await transaction.webAction.findUnique({ where: { id: actionId } });
+      if (
+        action?.actionType !== 'ADMIN_TRAINER_UPDATE_REQUEST' ||
+        action.crmTrainerId !== trainerId ||
+        action.status !== 'CLAIMED'
+      )
+        throw new DomainError('CONFLICT', 'Заявка на изменение тренера уже обработана.');
+      const current = await transaction.user.findUnique({
+        include: { branchAssignments: { select: { branchId: true } } },
+        where: { id: trainerId },
+      });
+      if (current?.role !== 'COACH') throw new DomainError('NOT_FOUND', 'Тренер не найден.');
+      const branchIds = Object.hasOwn(changes, 'branchIds')
+        ? (changes.branchIds ?? [])
+        : current.branchAssignments.map(({ branchId }) => branchId);
+      const candidate = userUpdateSchema.safeParse({
+        branchIds,
+        fullName: changes.displayName ?? current.fullName,
+        isActive: Object.hasOwn(changes, 'isActive') ? changes.isActive : current.isActive,
+        phone: Object.hasOwn(changes, 'phone') ? changes.phone : (current.phone ?? undefined),
+        role: 'COACH',
+        trainerDescription: Object.hasOwn(changes, 'description')
+          ? changes.description
+          : (current.trainerDescription ?? undefined),
+      });
+      if (!candidate.success)
+        throw new DomainError(
+          'VALIDATION',
+          candidate.error.issues[0]?.message ?? 'Данные тренера не прошли проверку.',
+        );
+      if (new Set(candidate.data.branchIds).size !== candidate.data.branchIds.length)
+        throw new DomainError('VALIDATION', t('domain.validation.assignmentsUnique'));
+      const branchCount = await transaction.branch.count({
+        where: { id: { in: candidate.data.branchIds }, isActive: true },
+      });
+      if (branchCount !== candidate.data.branchIds.length)
+        throw new DomainError('VALIDATION', t('domain.validation.assignmentsInvalid'));
+      const systemActor = await transaction.user.findFirst({
+        orderBy: { createdAt: 'asc' },
+        where: { role: 'OWNER' },
+      });
+      if (!systemActor)
+        throw new DomainError('NOT_FOUND', 'Владелец CRM для системной операции не найден.');
+      await transaction.userBranch.deleteMany({ where: { userId: trainerId } });
+      const updated = await transaction.user.update({
+        data: {
+          branchAssignments: {
+            create: candidate.data.branchIds.map((branchId) => ({ branchId })),
+          },
+          fullName: candidate.data.fullName.trim(),
+          isActive: candidate.data.isActive,
+          phone: candidate.data.phone ? normalizePhone(candidate.data.phone) : null,
+          trainerDescription: optionalValue(candidate.data.trainerDescription),
+        },
+        include: { branchAssignments: { select: { branchId: true } } },
+        where: { id: trainerId },
+      });
+      const fields = Object.keys(changes).sort();
+      await transaction.auditLog.create({
+        data: {
+          action: 'USER_UPDATED',
+          actorUserId: systemActor.id,
+          detail: JSON.stringify({ fields, source: 'WEB_ADMIN_TRAINER_UPDATE' }),
+          entityId: trainerId,
+          entityType: 'User',
+        },
+      });
+      if (current.isActive !== updated.isActive) {
+        await transaction.auditLog.create({
+          data: {
+            action: updated.isActive ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
+            actorUserId: systemActor.id,
+            entityId: trainerId,
+            entityType: 'User',
+          },
+        });
+      }
+      const previousBranches = current.branchAssignments.map(({ branchId }) => branchId).sort();
+      const nextBranches = updated.branchAssignments.map(({ branchId }) => branchId).sort();
+      if (JSON.stringify(previousBranches) !== JSON.stringify(nextBranches)) {
+        await transaction.auditLog.create({
+          data: {
+            action: 'USER_BRANCH_ACCESS_CHANGED',
+            actorUserId: systemActor.id,
+            detail: JSON.stringify({ branchCount: nextBranches.length }),
+            entityId: trainerId,
+            entityType: 'User',
+          },
+        });
+      }
+      const completed = await transaction.webAction.updateMany({
+        data: {
+          nextCompletionAttemptAt: new Date(),
+          processedAt: new Date(),
+          processedByUserId: systemActor.id,
+          safeError: null,
+          safeResultJson: JSON.stringify({ fields, status: 'SUCCEEDED' }),
+          status: 'SUCCEEDED_ACK_PENDING',
+        },
+        where: { id: actionId, status: 'CLAIMED' },
+      });
+      if (completed.count !== 1)
+        throw new DomainError('CONFLICT', 'Заявка на изменение тренера уже обработана.');
+      return userSummary(updated);
     });
   }
 
