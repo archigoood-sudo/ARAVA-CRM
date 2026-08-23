@@ -49,6 +49,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
+import { invalidateStudentIdentityCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { ContactDialog } from './contact-dialog';
@@ -146,11 +147,9 @@ export function StudentProfilePage() {
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.student(studentId) }),
-      queryClient.invalidateQueries({ queryKey: ['student-profile'] }),
+      invalidateStudentIdentityCaches(queryClient, studentId),
       queryClient.invalidateQueries({ queryKey: queryKeys.studentFinance(studentId) }),
       queryClient.invalidateQueries({ queryKey: ['cards', 'student-current', studentId] }),
-      queryClient.invalidateQueries({ queryKey: ['attention'] }),
-      queryClient.invalidateQueries({ queryKey: ['groups', 'eligible-for-student', studentId] }),
       queryClient.invalidateQueries({ queryKey: ['groups', 'list'] }),
     ]);
   };

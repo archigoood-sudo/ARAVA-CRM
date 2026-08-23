@@ -53,6 +53,7 @@ export class GlobalSearchService {
         take: LIMIT_PER_TYPE,
         where: {
           ...studentAccess,
+          archivedAt: null,
           OR: [
             ...variants.flatMap((value) => [
               { firstName: { contains: value } },
@@ -91,6 +92,7 @@ export class GlobalSearchService {
         where: {
           ...branchEntityWhere,
           ...ownGroupWhere,
+          archivedAt: null,
           OR: variants.flatMap((value) => [
             { name: { contains: value } },
             { direction: { contains: value } },

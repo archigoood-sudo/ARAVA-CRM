@@ -342,6 +342,7 @@ const desktopApi: AravaDesktopApi = {
     get: (token, id) => invoke(IPC_CHANNELS.studentGet, token, id),
     getProfile: (token, id) => invoke(IPC_CHANNELS.studentProfileGet, token, id),
     list: (token, query) => invoke(IPC_CHANNELS.studentList, token, query),
+    options: (token, branchId) => invoke(IPC_CHANNELS.studentOptions, token, branchId),
     update: (token, id, input) => invoke(IPC_CHANNELS.studentUpdate, token, id, input),
     updateNote: (token, noteId, input) =>
       invoke(IPC_CHANNELS.studentNoteUpdate, token, noteId, input),

@@ -37,6 +37,7 @@ import { useDeferredValue, useMemo, useState } from 'react';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
+import { invalidateFinanceCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { PaymentDetailsDialog } from './payment-details-dialog';
@@ -95,14 +96,8 @@ export function FinancePage() {
     queryKey: ['finance', 'employees'],
   });
   const students = useQuery({
-    queryFn: () =>
-      getDesktopApi().students.list(getSessionToken(), {
-        page: 1,
-        pageSize: 100,
-        sortBy: 'name',
-        sortDirection: 'asc',
-      }),
-    queryKey: ['finance', 'student-options'],
+    queryFn: () => getDesktopApi().students.options(getSessionToken()),
+    queryKey: ['students', 'options'],
   });
   const paymentDetail = useQuery({
     enabled: Boolean(selectedPaymentId),
@@ -120,12 +115,7 @@ export function FinancePage() {
     mutationFn: (id: string) => getDesktopApi().payments.cancel(getSessionToken(), id),
   });
   const refresh = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['payments'] }),
-      queryClient.invalidateQueries({ queryKey: ['finance'] }),
-      queryClient.invalidateQueries({ queryKey: ['students', 'finance'] }),
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-    ]);
+    await invalidateFinanceCaches(queryClient);
   };
   const savePayment = async (input: PaymentInput) => {
     setError(undefined);
@@ -342,7 +332,7 @@ export function FinancePage() {
         onSbpCompleted={refresh}
         onSubmit={savePayment}
         open={paymentOpen}
-        students={students.data?.items ?? []}
+        students={students.data ?? []}
       />
       <PaymentDetailsDialog
         canRefund={canRefund}

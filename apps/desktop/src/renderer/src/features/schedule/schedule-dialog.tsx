@@ -14,6 +14,8 @@ import { Button, Dialog, Input, Label, Select } from '@arava/ui';
 import { useEffect, useLayoutEffect } from 'react';
 import { useForm } from 'react-hook-form';
 
+import { localDateInputValue } from '../../lib/local-date';
+
 export function ScheduleDialog({
   branches,
   error,
@@ -63,7 +65,7 @@ export function ScheduleDialog({
           isActive: true,
           roomId: undefined,
           startTime: '18:00',
-          validFrom: new Date().toISOString().slice(0, 10),
+          validFrom: localDateInputValue(),
           weekday: 1,
         },
       );

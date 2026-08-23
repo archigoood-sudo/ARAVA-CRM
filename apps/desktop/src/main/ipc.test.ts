@@ -33,6 +33,7 @@ import {
   type MembershipCardSummary,
   type CardScanResolution,
   type GlobalSearchResult,
+  type StudentSummary,
   type StudentProfileOverview,
   type TrainerProfileOverview,
   type AttentionItem,
@@ -716,6 +717,35 @@ describe('Electron IPC boundary', () => {
         type: 'STUDENT',
       }),
     ]);
+  });
+
+  it('returns complete student options through the IPC boundary', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!StudentOptionsIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Филиал селектора IPC' });
+    await database.student.createMany({
+      data: Array.from({ length: 101 }, (_, index) => ({
+        branchId: branch.id,
+        firstName: `Имя ${String(index)}`,
+        lastName: 'Ученик',
+        status: 'ACTIVE' as const,
+      })),
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+
+    const students = (await handlers[IPC_CHANNELS.studentOptions]?.(
+      owner.token,
+      branch.id,
+    )) as StudentSummary[];
+
+    expect(students).toHaveLength(101);
+    expect(() => handlers[IPC_CHANNELS.studentOptions]?.(owner.token, '')).toThrow();
   });
 
   it('validates room IPC and keeps the global audit OWNER-only', async () => {

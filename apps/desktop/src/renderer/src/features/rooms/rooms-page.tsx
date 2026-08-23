@@ -37,6 +37,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
+import { localDateInputValue } from '../../lib/local-date';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 
 const localInput = (date = new Date()): string => {
@@ -262,7 +263,7 @@ export function RoomsPage() {
 }
 
 function RoomDetailDialog({ onClose, room }: { onClose: () => void; room: RoomSummary | null }) {
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(localDateInputValue());
   const range = useMemo(() => {
     const start = new Date(`${date}T00:00:00`);
     const end = new Date(`${date}T23:59:59.999`);

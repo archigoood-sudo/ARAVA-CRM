@@ -785,6 +785,33 @@ export class ApplicationService {
     };
   }
 
+  async listStudentOptions(token: string, branchId?: string): Promise<StudentSummary[]> {
+    const actor = await this.authenticate(token);
+    assertPermission(actor, 'students:read');
+    const branchIds = accessibleBranchIds(actor);
+    if (branchId) assertBranchAccess(actor, branchId);
+    const students = await this.database.student.findMany({
+      include: { branch: true },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      where: {
+        archivedAt: null,
+        ...(branchId ? { branchId } : branchIds ? { branchId: { in: branchIds } } : {}),
+        ...(actor.role === 'COACH'
+          ? {
+              enrollments: {
+                some: {
+                  group: { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] },
+                  leftAt: null,
+                  status: { in: ['ACTIVE', 'TRIAL', 'FROZEN'] },
+                },
+              },
+            }
+          : {}),
+      },
+    });
+    return students.map(studentSummary);
+  }
+
   async getStudent(token: string, id: string): Promise<StudentDetail> {
     const actor = await this.authenticate(token);
     assertPermission(actor, 'students:read');

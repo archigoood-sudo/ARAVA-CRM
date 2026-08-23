@@ -1325,6 +1325,11 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         studentListQuerySchema.parse(unsafeQuery),
       ),
+    [IPC_CHANNELS.studentOptions]: (unsafeToken, unsafeBranchId) =>
+      service.listStudentOptions(
+        sessionTokenSchema.parse(unsafeToken),
+        unsafeBranchId === undefined ? undefined : identifierSchema.parse(unsafeBranchId),
+      ),
     [IPC_CHANNELS.studentGet]: (unsafeToken, unsafeId) =>
       service.getStudent(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
     [IPC_CHANNELS.studentProfileGet]: (unsafeToken, unsafeId) =>

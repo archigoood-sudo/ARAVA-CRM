@@ -381,6 +381,7 @@ export const IPC_CHANNELS = {
   studentNoteUpdate: 'student-note:update',
   studentNoteArchive: 'student-note:archive',
   studentList: 'student:list',
+  studentOptions: 'student:options',
   studentUpdate: 'student:update',
   systemInformation: 'system:information',
   userCreate: 'user:create',
@@ -2749,6 +2750,7 @@ export interface AravaDesktopApi {
     get: (token: string, id: string) => Promise<StudentDetail>;
     getProfile: (token: string, id: string) => Promise<StudentProfileOverview>;
     list: (token: string, query: StudentListQuery) => Promise<StudentListResult>;
+    options: (token: string, branchId?: string) => Promise<StudentSummary[]>;
     update: (token: string, id: string, input: StudentInput) => Promise<StudentSummary>;
     updateNote: (
       token: string,

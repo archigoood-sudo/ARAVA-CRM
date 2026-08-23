@@ -183,4 +183,17 @@ describe('Sprint 4.1D global search', () => {
     );
     expect(await search.search(coachSession.token, 'Администратор')).toEqual([]);
   });
+
+  it('does not return archived students or groups', async () => {
+    const context = await foundation();
+    await application.archiveStudent(ownerToken, context.student.id);
+    await studio.archiveGroup(ownerToken, context.group.id);
+
+    expect(await search.search(ownerToken, 'Иванов')).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: context.student.id })]),
+    );
+    expect(await search.search(ownerToken, 'Hip-Hop')).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: context.group.id })]),
+    );
+  });
 });

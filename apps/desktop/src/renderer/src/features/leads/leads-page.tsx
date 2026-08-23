@@ -31,6 +31,7 @@ import { Link, Navigate, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
+import { invalidateStudentIdentityCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { StudentDialog } from '../students/student-dialog';
@@ -138,7 +139,10 @@ export function LeadsPage() {
         student.id,
       );
       client.setQueryData(queryKeys.lead(current.id, accessKey), converted);
-      await invalidate(current.id);
+      await Promise.all([
+        invalidate(current.id),
+        invalidateStudentIdentityCaches(client, student.id),
+      ]);
       setStudentOpen(false);
       if (contactError) {
         setFlowError(

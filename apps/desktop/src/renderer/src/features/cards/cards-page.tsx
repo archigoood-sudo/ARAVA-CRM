@@ -107,15 +107,8 @@ function CardsWorkspace() {
     queryKey: ['branches'],
   });
   const students = useQuery({
-    queryFn: () =>
-      getDesktopApi().students.list(getSessionToken(), {
-        branchId: query.branchId,
-        page: 1,
-        pageSize: 100,
-        sortBy: 'name',
-        sortDirection: 'asc',
-      }),
-    queryKey: ['cards', 'student-options', query.branchId],
+    queryFn: () => getDesktopApi().students.options(getSessionToken(), query.branchId),
+    queryKey: ['students', 'options', query.branchId],
   });
   const history = useQuery({
     enabled: Boolean(historyCard),
@@ -490,7 +483,7 @@ function CardsWorkspace() {
             setError(getErrorMessage(caught, 'Не удалось привязать карту.'));
           }
         }}
-        students={students.data?.items ?? []}
+        students={students.data ?? []}
       />
       <Dialog
         closeLabel="Закрыть"

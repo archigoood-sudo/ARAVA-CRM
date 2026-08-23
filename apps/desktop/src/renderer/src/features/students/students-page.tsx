@@ -39,6 +39,7 @@ import { Link } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
+import { invalidateStudentIdentityCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { StudentDialog } from './student-dialog';
@@ -91,11 +92,11 @@ export function StudentsPage() {
   });
   const create = useMutation({
     mutationFn: (input: StudentInput) => getDesktopApi().students.create(getSessionToken(), input),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['students'] }),
+    onSuccess: (student) => invalidateStudentIdentityCaches(queryClient, student.id),
   });
   const archive = useMutation({
     mutationFn: (id: string) => getDesktopApi().students.archive(getSessionToken(), id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['students'] }),
+    onSuccess: (student) => invalidateStudentIdentityCaches(queryClient, student.id),
   });
   const save = async (input: StudentInput) => {
     setError(undefined);

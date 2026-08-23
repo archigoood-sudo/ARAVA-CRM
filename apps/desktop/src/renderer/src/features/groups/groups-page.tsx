@@ -26,6 +26,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
+import { invalidateGlobalSearchCache } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { GroupDialog } from './group-dialog';
@@ -75,7 +76,10 @@ export function GroupsPage() {
     setError(undefined);
     try {
       await save.mutateAsync(input);
-      await client.invalidateQueries({ queryKey: ['groups'] });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['groups'] }),
+        invalidateGlobalSearchCache(client),
+      ]);
       setDialog(false);
     } catch (caught) {
       setError(getErrorMessage(caught, t('group.errorSave')));
@@ -83,7 +87,10 @@ export function GroupsPage() {
   };
   const archiveGroup = async (id: string) => {
     await archive.mutateAsync(id);
-    await client.invalidateQueries({ queryKey: ['groups'] });
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ['groups'] }),
+      invalidateGlobalSearchCache(client),
+    ]);
   };
   return (
     <main className="mx-auto w-full max-w-[1540px] animate-fade-in p-9 pb-14">

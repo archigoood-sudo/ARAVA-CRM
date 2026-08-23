@@ -24,6 +24,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
+import { invalidateLessonCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { LessonDialog } from './lesson-dialog';
@@ -68,7 +69,7 @@ export function LessonDetailsPage() {
       client.invalidateQueries({ queryKey: queryKeys.lesson(lessonId) }),
       client.invalidateQueries({ queryKey: ['subscriptions'] }),
       client.invalidateQueries({ queryKey: ['students', 'finance'] }),
-      client.invalidateQueries({ queryKey: ['dashboard'] }),
+      invalidateLessonCaches(client),
     ]);
   };
   if (lesson.isLoading) return <LoadingState label={t('common.loading')} />;

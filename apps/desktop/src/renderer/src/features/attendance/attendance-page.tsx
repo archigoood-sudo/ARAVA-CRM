@@ -14,6 +14,7 @@ import { useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
+import { invalidateAttendanceCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken } from '../../stores/auth-store';
 
@@ -66,13 +67,7 @@ export function AttendancePage() {
       getDesktopApi().attendance.save(getSessionToken(), lessonId, entries),
     onSuccess: async (data) => {
       client.setQueryData(queryKeys.attendance(lessonId), data);
-      await Promise.all([
-        client.invalidateQueries({ queryKey: ['attendance', 'today'] }),
-        client.invalidateQueries({ queryKey: ['subscriptions'] }),
-        client.invalidateQueries({ queryKey: ['students', 'finance'] }),
-        client.invalidateQueries({ queryKey: ['dashboard'] }),
-        client.invalidateQueries({ queryKey: ['attention'] }),
-      ]);
+      await invalidateAttendanceCaches(client);
     },
   });
 

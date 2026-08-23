@@ -44,12 +44,13 @@ import { useNavigate } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
+import { localDateInputValue } from '../../lib/local-date';
+import { invalidateLessonCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { LessonDialog } from './lesson-dialog';
 import { ScheduleDialog } from './schedule-dialog';
 
-const isoDate = (date: Date) => date.toISOString().slice(0, 10);
 function calendarRange(view: 'day' | 'month' | 'week', selectedDate: string): LessonListQuery {
   const from = new Date(`${selectedDate}T12:00:00`);
   from.setHours(0, 0, 0, 0);
@@ -69,10 +70,12 @@ export function SchedulePage() {
   const client = useQueryClient();
   const [filter, setFilter] = useState<WeeklyScheduleQuery>({});
   const [calendarView, setCalendarView] = useState<'day' | 'month' | 'week'>('week');
-  const [selectedDate, setSelectedDate] = useState(isoDate(new Date()));
+  const [selectedDate, setSelectedDate] = useState(localDateInputValue());
   const [copyOpen, setCopyOpen] = useState(false);
   const [exceptionOpen, setExceptionOpen] = useState(false);
-  const [copyTarget, setCopyTarget] = useState(isoDate(new Date(Date.now() + 86_400_000)));
+  const [copyTarget, setCopyTarget] = useState(
+    localDateInputValue(new Date(Date.now() + 86_400_000)),
+  );
   const [exceptionTitle, setExceptionTitle] = useState('Праздничный день');
   const [exceptionType, setExceptionType] = useState<'CUSTOM' | 'DAY_OFF' | 'HOLIDAY' | 'VACATION'>(
     'HOLIDAY',
@@ -83,8 +86,8 @@ export function SchedulePage() {
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [generation, setGeneration] = useState<LessonGenerateInput>({
-    dateFrom: isoDate(new Date()),
-    dateTo: isoDate(new Date(Date.now() + 30 * 86_400_000)),
+    dateFrom: localDateInputValue(),
+    dateTo: localDateInputValue(new Date(Date.now() + 30 * 86_400_000)),
   });
   const lessonQuery = useMemo(
     () => ({
@@ -168,7 +171,7 @@ export function SchedulePage() {
     setError(undefined);
     try {
       await saveLesson.mutateAsync(input);
-      await client.invalidateQueries({ queryKey: ['lessons'] });
+      await invalidateLessonCaches(client);
       setLessonDialog(false);
     } catch (caught) {
       setError(getErrorMessage(caught, t('schedule.errorSave')));
@@ -180,7 +183,7 @@ export function SchedulePage() {
     try {
       const result = await generate.mutateAsync(generation);
       setMessage(t('schedule.generated', { created: result.created, skipped: result.skipped }));
-      await client.invalidateQueries({ queryKey: ['lessons'] });
+      await invalidateLessonCaches(client);
     } catch (caught) {
       setError(getErrorMessage(caught, t('schedule.errorSave')));
     }
@@ -226,14 +229,14 @@ export function SchedulePage() {
             const value = new Date(`${selectedDate}T12:00:00`);
             if (calendarView === 'month') value.setMonth(value.getMonth() - 1);
             else value.setDate(value.getDate() - (calendarView === 'week' ? 7 : 1));
-            setSelectedDate(isoDate(value));
+            setSelectedDate(localDateInputValue(value));
           }}
           size="icon"
           variant="outline"
         >
           <ChevronLeft className="size-4" />
         </Button>
-        <Button onClick={() => setSelectedDate(isoDate(new Date()))} variant="outline">
+        <Button onClick={() => setSelectedDate(localDateInputValue())} variant="outline">
           Сегодня
         </Button>
         <Input
@@ -249,7 +252,7 @@ export function SchedulePage() {
             const value = new Date(`${selectedDate}T12:00:00`);
             if (calendarView === 'month') value.setMonth(value.getMonth() + 1);
             else value.setDate(value.getDate() + (calendarView === 'week' ? 7 : 1));
-            setSelectedDate(isoDate(value));
+            setSelectedDate(localDateInputValue(value));
           }}
           size="icon"
           variant="outline"
@@ -580,7 +583,7 @@ export function SchedulePage() {
                 setMessage(
                   `Скопировано: ${String(result.copied)}. Конфликты: ${String(result.conflicts)}.`,
                 );
-                await client.invalidateQueries({ queryKey: ['lessons'] });
+                await invalidateLessonCaches(client);
                 setCopyOpen(false);
               }}
             >

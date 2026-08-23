@@ -1,13 +1,8 @@
 import type { AttendanceWorkspaceLesson } from '@arava/shared';
 
-export type AttendanceTimeGroup = 'CURRENT' | 'UPCOMING' | 'LATER' | 'COMPLETED';
+export { localDateInputValue as localDateKey } from '../../lib/local-date';
 
-export function localDateKey(value = new Date()): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  return `${String(year)}-${month}-${day}`;
-}
+export type AttendanceTimeGroup = 'CURRENT' | 'UPCOMING' | 'LATER' | 'COMPLETED';
 
 export function groupAttendanceLessons(
   lessons: AttendanceWorkspaceLesson[],
