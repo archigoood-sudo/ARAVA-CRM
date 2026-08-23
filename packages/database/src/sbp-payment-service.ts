@@ -32,6 +32,14 @@ export class AqsiPaymentService {
     return gateway;
   }
 
+  async retryFiscalReceipt(token: string, operationId: string): Promise<AqsiGatewayPayment> {
+    const operation = await this.operations.get(token, operationId);
+    this.assertAqsiOperation(operation.providerType);
+    if (operation.status !== 'SUCCEEDED')
+      throw new DomainError('CONFLICT', 'Чек можно проверить только для успешной оплаты.');
+    return this.integration.retryAqsiFiscalReceipt(token, operation);
+  }
+
   async cancel(token: string, operationId: string): Promise<AqsiGatewayPayment> {
     const operation = await this.operations.get(token, operationId);
     this.assertAqsiOperation(operation.providerType);

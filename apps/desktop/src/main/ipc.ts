@@ -1025,16 +1025,51 @@ export function createIpcHandlers(
         return requireAqsiPayments().refresh(token, id);
       const operation = await paymentOperations.get(token, id);
       const isCard = operation.providerType === 'ACQUIRING';
-      await paymentOperations.finalizeTrusted(id, {
-        paymentMethod: isCard ? 'ACQUIRING' : 'SBP',
-        providerOperationId: operation.providerOperationId,
-        providerResultId: `slip-${id}`,
-      });
+      const fiscalCompleted = operation.status === 'SUCCEEDED';
+      if (!fiscalCompleted)
+        await paymentOperations.finalizeTrusted(id, {
+          paymentMethod: isCard ? 'ACQUIRING' : 'SBP',
+          providerOperationId: operation.providerOperationId,
+          providerResultId: `slip-${id}`,
+        });
       return {
         amountKopecks: operation.amount,
         aravaOperationId: id,
         currency: 'RUB' as const,
         deviceId: 101,
+        fiscalReceipt: {
+          canRetry: false,
+          ...(fiscalCompleted ? { fiscalDocumentNumber: 42, fiscalSign: '987654321' } : {}),
+          status: fiscalCompleted ? ('SUCCEEDED' as const) : ('PROCESSING' as const),
+          updatedAt: new Date().toISOString(),
+        },
+        provider: isCard ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
+        providerOperationId: operation.providerOperationId,
+        providerResultId: `slip-${id}`,
+        status: 'SUCCEEDED' as const,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+    [IPC_CHANNELS.paymentOperationRetryFiscalReceipt]: async (unsafeToken, unsafeId) => {
+      const token = await paymentManagerToken(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
+        return requireAqsiPayments().retryFiscalReceipt(token, id);
+      const operation = await paymentOperations.get(token, id);
+      const isCard = operation.providerType === 'ACQUIRING';
+      return {
+        amountKopecks: operation.amount,
+        aravaOperationId: id,
+        currency: 'RUB' as const,
+        deviceId: 101,
+        fiscalReceipt: {
+          canRetry: false,
+          completedAt: new Date().toISOString(),
+          fiscalDocumentNumber: 42,
+          fiscalSign: '987654321',
+          status: 'SUCCEEDED' as const,
+          updatedAt: new Date().toISOString(),
+        },
         provider: isCard ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
         providerOperationId: operation.providerOperationId,
         providerResultId: `slip-${id}`,

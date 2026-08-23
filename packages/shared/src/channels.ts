@@ -327,6 +327,7 @@ export const IPC_CHANNELS = {
   paymentOperationGet: 'payment-operation:get',
   paymentOperationListStudent: 'payment-operation:list-student',
   paymentOperationRefreshAqsi: 'payment-operation:refresh-aqsi',
+  paymentOperationRetryFiscalReceipt: 'payment-operation:retry-fiscal-receipt',
   paymentOperationRefreshSbp: 'payment-operation:refresh-sbp',
   paymentOperationCancelSbp: 'payment-operation:cancel-sbp',
   paymentOperationSbpDevices: 'payment-operation:sbp-devices',
@@ -903,12 +904,28 @@ export type SbpGatewayStatus =
 
 export type AqsiGatewayProvider = 'AQSI_CARD' | 'AQSI_SBP';
 
+export interface AqsiFiscalReceipt {
+  canRetry: boolean;
+  completedAt?: string | null;
+  fiscalDocumentNumber?: number | null;
+  fiscalSign?: string | null;
+  fiscalStorageNumber?: string | null;
+  kktRegistrationNumber?: string | null;
+  kktSerialNumber?: string | null;
+  message?: string | null;
+  providerReceiptId?: string | null;
+  receiptUrl?: string | null;
+  status: 'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'ERROR' | 'UNKNOWN';
+  updatedAt: string;
+}
+
 export interface AqsiGatewayPayment {
   amountKopecks: number;
   aravaOperationId: string;
   currency: 'RUB';
   error?: { code?: string | null; message: string } | null;
   expiresAt?: string | null;
+  fiscalReceipt?: AqsiFiscalReceipt | null;
   deviceId?: number | null;
   provider: AqsiGatewayProvider;
   providerOperationId?: string | null;
@@ -2610,6 +2627,7 @@ export interface AravaDesktopApi {
     listStudent: (token: string, studentId: string) => Promise<PaymentOperationSummary[]>;
     refreshSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
     refreshAqsi: (token: string, id: string) => Promise<AqsiGatewayPayment>;
+    retryFiscalReceipt: (token: string, id: string) => Promise<AqsiGatewayPayment>;
     sbpDevices: (token: string) => Promise<AqsiDeviceList>;
     sbpHealth: (token: string) => Promise<SbpProviderHealth>;
     sbpSelectDevice: (token: string, deviceId: number) => Promise<AqsiDeviceSummary>;

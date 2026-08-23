@@ -203,6 +203,28 @@ export function PaymentDialog({
     }
   };
 
+  const checkFiscalReceipt = async () => {
+    if (!sbpPayment) return;
+    setSbpBusy(true);
+    setSbpError(undefined);
+    try {
+      const payment = sbpPayment.fiscalReceipt?.canRetry
+        ? await getDesktopApi().paymentOperations.retryFiscalReceipt(
+            getSessionToken(),
+            sbpPayment.aravaOperationId,
+          )
+        : await getDesktopApi().paymentOperations.refreshAqsi(
+            getSessionToken(),
+            sbpPayment.aravaOperationId,
+          );
+      setSbpPayment(payment);
+    } catch (caught) {
+      setSbpError(getErrorMessage(caught, 'Не удалось проверить кассовый чек.'));
+    } finally {
+      setSbpBusy(false);
+    }
+  };
+
   const cancelSbp = async () => {
     if (!sbpPayment) return;
     setSbpBusy(true);
@@ -392,7 +414,40 @@ export function PaymentDialog({
                 </p>
               </>
             ) : sbpPayment?.status === 'SUCCEEDED' ? (
-              <p className="font-semibold text-green-700">Оплата подтверждена</p>
+              <div className="space-y-2">
+                <p className="font-semibold text-green-700">Оплата подтверждена</p>
+                <p className="text-sm font-medium">
+                  {sbpPayment.fiscalReceipt?.status === 'SUCCEEDED'
+                    ? 'Чек сформирован'
+                    : sbpPayment.fiscalReceipt?.status === 'ERROR' ||
+                        sbpPayment.fiscalReceipt?.status === 'UNKNOWN'
+                      ? 'Ошибка формирования чека'
+                      : 'Чек формируется'}
+                </p>
+                {sbpPayment.fiscalReceipt?.fiscalDocumentNumber ? (
+                  <p className="text-xs text-muted-foreground">
+                    Фискальный документ №{sbpPayment.fiscalReceipt.fiscalDocumentNumber}
+                    {sbpPayment.fiscalReceipt.fiscalSign
+                      ? ` · ФП ${sbpPayment.fiscalReceipt.fiscalSign}`
+                      : ''}
+                  </p>
+                ) : null}
+                {sbpPayment.fiscalReceipt?.message ? (
+                  <p className="text-xs text-muted-foreground">
+                    {sbpPayment.fiscalReceipt.message}
+                  </p>
+                ) : null}
+                {sbpPayment.fiscalReceipt?.receiptUrl ? (
+                  <a
+                    className="text-sm font-medium underline underline-offset-4"
+                    href={sbpPayment.fiscalReceipt.receiptUrl}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Открыть чек
+                  </a>
+                ) : null}
+              </div>
             ) : sbpPayment && ['FAILED', 'CANCELLED', 'EXPIRED'].includes(sbpPayment.status) ? (
               <>
                 <p className="font-semibold text-red-700">Оплата не завершена</p>
@@ -433,9 +488,21 @@ export function PaymentDialog({
               {isSubmitting ? t('common.saving') : t('payment.save')}
             </Button>
           ) : sbpPayment?.status === 'SUCCEEDED' ? (
-            <Button onClick={onClose} type="button">
-              Готово
-            </Button>
+            <div className="flex gap-2">
+              {sbpPayment.fiscalReceipt?.status !== 'SUCCEEDED' ? (
+                <Button
+                  disabled={sbpBusy}
+                  onClick={() => void checkFiscalReceipt()}
+                  type="button"
+                  variant="outline"
+                >
+                  Проверить чек
+                </Button>
+              ) : null}
+              <Button onClick={onClose} type="button">
+                Готово
+              </Button>
+            </div>
           ) : sbpPayment && ['FAILED', 'CANCELLED', 'EXPIRED'].includes(sbpPayment.status) ? (
             <Button
               onClick={() => {

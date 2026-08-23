@@ -1046,6 +1046,26 @@ describe('Electron IPC boundary', () => {
     const gatewayService = {
       cancelAqsiPayment: vi.fn(),
       refreshAqsiPayment: vi.fn(),
+      retryAqsiFiscalReceipt: vi.fn(
+        (_token: string, target: { id: string; providerType: string }) =>
+          Promise.resolve({
+            amountKopecks: 12_000,
+            aravaOperationId: target.id,
+            currency: 'RUB' as const,
+            fiscalReceipt: {
+              canRetry: false,
+              fiscalDocumentNumber: 42,
+              status: 'SUCCEEDED' as const,
+              updatedAt: new Date().toISOString(),
+            },
+            provider:
+              target.providerType === 'ACQUIRING' ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
+            providerOperationId: `aqsi-${target.id}`,
+            providerResultId: `slip-${target.id}`,
+            status: 'SUCCEEDED' as const,
+            updatedAt: new Date().toISOString(),
+          }),
+      ),
       sbpProviderHealth: vi.fn(() =>
         Promise.resolve({
           apiReachable: true,
@@ -1114,6 +1134,18 @@ describe('Electron IPC boundary', () => {
       where: { operation: { id: (cardOperation as { id: string }).id } },
     });
     expect(cardPayment.paymentMethod).toBe('ACQUIRING');
+    await expect(
+      sbpHandlers[IPC_CHANNELS.paymentOperationRetryFiscalReceipt]?.(
+        coachSession.token,
+        (cardOperation as { id: string }).id,
+      ),
+    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
+    expect(
+      await sbpHandlers[IPC_CHANNELS.paymentOperationRetryFiscalReceipt]?.(
+        owner.token,
+        (cardOperation as { id: string }).id,
+      ),
+    ).toMatchObject({ fiscalReceipt: { fiscalDocumentNumber: 42, status: 'SUCCEEDED' } });
     await expect(
       handlers[IPC_CHANNELS.paymentOperationTestComplete]?.(
         owner.token,

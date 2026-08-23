@@ -333,12 +333,14 @@ function parseAqsiGatewayPayment(
           message: payload.error.message,
         }
       : null;
+  const fiscalReceipt = parseAqsiFiscalReceipt(payload.fiscalReceipt);
   return {
     amountKopecks: payload.amountKopecks,
     aravaOperationId: expected.id,
     currency: 'RUB',
     error,
     ...(typeof payload.expiresAt === 'string' ? { expiresAt: payload.expiresAt } : {}),
+    ...(fiscalReceipt ? { fiscalReceipt } : {}),
     ...(Number.isSafeInteger(payload.deviceId) ? { deviceId: payload.deviceId as number } : {}),
     provider: payload.provider as AqsiGatewayPayment['provider'],
     ...(typeof payload.providerOperationId === 'string'
@@ -352,6 +354,53 @@ function parseAqsiGatewayPayment(
       : {}),
     ...(typeof payload.qrPayload === 'string' ? { qrPayload: payload.qrPayload } : {}),
     status: payload.status as AqsiGatewayPayment['status'],
+    updatedAt: payload.updatedAt,
+  };
+}
+
+function parseAqsiFiscalReceipt(payload: unknown): AqsiGatewayPayment['fiscalReceipt'] {
+  if (payload === null || payload === undefined) return null;
+  if (!isRecord(payload))
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Сервер вернул неверные данные кассового чека.',
+    );
+  const statuses = new Set(['PENDING', 'PROCESSING', 'SUCCEEDED', 'ERROR', 'UNKNOWN']);
+  if (
+    typeof payload.status !== 'string' ||
+    !statuses.has(payload.status) ||
+    typeof payload.canRetry !== 'boolean' ||
+    typeof payload.updatedAt !== 'string'
+  ) {
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Сервер вернул неверные данные кассового чека.',
+    );
+  }
+  const optionalText = (key: string) => {
+    const value = payload[key];
+    return typeof value === 'string' ? { [key]: value } : {};
+  };
+  const receiptUrl =
+    typeof payload.receiptUrl === 'string' && payload.receiptUrl.startsWith('https://')
+      ? payload.receiptUrl
+      : undefined;
+  return {
+    canRetry: payload.canRetry,
+    ...(Number.isSafeInteger(payload.fiscalDocumentNumber)
+      ? { fiscalDocumentNumber: payload.fiscalDocumentNumber as number }
+      : {}),
+    ...optionalText('completedAt'),
+    ...optionalText('fiscalSign'),
+    ...optionalText('fiscalStorageNumber'),
+    ...optionalText('kktRegistrationNumber'),
+    ...optionalText('kktSerialNumber'),
+    ...optionalText('message'),
+    ...optionalText('providerReceiptId'),
+    ...(receiptUrl ? { receiptUrl } : {}),
+    status: payload.status as NonNullable<AqsiGatewayPayment['fiscalReceipt']>['status'],
     updatedAt: payload.updatedAt,
   };
 }
@@ -1048,6 +1097,25 @@ export class IntegrationApiClient {
     const payload = await this.request(
       baseUrl,
       `payments/${encodeURIComponent(operation.id)}/cancel`,
+      deviceId,
+      token,
+      'POST',
+      undefined,
+      context,
+    );
+    return parseAqsiGatewayPayment(payload, operation);
+  }
+
+  async retryFiscalReceipt(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    operation: PaymentOperationSummary,
+    context: CrmChatRequestContext,
+  ): Promise<AqsiGatewayPayment> {
+    const payload = await this.request(
+      baseUrl,
+      `payments/${encodeURIComponent(operation.id)}/fiscal-receipt`,
       deviceId,
       token,
       'POST',
@@ -1993,6 +2061,23 @@ export class IntegrationService {
     operation: PaymentOperationSummary,
   ): Promise<AqsiGatewayPayment> {
     return this.refreshSbpPayment(token, operation);
+  }
+
+  async retryAqsiFiscalReceipt(
+    token: string,
+    operation: PaymentOperationSummary,
+  ): Promise<AqsiGatewayPayment> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'payments:manage');
+    assertBranchAccess(actor, operation.branchId);
+    const connection = await this.integrationConnection();
+    return this.api.retryFiscalReceipt(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      operation,
+      this.actorContext(actor),
+    );
   }
 
   async cancelSbpPayment(

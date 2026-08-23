@@ -110,6 +110,10 @@ test('платёжная операция становится одним под
     await page.getByRole('button', { name: 'Начать оплату картой' }).click();
     await expect(page.getByText('Ожидаем оплату картой на кассе aQsi')).toBeVisible();
     await expect(page.getByText('Оплата подтверждена')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Чек формируется')).toBeVisible();
+    await page.getByRole('button', { name: 'Проверить чек' }).click();
+    await expect(page.getByText('Чек сформирован')).toBeVisible();
+    await expect(page.getByText(/Фискальный документ №42/u)).toBeVisible();
     await page.getByRole('button', { name: 'Готово' }).click();
 
     await page.getByRole('button', { name: 'Принять оплату' }).last().click();
@@ -122,6 +126,9 @@ test('платёжная операция становится одним под
     await page.getByRole('button', { name: 'Начать оплату по СБП' }).click();
     await expect(page.getByText('Ожидаем оплату по СБП на кассе aQsi')).toBeVisible();
     await expect(page.getByText('Оплата подтверждена')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Чек формируется')).toBeVisible();
+    await page.getByRole('button', { name: 'Проверить чек' }).click();
+    await expect(page.getByText('Чек сформирован')).toBeVisible();
     await page.getByRole('button', { name: 'Готово' }).click();
     const afterQr = await page.evaluate(async ({ studentId, token }) => {
       const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;

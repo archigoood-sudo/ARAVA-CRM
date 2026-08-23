@@ -115,7 +115,10 @@ describe('Sprint 4.5A multi-device integration', () => {
     server = createServer(async (request, response) => {
       const methodWithBody =
         request.method === 'POST' || request.method === 'PATCH' || request.method === 'PUT';
-      const requestBody = methodWithBody ? await body(request) : {};
+      const requestBody =
+        methodWithBody && Number(request.headers['content-length'] ?? 0) > 0
+          ? await body(request)
+          : {};
       received.push({
         headers: request.headers,
         method: request.method,
@@ -199,6 +202,28 @@ describe('Sprint 4.5A multi-device integration', () => {
           provider: isCard ? 'AQSI_CARD' : 'AQSI_SBP',
           providerOperationId: isCard ? 'aqsi-card-1' : 'aqsi-sbp-1',
           status: 'WAITING',
+          updatedAt: now.toISOString(),
+        });
+        return;
+      }
+      if (request.method === 'POST' && request.url?.endsWith('/fiscal-receipt')) {
+        json(response, 200, {
+          amountKopecks: 12_345,
+          aravaOperationId: 'operation-card-http',
+          currency: 'RUB',
+          deviceId: 77,
+          fiscalReceipt: {
+            canRetry: false,
+            fiscalDocumentNumber: 42,
+            fiscalSign: '987654321',
+            receiptUrl: 'https://receipt.example/42',
+            status: 'SUCCEEDED',
+            updatedAt: now.toISOString(),
+          },
+          provider: 'AQSI_CARD',
+          providerOperationId: 'aqsi-card-1',
+          providerResultId: 'slip-card-1',
+          status: 'SUCCEEDED',
           updatedAt: now.toISOString(),
         });
         return;
@@ -624,6 +649,19 @@ describe('Sprint 4.5A multi-device integration', () => {
       });
       expect(JSON.stringify(request)).not.toContain('AQSI_API_KEY');
     }
+
+    const fiscal = await integration.retryAqsiFiscalReceipt(ownerToken, baseOperation);
+    expect(fiscal.fiscalReceipt).toMatchObject({
+      fiscalDocumentNumber: 42,
+      fiscalSign: '987654321',
+      status: 'SUCCEEDED',
+    });
+    const fiscalRequest = received.find(({ path }) => String(path).endsWith('/fiscal-receipt'));
+    expect(fiscalRequest?.headers).toMatchObject({
+      authorization: 'Bearer device-secret',
+      'x-arava-device-id': credentials.deviceId,
+    });
+    expect(JSON.stringify(fiscalRequest)).not.toContain('AQSI_API_KEY');
   });
 
   it('sends default display name on pair and allows renaming connected devices', async () => {

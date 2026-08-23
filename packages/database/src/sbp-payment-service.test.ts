@@ -69,6 +69,17 @@ function setup(
         gateway(remoteStatus, current.providerType === 'ACQUIRING' ? 'AQSI_CARD' : 'AQSI_SBP'),
       ),
     ),
+    retryAqsiFiscalReceipt: vi.fn(() =>
+      Promise.resolve({
+        ...gateway('SUCCEEDED'),
+        fiscalReceipt: {
+          canRetry: false,
+          fiscalDocumentNumber: 42,
+          status: 'SUCCEEDED' as const,
+          updatedAt: '2026-08-22T10:02:00.000Z',
+        },
+      }),
+    ),
     sbpProviderHealth: vi.fn(() =>
       Promise.resolve({
         apiReachable: true,
@@ -134,6 +145,16 @@ describe('AqsiPaymentService', () => {
       providerOperationId: 'aqsi-100',
       providerResultId: 'slip-100',
     });
+  });
+
+  it('checks a fiscal receipt without finalizing or charging the payment again', async () => {
+    const succeeded = { ...operation, status: 'SUCCEEDED' as const };
+    const { integration, operations, service } = setup('SUCCEEDED', succeeded);
+    const result = await service.retryFiscalReceipt('session', succeeded.id);
+    expect(result.fiscalReceipt).toMatchObject({ status: 'SUCCEEDED', fiscalDocumentNumber: 42 });
+    expect(integration.retryAqsiFiscalReceipt).toHaveBeenCalledOnce();
+    expect(integration.startAqsiPayment).not.toHaveBeenCalled();
+    expect(operations.finalizeTrusted).not.toHaveBeenCalled();
   });
 
   it('maps failed and expired provider states without payment creation', async () => {
