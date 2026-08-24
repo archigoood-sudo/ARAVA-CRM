@@ -206,6 +206,34 @@ describe('Sprint 4.5A multi-device integration', () => {
         });
         return;
       }
+      if (request.method === 'POST' && request.url?.endsWith('/client-access')) {
+        const crmStudentId =
+          typeof requestBody.crmStudentId === 'string' ? requestBody.crmStudentId : '';
+        if (requestBody.action === 'ISSUE') {
+          json(response, 200, {
+            codeExpiresAt: now.toISOString(),
+            status: {
+              canLink: false,
+              canReissue: true,
+              canRevoke: false,
+              crmStudentId,
+              invitationId: 'invite-safe',
+              maskedPhone: '+7 ••• ••• 30',
+              state: 'INVITED',
+            },
+            temporaryCode: '654321',
+          });
+          return;
+        }
+        json(response, 200, {
+          canLink: false,
+          canReissue: false,
+          canRevoke: false,
+          crmStudentId,
+          state: 'NOT_ISSUED',
+        });
+        return;
+      }
       if (request.method === 'POST' && request.url?.endsWith('/fiscal-receipt')) {
         json(response, 200, {
           amountKopecks: 12_345,
@@ -662,6 +690,98 @@ describe('Sprint 4.5A multi-device integration', () => {
       'x-arava-device-id': credentials.deviceId,
     });
     expect(JSON.stringify(fiscalRequest)).not.toContain('AQSI_API_KEY');
+  });
+
+  it('manages WEB client access through authenticated narrow transport without persisting codes', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Кабинет клиента' });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Кабинетова',
+      phone: '+7 (999) 100-20-30',
+      status: 'ACTIVE',
+    });
+    received.length = 0;
+    await expect(
+      integration.getClientAccessStatus(ownerToken, student.id, ['+7 (999) 100-20-30']),
+    ).resolves.toMatchObject({ crmStudentId: student.id, state: 'NOT_ISSUED' });
+    const issued = await integration.issueClientAccess(ownerToken, student.id, {
+      displayName: 'Родитель Анны',
+      phone: '+7 (999) 100-20-30',
+    });
+    expect(issued).toMatchObject({ temporaryCode: '654321', status: { state: 'INVITED' } });
+    const calls = received.filter(({ path }) => String(path).endsWith('/client-access'));
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      action: 'STATUS',
+      crmStudentId: student.id,
+      method: 'POST',
+      phones: ['+7 (999) 100-20-30'],
+    });
+    expect(calls[1]).toMatchObject({
+      action: 'ISSUE',
+      crmStudentId: student.id,
+      displayName: 'Родитель Анны',
+      phone: '+7 (999) 100-20-30',
+    });
+    expect(calls[1]?.headers).toMatchObject({
+      authorization: 'Bearer device-secret',
+      'x-arava-api-version': 'v1',
+      'x-arava-device-id': credentials.deviceId,
+    });
+    const audit = await database.auditLog.findFirstOrThrow({
+      where: { action: 'WEB_CLIENT_ACCESS_ISSUED', entityId: student.id },
+    });
+    expect(JSON.stringify(audit)).not.toContain('654321');
+    expect(JSON.stringify(issued)).not.toContain('device-secret');
+
+    await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'client-access-admin@arava.local',
+      fullName: 'Администратор кабинетов',
+      password: 'Admin!ClientAccess2026',
+      role: 'ADMIN',
+    });
+    await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'client-access-coach@arava.local',
+      fullName: 'Тренер кабинетов',
+      password: 'Coach!ClientAccess2026',
+      role: 'COACH',
+    });
+    const admin = await application.login({
+      email: 'client-access-admin@arava.local',
+      password: 'Admin!ClientAccess2026',
+    });
+    const coach = await application.login({
+      email: 'client-access-coach@arava.local',
+      password: 'Coach!ClientAccess2026',
+    });
+    await application.changePassword(admin.token, {
+      currentPassword: 'Admin!ClientAccess2026',
+      newPassword: 'Admin!ClientAccessChanged2026',
+    });
+    await application.changePassword(coach.token, {
+      currentPassword: 'Coach!ClientAccess2026',
+      newPassword: 'Coach!ClientAccessChanged2026',
+    });
+    await expect(
+      integration.getClientAccessStatus(admin.token, student.id, []),
+    ).resolves.toMatchObject({ state: 'NOT_ISSUED' });
+    await expect(integration.getClientAccessStatus(coach.token, student.id, [])).rejects.toThrow(
+      'нет доступа',
+    );
+    const foreignBranch = await application.createBranch(ownerToken, { name: 'Другой филиал' });
+    const foreignStudent = await application.createStudent(ownerToken, {
+      branchId: foreignBranch.id,
+      firstName: 'Елена',
+      lastName: 'Недоступная',
+      status: 'ACTIVE',
+    });
+    await expect(
+      integration.getClientAccessStatus(admin.token, foreignStudent.id, []),
+    ).rejects.toThrow('нет доступа');
   });
 
   it('sends default display name on pair and allows renaming connected devices', async () => {

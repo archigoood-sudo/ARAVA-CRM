@@ -231,6 +231,11 @@ export const IPC_CHANNELS = {
   contactCreate: 'student-contact:create',
   contactRemove: 'student-contact:remove',
   contactUpdate: 'student-contact:update',
+  clientAccessIssue: 'client-access:issue',
+  clientAccessLink: 'client-access:link',
+  clientAccessReissue: 'client-access:reissue',
+  clientAccessRevoke: 'client-access:revoke',
+  clientAccessStatus: 'client-access:status',
   dashboardStats: 'dashboard:stats',
   attentionList: 'attention:list',
   attentionSummary: 'attention:summary',
@@ -671,6 +676,34 @@ export interface StudentProfileOverview {
   totalDebt?: number | undefined;
   upcomingLessons: StudentProfileLesson[];
   warnings: StudentProfileWarning[];
+}
+
+export type ClientWebAccessState =
+  'ACTIVE' | 'EXISTING_ACCOUNT' | 'INVITED' | 'NOT_ISSUED' | 'REVOKED';
+
+export interface ClientWebAccessStatus {
+  accountId?: string | undefined;
+  canLink: boolean;
+  canReissue: boolean;
+  canRevoke: boolean;
+  crmStudentId: string;
+  invitationId?: string | undefined;
+  lastLoginAt?: string | undefined;
+  maskedPhone?: string | undefined;
+  recoveryRequestId?: string | undefined;
+  recoveryStatus?: string | undefined;
+  state: ClientWebAccessState;
+}
+
+export interface ClientWebAccessResult {
+  codeExpiresAt?: string | undefined;
+  status: ClientWebAccessStatus;
+  temporaryCode?: string | undefined;
+}
+
+export interface ClientWebAccessIssueInput {
+  displayName: string;
+  phone: string;
 }
 
 export type CardSortField = 'barcode' | 'createdAt' | 'lastScan';
@@ -2401,6 +2434,17 @@ export interface AravaDesktopApi {
   };
   activity: {
     list: (token: string) => Promise<ActivitySummary[]>;
+  };
+  clientAccess: {
+    issue: (
+      token: string,
+      studentId: string,
+      input: ClientWebAccessIssueInput,
+    ) => Promise<ClientWebAccessResult>;
+    link: (token: string, studentId: string, accountId: string) => Promise<ClientWebAccessStatus>;
+    reissue: (token: string, studentId: string) => Promise<ClientWebAccessResult>;
+    revoke: (token: string, studentId: string) => Promise<ClientWebAccessStatus>;
+    status: (token: string, studentId: string, phones: string[]) => Promise<ClientWebAccessStatus>;
   };
   auth: {
     changePassword: (token: string, input: PasswordChangeInput) => Promise<AuthenticatedUser>;

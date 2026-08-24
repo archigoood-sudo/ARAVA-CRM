@@ -67,6 +67,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
   let convertedStudentId: string | null = null;
   let targetGroupId: string | null = null;
   const receivedPaymentPaths: string[] = [];
+  let clientAccessState: 'ACTIVE' | 'INVITED' | 'NOT_ISSUED' = 'NOT_ISSUED';
   let conflictOpen = true;
   let recoveryMode = false;
   const receivedChatMessages: string[] = [];
@@ -122,6 +123,38 @@ test('OWNER подключает сайт, выполняет initial/offline sy
         apiVersion: 'v1',
         deviceStatus: 'ACTIVE',
         serverTimestamp: new Date().toISOString(),
+      });
+      return;
+    }
+    if (request.method === 'POST' && request.url?.endsWith('/client-access')) {
+      const crmStudentId = typeof body.crmStudentId === 'string' ? body.crmStudentId : '';
+      if (body.action === 'ISSUE') {
+        clientAccessState = 'INVITED';
+        respond(response, {
+          codeExpiresAt: '2026-08-24T20:00:00.000Z',
+          status: {
+            canLink: false,
+            canReissue: true,
+            canRevoke: false,
+            crmStudentId,
+            invitationId: 'e2e-client-invitation',
+            maskedPhone: '+7 ••• ••• 30',
+            state: clientAccessState,
+          },
+          temporaryCode: '654321',
+        });
+        return;
+      }
+      respond(response, {
+        accountId: clientAccessState === 'ACTIVE' ? 'e2e-client-account' : undefined,
+        canLink: false,
+        canReissue: clientAccessState === 'INVITED',
+        canRevoke: clientAccessState === 'ACTIVE',
+        crmStudentId,
+        invitationId: clientAccessState === 'INVITED' ? 'e2e-client-invitation' : undefined,
+        lastLoginAt: clientAccessState === 'ACTIVE' ? '2026-08-24T12:00:00.000Z' : undefined,
+        maskedPhone: clientAccessState === 'NOT_ISSUED' ? undefined : '+7 ••• ••• 30',
+        state: clientAccessState,
       });
       return;
     }
@@ -446,6 +479,39 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await expect(diagnostics.getByText('Сервер доступен', { exact: true })).toBeVisible();
     await expect(diagnostics.getByText('Устройство авторизовано', { exact: true })).toBeVisible();
     await expect(diagnostics).not.toContainText('e2e-token');
+    const accessStudent = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const token = persisted.state?.token ?? '';
+      const branch = await api.branches.create(token, { name: 'Личный кабинет E2E' });
+      return api.students.create(token, {
+        branchId: branch.id,
+        firstName: 'Анна',
+        lastName: 'Кабинетова',
+        phone: '+7 (999) 100-20-30',
+        status: 'ACTIVE',
+      });
+    });
+    await page.evaluate((studentId) => {
+      window.location.hash = `#/students/${studentId}`;
+    }, accessStudent.id);
+    const accessCard = page.getByTestId('client-web-access');
+    await expect(accessCard.getByText('Доступ не выдан', { exact: true })).toBeVisible();
+    await accessCard.getByRole('button', { name: 'Выдать доступ' }).click();
+    const issueDialog = page.getByRole('dialog', { name: 'Выдать доступ к личному кабинету' });
+    await expect(issueDialog.getByLabel('Телефон')).toHaveValue('+79991002030');
+    await issueDialog.getByRole('button', { name: 'Выдать доступ' }).click();
+    const codeDialog = page.getByRole('dialog', { name: 'Временный код' });
+    await expect(codeDialog.getByTestId('temporary-code')).toHaveText('654321');
+    await codeDialog.getByText('Закрыть', { exact: true }).click();
+    await expect(page.getByTestId('temporary-code')).toHaveCount(0);
+    await expect(accessCard.getByText(/ожидает первого входа/u)).toBeVisible();
+    clientAccessState = 'ACTIVE';
+    await accessCard.getByRole('button', { name: 'Обновить статус личного кабинета' }).click();
+    await expect(accessCard.getByText('Аккаунт активирован', { exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Настройки' }).click();
     const conflictCenter = page.getByTestId('integration-conflicts');
     await expect(conflictCenter.getByRole('cell', { name: 'Филиал сервера' })).toBeVisible();
     await conflictCenter.getByRole('button', { name: 'Оставить текущую версию' }).click();
@@ -569,6 +635,13 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     expect(finalStatus.failedCount).toBe(0);
 
     await stopServer(server);
+    await page.evaluate((studentId) => {
+      window.location.hash = `#/students/${studentId}`;
+    }, accessStudent.id);
+    const offlineAccess = page.getByTestId('client-web-access');
+    await offlineAccess.getByRole('button', { name: 'Обновить статус личного кабинета' }).click();
+    await expect(offlineAccess).toContainText('Не удалось проверить личный кабинет');
+    await page.getByRole('link', { name: 'Настройки' }).click();
     const offlineResult = await page.evaluate(async () => {
       const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
         state?: { token?: string };

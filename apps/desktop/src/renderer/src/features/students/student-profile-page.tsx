@@ -53,6 +53,7 @@ import { invalidateStudentIdentityCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { ContactDialog } from './contact-dialog';
+import { ClientWebAccessCard } from './client-web-access-card';
 import { StudentDialog } from './student-dialog';
 import { StudentFinance } from '../subscriptions/student-finance';
 import { StudentCard } from '../cards/student-card';
@@ -638,6 +639,7 @@ export function StudentProfilePage() {
 
       {profile.access === 'ADMIN' ? (
         <>
+          <ClientWebAccessCard student={detail} />
           <StudentFinance
             branches={branches.data ?? []}
             onRequestedActionHandled={() => setFinanceAction(undefined)}

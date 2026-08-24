@@ -171,6 +171,16 @@ const desktopApi: AravaDesktopApi = {
     },
     update: (token, id, input) => invoke(IPC_CHANNELS.contactUpdate, token, id, input),
   },
+  clientAccess: {
+    issue: (token, studentId, input) =>
+      invoke(IPC_CHANNELS.clientAccessIssue, token, studentId, input),
+    link: (token, studentId, accountId) =>
+      invoke(IPC_CHANNELS.clientAccessLink, token, studentId, accountId),
+    reissue: (token, studentId) => invoke(IPC_CHANNELS.clientAccessReissue, token, studentId),
+    revoke: (token, studentId) => invoke(IPC_CHANNELS.clientAccessRevoke, token, studentId),
+    status: (token, studentId, phones) =>
+      invoke(IPC_CHANNELS.clientAccessStatus, token, studentId, phones),
+  },
   dashboard: { stats: (token) => invoke(IPC_CHANNELS.dashboardStats, token) },
   attention: {
     list: (token, filters) => invoke(IPC_CHANNELS.attentionList, token, filters),

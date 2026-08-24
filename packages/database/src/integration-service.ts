@@ -10,6 +10,9 @@ import type {
   ChatMessagePage,
   ChatSendInput,
   ChatSummary,
+  ClientWebAccessIssueInput,
+  ClientWebAccessResult,
+  ClientWebAccessStatus,
   IntegrationInitialSyncPreview,
   IntegrationConflictResolutionInput,
   IntegrationConflictSummary,
@@ -2072,6 +2075,16 @@ export class IntegrationApiClient {
     });
   }
 
+  async clientAccess(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    body: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.request(baseUrl, 'client-access', deviceId, token, 'POST', body, context);
+  }
+
   async claimAction(
     baseUrl: string,
     deviceId: string,
@@ -2672,6 +2685,186 @@ export class IntegrationService {
       );
     }
     return { baseUrl, deviceId, token };
+  }
+
+  private async clientAccessContext(
+    token: string,
+    studentId: string,
+  ): Promise<{
+    actor: AuthenticatedUser;
+    connection: { baseUrl: string; deviceId: string; token: string };
+  }> {
+    const actor = await this.application.authenticate(token);
+    if (actor.role === 'COACH') {
+      throw new DomainError('AUTHORIZATION', 'У тренера нет доступа к личным кабинетам.');
+    }
+    await this.application.getStudent(token, studentId);
+    return { actor, connection: await this.chatConnection() };
+  }
+
+  private clientAccessStatusPayload(payload: unknown): ClientWebAccessStatus {
+    if (!isRecord(payload)) throw new DomainError('VALIDATION', 'Сайт вернул неверный статус.');
+    const state = optionalString(payload.state);
+    const crmStudentId = optionalString(payload.crmStudentId);
+    if (
+      !crmStudentId ||
+      !state ||
+      !['ACTIVE', 'EXISTING_ACCOUNT', 'INVITED', 'NOT_ISSUED', 'REVOKED'].includes(state) ||
+      typeof payload.canLink !== 'boolean' ||
+      typeof payload.canReissue !== 'boolean' ||
+      typeof payload.canRevoke !== 'boolean'
+    ) {
+      throw new DomainError('VALIDATION', 'Сайт вернул неверный статус личного кабинета.');
+    }
+    return {
+      canLink: payload.canLink,
+      canReissue: payload.canReissue,
+      canRevoke: payload.canRevoke,
+      crmStudentId,
+      state: state as ClientWebAccessStatus['state'],
+      ...(optionalString(payload.accountId)
+        ? { accountId: optionalString(payload.accountId) }
+        : {}),
+      ...(optionalString(payload.invitationId)
+        ? { invitationId: optionalString(payload.invitationId) }
+        : {}),
+      ...(optionalString(payload.lastLoginAt)
+        ? { lastLoginAt: optionalString(payload.lastLoginAt) }
+        : {}),
+      ...(optionalString(payload.maskedPhone)
+        ? { maskedPhone: optionalString(payload.maskedPhone) }
+        : {}),
+      ...(optionalString(payload.recoveryRequestId)
+        ? { recoveryRequestId: optionalString(payload.recoveryRequestId) }
+        : {}),
+      ...(optionalString(payload.recoveryStatus)
+        ? { recoveryStatus: optionalString(payload.recoveryStatus) }
+        : {}),
+    };
+  }
+
+  private clientAccessResultPayload(payload: unknown): ClientWebAccessResult {
+    if (!isRecord(payload) || !isRecord(payload.status)) {
+      throw new DomainError('VALIDATION', 'Сайт вернул неверный результат личного кабинета.');
+    }
+    return {
+      status: this.clientAccessStatusPayload(payload.status),
+      ...(optionalString(payload.codeExpiresAt)
+        ? { codeExpiresAt: optionalString(payload.codeExpiresAt) }
+        : {}),
+      ...(optionalString(payload.temporaryCode)
+        ? { temporaryCode: optionalString(payload.temporaryCode) }
+        : {}),
+    };
+  }
+
+  private async auditClientAccess(
+    actor: AuthenticatedUser,
+    studentId: string,
+    action: string,
+  ): Promise<void> {
+    await this.database.auditLog.create({
+      data: {
+        action,
+        actorUserId: actor.id,
+        detail: JSON.stringify({ source: 'ARAVA_WEB' }),
+        entityId: studentId,
+        entityType: 'Student',
+      },
+    });
+  }
+
+  async getClientAccessStatus(
+    token: string,
+    studentId: string,
+    phones: string[],
+  ): Promise<ClientWebAccessStatus> {
+    const { actor, connection } = await this.clientAccessContext(token, studentId);
+    return this.clientAccessStatusPayload(
+      await this.api.clientAccess(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        this.actorContext(actor),
+        { action: 'STATUS', crmStudentId: studentId, phones },
+      ),
+    );
+  }
+
+  async issueClientAccess(
+    token: string,
+    studentId: string,
+    input: ClientWebAccessIssueInput,
+  ): Promise<ClientWebAccessResult> {
+    const { actor, connection } = await this.clientAccessContext(token, studentId);
+    const result = this.clientAccessResultPayload(
+      await this.api.clientAccess(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        this.actorContext(actor),
+        { action: 'ISSUE', crmStudentId: studentId, ...input },
+      ),
+    );
+    if (result.temporaryCode) {
+      await this.auditClientAccess(actor, studentId, 'WEB_CLIENT_ACCESS_ISSUED');
+    }
+    return result;
+  }
+
+  async reissueClientAccess(token: string, studentId: string): Promise<ClientWebAccessResult> {
+    const { actor, connection } = await this.clientAccessContext(token, studentId);
+    const current = await this.getClientAccessStatus(token, studentId, []);
+    const result = this.clientAccessResultPayload(
+      await this.api.clientAccess(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        this.actorContext(actor),
+        {
+          action: 'REISSUE',
+          crmStudentId: studentId,
+          ...(current.invitationId ? { invitationId: current.invitationId } : {}),
+          ...(current.recoveryRequestId ? { recoveryRequestId: current.recoveryRequestId } : {}),
+        },
+      ),
+    );
+    await this.auditClientAccess(actor, studentId, 'WEB_CLIENT_ACCESS_REISSUED');
+    return result;
+  }
+
+  async linkClientAccess(
+    token: string,
+    studentId: string,
+    accountId: string,
+  ): Promise<ClientWebAccessStatus> {
+    const { actor, connection } = await this.clientAccessContext(token, studentId);
+    const result = this.clientAccessStatusPayload(
+      await this.api.clientAccess(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        this.actorContext(actor),
+        { accountId, action: 'LINK', confirm: true, crmStudentId: studentId },
+      ),
+    );
+    await this.auditClientAccess(actor, studentId, 'WEB_CLIENT_ACCOUNT_LINKED');
+    return result;
+  }
+
+  async revokeClientAccess(token: string, studentId: string): Promise<ClientWebAccessStatus> {
+    const { actor, connection } = await this.clientAccessContext(token, studentId);
+    const result = this.clientAccessStatusPayload(
+      await this.api.clientAccess(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        this.actorContext(actor),
+        { action: 'REVOKE', crmStudentId: studentId },
+      ),
+    );
+    await this.auditClientAccess(actor, studentId, 'WEB_CLIENT_ACCESS_REVOKED');
+    return result;
   }
 
   async listRemoteChats(

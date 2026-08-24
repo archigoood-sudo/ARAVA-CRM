@@ -473,6 +473,40 @@ export function createIpcHandlers(
       requireIntegration().prepareInitialSync(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationConfirmInitialSync]: (unsafeToken) =>
       requireIntegration().confirmInitialSync(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.clientAccessStatus]: (unsafeToken, unsafeStudentId, unsafePhones) =>
+      requireIntegration().getClientAccessStatus(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+        z.array(z.string().trim().min(1).max(40)).max(20).parse(unsafePhones),
+      ),
+    [IPC_CHANNELS.clientAccessIssue]: (unsafeToken, unsafeStudentId, unsafeInput) =>
+      requireIntegration().issueClientAccess(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+        z
+          .object({
+            displayName: z.string().trim().min(2).max(120),
+            phone: z.string().trim().min(5).max(40),
+          })
+          .strict()
+          .parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.clientAccessReissue]: (unsafeToken, unsafeStudentId) =>
+      requireIntegration().reissueClientAccess(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+      ),
+    [IPC_CHANNELS.clientAccessLink]: (unsafeToken, unsafeStudentId, unsafeAccountId) =>
+      requireIntegration().linkClientAccess(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+        identifierSchema.parse(unsafeAccountId),
+      ),
+    [IPC_CHANNELS.clientAccessRevoke]: (unsafeToken, unsafeStudentId) =>
+      requireIntegration().revokeClientAccess(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+      ),
     [IPC_CHANNELS.webActionList]: (unsafeToken) =>
       requireIntegration().listWebActions(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.webActionApprove]: (unsafeToken, unsafeId, unsafeInput) =>
