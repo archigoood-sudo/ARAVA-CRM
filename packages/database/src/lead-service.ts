@@ -10,6 +10,8 @@ import type {
   LeadStatus,
   TrialAppointmentSummary,
   TrialListQuery,
+  TrialOccurrenceQuery,
+  TrialOccurrenceSummary,
   TrialScheduleInput,
 } from '@arava/shared';
 import { randomUUID } from 'node:crypto';
@@ -20,14 +22,19 @@ import { normalizePhone } from './security';
 import type { DatabaseClient } from './index';
 import type { ApplicationService } from './services';
 import type { StudioService } from './studio-service';
+import { LessonOccurrenceService } from './lesson-occurrence-service';
 
 export class LeadService {
+  private readonly lessonOccurrences: LessonOccurrenceService;
+
   constructor(
     private readonly database: DatabaseClient,
     private readonly application: ApplicationService,
     private readonly integration: IntegrationService,
     private readonly studio: StudioService,
-  ) {}
+  ) {
+    this.lessonOccurrences = new LessonOccurrenceService(database);
+  }
 
   async list(token: string, query: LeadListQuery): Promise<LeadListResult> {
     const actor = await this.actor(token);
@@ -163,13 +170,16 @@ export class LeadService {
 
   async scheduleTrial(token: string, input: TrialScheduleInput): Promise<TrialAppointmentSummary> {
     const actor = await this.actor(token);
-    const [lead, group, lesson] = await Promise.all([
+    const [lead, group] = await Promise.all([
       this.integration.getRemoteLead(this.context(actor), input.leadId),
       this.studio.getGroup(token, input.groupId),
-      this.studio.getLesson(token, input.lessonId),
     ]);
     if (group.archivedAt || !['ACTIVE', 'RECRUITING'].includes(group.status))
       throw new DomainError('VALIDATION', 'Для пробного доступна только действующая группа.');
+    const lesson = await this.studio.materializeLessonOccurrence(token, {
+      groupId: group.id,
+      startsAt: input.startsAt,
+    });
     if (lesson.groupId !== group.id)
       throw new DomainError('VALIDATION', 'Выбранное занятие относится к другой группе.');
     if (lesson.status === 'CANCELLED')
@@ -221,6 +231,34 @@ export class LeadService {
     if (result?.id !== appointment.id)
       throw new DomainError('NOT_FOUND', 'Запись на пробное не найдена после сохранения.');
     return result;
+  }
+
+  async listTrialOccurrences(
+    token: string,
+    query: TrialOccurrenceQuery,
+  ): Promise<TrialOccurrenceSummary[]> {
+    const actor = await this.actor(token);
+    const group = await this.studio.getGroup(token, query.groupId);
+    if (group.archivedAt || !['ACTIVE', 'RECRUITING'].includes(group.status))
+      throw new DomainError('VALIDATION', 'Для пробного доступна только действующая группа.');
+    const occurrences = await this.lessonOccurrences.resolveRange(actor, {
+      dateFrom: new Date(query.dateFrom),
+      dateTo: new Date(query.dateTo),
+      groupId: group.id,
+    });
+    const now = new Date();
+    return occurrences
+      .filter(({ endsAt }) => endsAt > now)
+      .map((occurrence) => ({
+        branchId: group.branchId,
+        branchName: group.branchName,
+        endsAt: occurrence.endsAt.toISOString(),
+        groupId: group.id,
+        groupName: group.name,
+        ...(occurrence.lessonId ? { lessonId: occurrence.lessonId } : {}),
+        source: occurrence.source,
+        startsAt: occurrence.startsAt.toISOString(),
+      }));
   }
 
   async listTrials(token: string, query: TrialListQuery): Promise<TrialAppointmentSummary[]> {

@@ -65,6 +65,7 @@ import {
   leadStudentConversionInputSchema,
   leadStatusSchema,
   trialListQuerySchema,
+  trialOccurrenceQuerySchema,
   trialScheduleInputSchema,
   passwordChangeSchema,
   paymentInputSchema,
@@ -367,6 +368,11 @@ export function createIpcHandlers(
       requireLeads().listTrials(
         sessionTokenSchema.parse(unsafeToken),
         trialListQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.trialOccurrences]: (unsafeToken, unsafeQuery) =>
+      requireLeads().listTrialOccurrences(
+        sessionTokenSchema.parse(unsafeToken),
+        trialOccurrenceQuerySchema.parse(unsafeQuery),
       ),
     [IPC_CHANNELS.trialSchedule]: (unsafeToken, unsafeInput) =>
       requireLeads().scheduleTrial(

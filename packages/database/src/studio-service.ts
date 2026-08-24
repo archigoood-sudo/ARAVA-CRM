@@ -43,6 +43,7 @@ import {
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
 import { CalendarService } from './calendar-service';
+import { LessonOccurrenceService } from './lesson-occurrence-service';
 import {
   applyAttendanceWriteOff,
   reverseAttendanceWriteOffs,
@@ -735,21 +736,10 @@ export class StudioService {
           skipped += 1;
           continue;
         }
-        const exists = await this.database.lesson.findUnique({
-          where: { groupId_startsAt: { groupId: schedule.groupId, startsAt } },
-        });
-        if (exists) {
-          skipped += 1;
-          continue;
-        }
         try {
-          await this.calendar.assertEventAvailable({
-            ...(schedule.coachId ? { coachId: schedule.coachId } : {}),
-            endAt: endsAt,
-            groupId: schedule.groupId,
-            ...(schedule.roomId ? { roomId: schedule.roomId } : {}),
-            startAt: startsAt,
-          });
+          const result = await this.materializeScheduleOccurrence(schedule, startsAt, endsAt);
+          if (result.created) created += 1;
+          else skipped += 1;
         } catch (error) {
           if (error instanceof DomainError && error.code === 'CONFLICT') {
             skipped += 1;
@@ -757,19 +747,6 @@ export class StudioService {
           }
           throw error;
         }
-        await this.database.lesson.create({
-          data: {
-            branchId: schedule.branchId,
-            coachId: schedule.coachId,
-            endsAt,
-            groupId: schedule.groupId,
-            room: schedule.room,
-            roomId: schedule.roomId,
-            scheduleTemplateId: schedule.id,
-            startsAt,
-          },
-        });
-        created += 1;
       }
     }
     await this.audit(this.database, actor.id, 'LESSONS_GENERATED', 'Lesson', 'range', {
@@ -779,6 +756,56 @@ export class StudioService {
       to: input.dateTo,
     });
     return { created, skipped };
+  }
+
+  async materializeLessonOccurrence(
+    token: string,
+    input: { groupId: string; startsAt: string },
+  ): Promise<LessonSummary> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'lessons:manage');
+    const startsAt = new Date(input.startsAt);
+    const occurrence = (
+      await new LessonOccurrenceService(this.database).resolveDay(actor, startsAt)
+    ).find(
+      (candidate) =>
+        candidate.groupId === input.groupId && candidate.startsAt.getTime() === startsAt.getTime(),
+    );
+    if (!occurrence)
+      throw new DomainError(
+        'VALIDATION',
+        'Выбранное занятие больше недоступно. Обновите список и выберите другое.',
+      );
+    if (occurrence.lessonId) return this.getLesson(token, occurrence.lessonId);
+    if (!occurrence.scheduleTemplateId)
+      throw new DomainError('VALIDATION', 'Не удалось определить шаблон выбранного занятия.');
+    const schedule = await this.database.weeklySchedule.findUnique({
+      where: { id: occurrence.scheduleTemplateId },
+    });
+    if (!schedule?.isActive)
+      throw new DomainError(
+        'VALIDATION',
+        'Расписание изменилось. Обновите список и выберите занятие повторно.',
+      );
+    const result = await this.materializeScheduleOccurrence(
+      schedule,
+      occurrence.startsAt,
+      occurrence.endsAt,
+    );
+    if (result.lesson.status === 'CANCELLED')
+      throw new DomainError('VALIDATION', 'Нельзя записать на отменённое занятие.');
+    if (result.created)
+      await this.audit(
+        this.database,
+        actor.id,
+        'LESSON_MATERIALIZED_FOR_TRIAL',
+        'Lesson',
+        result.lesson.id,
+        {
+          scheduleTemplateId: schedule.id,
+        },
+      );
+    return lessonSummary(result.lesson);
   }
 
   async getAttendance(token: string, lessonId: string): Promise<AttendanceLessonDetail> {
@@ -1031,6 +1058,50 @@ export class StudioService {
           where: { id: webActionId, status: 'CLAIMED' },
         });
     });
+  }
+
+  private async materializeScheduleOccurrence(
+    schedule: WeeklySchedule,
+    startsAt: Date,
+    endsAt: Date,
+  ): Promise<{ created: boolean; lesson: LessonRecord }> {
+    const existing = await this.database.lesson.findUnique({
+      include: lessonInclude,
+      where: { groupId_startsAt: { groupId: schedule.groupId, startsAt } },
+    });
+    if (existing) return { created: false, lesson: existing };
+    await this.calendar.assertEventAvailable({
+      ...(schedule.coachId ? { coachId: schedule.coachId } : {}),
+      endAt: endsAt,
+      groupId: schedule.groupId,
+      ...(schedule.roomId ? { roomId: schedule.roomId } : {}),
+      startAt: startsAt,
+    });
+    try {
+      const lesson = await this.database.lesson.create({
+        data: {
+          branchId: schedule.branchId,
+          coachId: schedule.coachId,
+          endsAt,
+          groupId: schedule.groupId,
+          room: schedule.room,
+          roomId: schedule.roomId,
+          scheduleTemplateId: schedule.id,
+          startsAt,
+        },
+        include: lessonInclude,
+      });
+      return { created: true, lesson };
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002')
+        throw error;
+      const lesson = await this.database.lesson.findUnique({
+        include: lessonInclude,
+        where: { groupId_startsAt: { groupId: schedule.groupId, startsAt } },
+      });
+      if (!lesson) throw error;
+      return { created: false, lesson };
+    }
   }
 
   private async manageBranch(

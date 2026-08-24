@@ -18,6 +18,8 @@ import {
   type IntegrationService,
 } from './integration-service';
 import { LeadService } from './lead-service';
+import { CalendarService } from './calendar-service';
+import { endOfLocalDay, isoWeekday, startOfLocalDay } from './schedule';
 import { ApplicationService } from './services';
 import { StudioService } from './studio-service';
 
@@ -418,6 +420,140 @@ describe('LeadService safe conversion', () => {
     expect(updateRemoteLeadGroup).not.toHaveBeenCalled();
   });
 
+  it('lists and idempotently materializes canonical weekly occurrences for trials', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Пробные по расписанию' });
+    const studio = new StudioService(database, application);
+    const calendar = new CalendarService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 12,
+      direction: 'Хип-хоп',
+      name: 'Расписание без занятия',
+      status: 'RECRUITING',
+    });
+    const room = await database.room.create({ data: { branchId: branch.id, name: 'Пробный зал' } });
+    const startsAt = new Date();
+    startsAt.setDate(startsAt.getDate() + 1);
+    startsAt.setHours(18, 30, 0, 0);
+    const secondStartsAt = new Date(startsAt);
+    secondStartsAt.setDate(secondStartsAt.getDate() + 7);
+    const thirdStartsAt = new Date(startsAt);
+    thirdStartsAt.setDate(thirdStartsAt.getDate() + 14);
+    const schedule = await database.weeklySchedule.create({
+      data: {
+        branchId: branch.id,
+        endTime: '19:30',
+        groupId: group.id,
+        isActive: true,
+        roomId: room.id,
+        startTime: '18:30',
+        validFrom: startOfLocalDay(startsAt),
+        weekday: isoWeekday(startsAt),
+      },
+    });
+    let remoteStatus: 'NEW' | 'TRIAL_BOOKED' = 'NEW';
+    const remoteLead = () => ({
+      ...lead,
+      branchCrmId: branch.id,
+      crmGroupId: group.id,
+      status: remoteStatus,
+    });
+    const integration = {
+      getRemoteLead: vi.fn(() => Promise.resolve(remoteLead())),
+      listRemoteLeads: vi.fn(() =>
+        Promise.resolve({
+          leads: [remoteLead()],
+          newCount: 0,
+          serverTimestamp: new Date().toISOString(),
+          summary: {},
+        }),
+      ),
+      updateRemoteLeadGroup: vi.fn(() => Promise.resolve(remoteLead())),
+      updateRemoteLeadStatus: vi.fn((_context, _id, status: typeof remoteStatus) => {
+        remoteStatus = status;
+        return Promise.resolve(remoteLead());
+      }),
+    } as unknown as IntegrationService;
+    const service = new LeadService(database, application, integration, studio);
+    const occurrences = await service.listTrialOccurrences(ownerToken, {
+      dateFrom: startOfLocalDay(startsAt).toISOString(),
+      dateTo: endOfLocalDay(startsAt).toISOString(),
+      groupId: group.id,
+    });
+    expect(occurrences).toMatchObject([
+      { groupId: group.id, source: 'WEEKLY_SCHEDULE', startsAt: startsAt.toISOString() },
+    ]);
+
+    const first = await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      leadId: lead.id,
+      startsAt: startsAt.toISOString(),
+    });
+    const repeated = await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      leadId: lead.id,
+      startsAt: startsAt.toISOString(),
+    });
+    expect(repeated.lessonId).toBe(first.lessonId);
+    expect(await database.lesson.count({ where: { groupId: group.id, startsAt } })).toBe(1);
+    expect(await database.lesson.findUnique({ where: { id: first.lessonId } })).toMatchObject({
+      scheduleTemplateId: schedule.id,
+    });
+
+    const substitute = await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'trial-substitute@arava.local',
+      fullName: 'Тренер замены',
+      password: 'Coach!TrialSubstitute2026',
+      role: 'COACH',
+    });
+    await calendar.assignSubstitution(ownerToken, first.lessonId, {
+      reason: 'Пробная замена',
+      substituteTrainerId: substitute.id,
+    });
+    await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      leadId: lead.id,
+      startsAt: startsAt.toISOString(),
+    });
+    expect(
+      await database.trainerSubstitution.findUnique({ where: { lessonId: first.lessonId } }),
+    ).toMatchObject({ substituteTrainerId: substitute.id });
+
+    await database.roomClosure.create({
+      data: {
+        createdByUserId: (await application.authenticate(ownerToken)).id,
+        endAt: new Date(secondStartsAt.getTime() + 3_600_000),
+        reason: 'Закрытие',
+        roomId: room.id,
+        startAt: secondStartsAt,
+      },
+    });
+    await expect(
+      service.listTrialOccurrences(ownerToken, {
+        dateFrom: startOfLocalDay(secondStartsAt).toISOString(),
+        dateTo: endOfLocalDay(secondStartsAt).toISOString(),
+        groupId: group.id,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      service.scheduleTrial(ownerToken, {
+        groupId: group.id,
+        leadId: lead.id,
+        startsAt: secondStartsAt.toISOString(),
+      }),
+    ).rejects.toThrow('больше недоступно');
+
+    const rescheduled = await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      leadId: lead.id,
+      startsAt: thirdStartsAt.toISOString(),
+    });
+    expect(rescheduled.lessonId).not.toBe(first.lessonId);
+    expect(await database.trialAppointment.count()).toBe(2);
+    expect(await database.trialAppointment.count({ where: { supersededAt: null } })).toBe(1);
+  });
+
   it('schedules one canonical trial and derives attendance, follow-up, purchase, and permissions', async () => {
     const branch = await application.createBranch(ownerToken, { name: 'Пробные' });
     const hiddenBranch = await application.createBranch(ownerToken, { name: 'Закрытый филиал' });
@@ -471,12 +607,12 @@ describe('LeadService safe conversion', () => {
     await service.scheduleTrial(ownerToken, {
       groupId: group.id,
       leadId: lead.id,
-      lessonId: lesson.id,
+      startsAt: lesson.startsAt,
     });
     await service.scheduleTrial(ownerToken, {
       groupId: group.id,
       leadId: lead.id,
-      lessonId: lesson.id,
+      startsAt: lesson.startsAt,
     });
     expect(await database.trialAppointment.count()).toBe(1);
     expect(['TODAY', 'SCHEDULED']).toContain(

@@ -47,6 +47,7 @@ export {
   leadGroupAssignmentInputSchema,
   leadListQuerySchema,
   trialListQuerySchema,
+  trialOccurrenceQuerySchema,
   trialScheduleInputSchema,
   leadStudentConversionInputSchema,
   leadSourceSchema,

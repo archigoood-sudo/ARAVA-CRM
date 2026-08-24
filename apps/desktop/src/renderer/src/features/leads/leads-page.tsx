@@ -137,14 +137,17 @@ export function LeadsPage() {
     queryKey: queryKeys.trials(accessKey, { leadId: selectedId }),
     retry: false,
   });
-  const trialLessons = useQuery({
+  const trialOccurrences = useQuery({
     enabled: Boolean(selectedGroupId) && user?.role !== 'COACH',
     queryFn: () =>
-      getDesktopApi().lessons.list(getSessionToken(), {
+      getDesktopApi().trials.occurrences(getSessionToken(), {
         ...lessonRange,
         groupId: selectedGroupId,
       }),
-    queryKey: queryKeys.lessons({ ...lessonRange, groupId: selectedGroupId }),
+    queryKey: queryKeys.trialOccurrences(accessKey, {
+      ...lessonRange,
+      groupId: selectedGroupId,
+    }),
   });
   const invalidate = async (id?: string) => {
     await client.invalidateQueries({ queryKey: ['leads', accessKey] });
@@ -174,17 +177,18 @@ export function LeadsPage() {
     mutationFn: ({
       groupId,
       leadId,
-      lessonId,
+      startsAt,
     }: {
       groupId: string;
       leadId: string;
-      lessonId: string;
-    }) => getDesktopApi().trials.schedule(getSessionToken(), { groupId, leadId, lessonId }),
+      startsAt: string;
+    }) => getDesktopApi().trials.schedule(getSessionToken(), { groupId, leadId, startsAt }),
     onSuccess: async (saved) => {
       setSelectedLessonId('');
       await Promise.all([
         invalidate(saved.leadId),
         client.invalidateQueries({ queryKey: ['trials'] }),
+        client.invalidateQueries({ queryKey: ['trial-occurrences'] }),
         client.invalidateQueries({ queryKey: ['dashboard'] }),
         client.invalidateQueries({ queryKey: ['attention'] }),
       ]);
@@ -368,7 +372,7 @@ export function LeadsPage() {
               addToGroup={addToGroup}
               groups={selectableGroups}
               lead={current}
-              lessons={(trialLessons.data ?? []).filter(({ status }) => status !== 'CANCELLED')}
+              lessons={trialOccurrences.data ?? []}
               onAllowDuplicate={() => setAllowDuplicate(true)}
               onCreateStudent={() => setStudentOpen(true)}
               onAddToGroup={setAddToGroup}
@@ -384,7 +388,7 @@ export function LeadsPage() {
                 scheduleTrial.mutate({
                   groupId: selectedGroupId,
                   leadId: current.id,
-                  lessonId: selectedLessonId,
+                  startsAt: selectedLessonId,
                 });
               }}
               onTrialLesson={setSelectedLessonId}
@@ -484,7 +488,12 @@ function LeadDetailView({
   canCreateStudent: boolean;
   groups: { branchName: string; id: string; name: string }[];
   lead: LeadDetail;
-  lessons: { endsAt: string; id: string; startsAt: string }[];
+  lessons: {
+    endsAt: string;
+    lessonId?: string | undefined;
+    source: string;
+    startsAt: string;
+  }[];
   onAllowDuplicate: () => void;
   onCreateStudent: () => void;
   onAddToGroup: (value: boolean) => void;
@@ -638,8 +647,9 @@ function LeadDetailView({
               {selectedGroupId ? 'Выберите дату и занятие' : 'Сначала выберите группу'}
             </option>
             {lessons.map((lesson) => (
-              <option key={lesson.id} value={lesson.id}>
+              <option key={lesson.startsAt} value={lesson.startsAt}>
                 {formatDateTime(lesson.startsAt)}
+                {lesson.source === 'WEEKLY_SCHEDULE' ? ' · по расписанию' : ''}
               </option>
             ))}
           </Select>

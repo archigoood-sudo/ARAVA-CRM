@@ -280,6 +280,7 @@ export const IPC_CHANNELS = {
   leadGet: 'lead:get',
   leadList: 'lead:list',
   trialList: 'trial:list',
+  trialOccurrences: 'trial:occurrences',
   trialSchedule: 'trial:schedule',
   leadUpdateStatus: 'lead:update-status',
   webActionApprove: 'web-action:approve',
@@ -2243,7 +2244,24 @@ export type TrialWorkflowState =
 export interface TrialScheduleInput {
   groupId: string;
   leadId: string;
-  lessonId: string;
+  startsAt: string;
+}
+
+export interface TrialOccurrenceQuery {
+  dateFrom: string;
+  dateTo: string;
+  groupId: string;
+}
+
+export interface TrialOccurrenceSummary {
+  branchId: string;
+  branchName: string;
+  endsAt: string;
+  groupId: string;
+  groupName: string;
+  lessonId?: string | undefined;
+  source: 'LESSON' | 'WEEKLY_SCHEDULE';
+  startsAt: string;
 }
 
 export interface TrialListQuery {
@@ -2560,6 +2578,7 @@ export interface AravaDesktopApi {
   };
   trials: {
     list: (token: string, query: TrialListQuery) => Promise<TrialAppointmentSummary[]>;
+    occurrences: (token: string, query: TrialOccurrenceQuery) => Promise<TrialOccurrenceSummary[]>;
     schedule: (token: string, input: TrialScheduleInput) => Promise<TrialAppointmentSummary>;
   };
   chats: {

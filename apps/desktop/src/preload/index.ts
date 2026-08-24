@@ -63,6 +63,7 @@ const desktopApi: AravaDesktopApi = {
   },
   trials: {
     list: (token, query) => invoke(IPC_CHANNELS.trialList, token, query),
+    occurrences: (token, query) => invoke(IPC_CHANNELS.trialOccurrences, token, query),
     schedule: (token, input) => invoke(IPC_CHANNELS.trialSchedule, token, input),
   },
   publications: {

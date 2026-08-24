@@ -58,5 +58,6 @@ export async function invalidateLessonCaches(client: QueryClient): Promise<void>
     client.invalidateQueries({ queryKey: ['payroll'] }),
     client.invalidateQueries({ queryKey: ['dashboard'] }),
     client.invalidateQueries({ queryKey: ['attention'] }),
+    client.invalidateQueries({ queryKey: ['trial-occurrences'] }),
   ]);
 }

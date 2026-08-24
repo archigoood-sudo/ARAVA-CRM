@@ -3,6 +3,7 @@ import type { EnrollmentStatus, Prisma, StudentStatus } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
 import { accessibleBranchIds } from './permissions';
+import { DomainError } from './security';
 import {
   endOfLocalDay,
   isoWeekday,
@@ -29,6 +30,7 @@ export interface ResolvedDailyLesson {
   expectedStudents: number;
   groupId: string;
   lessonId?: string;
+  scheduleTemplateId?: string;
   source: 'LESSON' | 'WEEKLY_SCHEDULE';
   startsAt: Date;
   trialStudents: number;
@@ -153,6 +155,7 @@ export class LessonOccurrenceService {
             endsAt: occurrence.endsAt,
             expectedStudents: 0,
             groupId: schedule.groupId,
+            scheduleTemplateId: schedule.id,
             source: 'WEEKLY_SCHEDULE',
             startsAt: occurrence.startsAt,
             trialStudents: 0,
@@ -203,6 +206,24 @@ export class LessonOccurrenceService {
       .sort((left, right) => left.startsAt.getTime() - right.startsAt.getTime());
   }
 
+  async resolveRange(
+    actor: AuthenticatedUser,
+    input: { dateFrom: Date; dateTo: Date; groupId?: string },
+  ): Promise<ResolvedDailyLesson[]> {
+    const from = startOfLocalDay(input.dateFrom);
+    const to = endOfLocalDay(input.dateTo);
+    if (to < from || to.getTime() - from.getTime() > 90 * 86_400_000)
+      throw new DomainError('VALIDATION', 'Диапазон занятий должен быть не больше 90 дней.');
+    const resolved: ResolvedDailyLesson[] = [];
+    for (const day = new Date(from); day <= to; day.setDate(day.getDate() + 1)) {
+      const occurrences = await this.resolveDay(actor, day);
+      resolved.push(
+        ...occurrences.filter(({ groupId }) => !input.groupId || groupId === input.groupId),
+      );
+    }
+    return resolved;
+  }
+
   private fromLesson(lesson: MaterializedLesson): ResolvedDailyLesson {
     return {
       attendanceMarked: lesson.attendance.length,
@@ -211,6 +232,7 @@ export class LessonOccurrenceService {
       expectedStudents: 0,
       groupId: lesson.groupId,
       lessonId: lesson.id,
+      ...(lesson.scheduleTemplateId ? { scheduleTemplateId: lesson.scheduleTemplateId } : {}),
       source: 'LESSON',
       startsAt: lesson.startsAt,
       trialStudents: 0,

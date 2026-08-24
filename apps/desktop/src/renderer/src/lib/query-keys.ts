@@ -5,6 +5,7 @@ import type {
   PaymentListQuery,
   StudentListQuery,
   TariffListQuery,
+  TrialOccurrenceQuery,
   WeeklyScheduleQuery,
 } from '@arava/shared';
 
@@ -29,6 +30,8 @@ export const queryKeys = {
   lead: (id: string, accessKey: string) => ['leads', accessKey, 'detail', id] as const,
   leads: (accessKey: string, query: object = {}) => ['leads', accessKey, 'list', query] as const,
   trials: (accessKey: string, query: object = {}) => ['trials', accessKey, query] as const,
+  trialOccurrences: (accessKey: string, query: TrialOccurrenceQuery) =>
+    ['trial-occurrences', accessKey, query] as const,
   webActions: (userId?: string) => ['web-actions', userId] as const,
   attendance: (lessonId: string) => ['attendance', lessonId] as const,
   attendanceToday: (date: string) => ['attendance', 'today', date] as const,

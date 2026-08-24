@@ -378,10 +378,17 @@ describe('Electron IPC boundary', () => {
     expect(await database.student.count()).toBe(1);
     expect(await database.enrollment.count()).toBe(1);
     await expect(
+      handlers[IPC_CHANNELS.trialOccurrences]?.(owner.token, {
+        dateFrom: new Date(new Date(trialLesson.startsAt).setHours(0, 0, 0, 0)).toISOString(),
+        dateTo: new Date(new Date(trialLesson.startsAt).setHours(23, 59, 59, 999)).toISOString(),
+        groupId: group.id,
+      }),
+    ).resolves.toMatchObject([{ lessonId: trialLesson.id, source: 'LESSON' }]);
+    await expect(
       handlers[IPC_CHANNELS.trialSchedule]?.(owner.token, {
         groupId: group.id,
         leadId: lead.id,
-        lessonId: trialLesson.id,
+        startsAt: trialLesson.startsAt,
       }),
     ).resolves.toMatchObject({ groupId: group.id, leadId: lead.id, lessonId: trialLesson.id });
     await expect(
@@ -407,6 +414,13 @@ describe('Electron IPC boundary', () => {
     await expect(handlers[IPC_CHANNELS.trialList]?.(coachSession.token, {})).rejects.toThrow(
       'Тренеру недоступен',
     );
+    await expect(
+      handlers[IPC_CHANNELS.trialOccurrences]?.(coachSession.token, {
+        dateFrom: new Date().toISOString(),
+        dateTo: new Date().toISOString(),
+        groupId: group.id,
+      }),
+    ).rejects.toThrow('Тренеру недоступен');
   });
 
   it('returns application version and build metadata from system information', async () => {

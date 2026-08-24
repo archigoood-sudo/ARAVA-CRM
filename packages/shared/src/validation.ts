@@ -53,6 +53,7 @@ import {
   type LeadCreateInput,
   type LeadListQuery,
   type TrialListQuery,
+  type TrialOccurrenceQuery,
   type TrialScheduleInput,
   type RoomClosureInput,
   type RoomInput,
@@ -838,8 +839,18 @@ export const leadStudentConversionInputSchema = z.object({
 export const trialScheduleInputSchema: z.ZodType<TrialScheduleInput> = z.object({
   groupId: identifierSchema,
   leadId: identifierSchema,
-  lessonId: identifierSchema,
+  startsAt: z.string().datetime(),
 });
+export const trialOccurrenceQuerySchema: z.ZodType<TrialOccurrenceQuery> = z
+  .object({
+    dateFrom: z.string().datetime(),
+    dateTo: z.string().datetime(),
+    groupId: identifierSchema,
+  })
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
 export const trialListQuerySchema: z.ZodType<TrialListQuery> = z.object({
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),

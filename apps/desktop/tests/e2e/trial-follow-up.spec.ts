@@ -155,25 +155,77 @@ test('записывает заявку на пробное и автомати�
         name: 'Пробная группа E2E',
         status: 'RECRUITING',
       });
-      const startsAt = new Date(Date.now() - 15 * 60_000);
-      const lesson = await api.lessons.create(token, {
-        endsAt: new Date(Date.now() + 45 * 60_000).toISOString(),
+      const now = new Date();
+      const startsAt = new Date(now.getTime() - 15 * 60_000);
+      if (startsAt.getDate() !== now.getDate()) startsAt.setHours(0, 0, 0, 0);
+      startsAt.setSeconds(0, 0);
+      const endsAt = new Date(now.getTime() + 45 * 60_000);
+      if (endsAt.getDate() !== now.getDate()) endsAt.setHours(23, 59, 0, 0);
+      const time = (value: Date) =>
+        `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
+      await api.schedules.create(token, {
+        branchId: branch.id,
+        endTime: time(endsAt),
         groupId: group.id,
-        startsAt: startsAt.toISOString(),
+        isActive: true,
+        startTime: time(startsAt),
+        validFrom: `${String(startsAt.getFullYear())}-${String(startsAt.getMonth() + 1).padStart(2, '0')}-${String(startsAt.getDate()).padStart(2, '0')}`,
+        weekday: ((startsAt.getDay() + 6) % 7) + 1,
       });
-      return { branch, group, lesson };
+      const rangeEnd = new Date(startsAt);
+      rangeEnd.setDate(rangeEnd.getDate() + 60);
+      const occurrences = await api.trials.occurrences(token, {
+        dateFrom: new Date(
+          startsAt.getFullYear(),
+          startsAt.getMonth(),
+          startsAt.getDate(),
+        ).toISOString(),
+        dateTo: rangeEnd.toISOString(),
+        groupId: group.id,
+      });
+      if (!occurrences[0]) throw new Error('weekly trial occurrence unavailable');
+      return { branch, group, startsAt: occurrences[0].startsAt };
     });
     await page.getByRole('link', { name: 'Заявки' }).click();
     await page.getByText('Иванова Мария', { exact: true }).first().click();
     await page.getByLabel('Целевая группа заявки').selectOption(setup.group.id);
     await expect.poll(() => groupId).toBe(setup.group.id);
     await expect(page.getByLabel('Целевая группа заявки')).toHaveValue(setup.group.id);
-    await page.getByLabel('Занятие для пробного').selectOption(setup.lesson.id);
-    await expect(page.getByLabel('Занятие для пробного')).toHaveValue(setup.lesson.id);
+    await page.getByLabel('Занятие для пробного').selectOption(setup.startsAt);
+    await expect(page.getByLabel('Занятие для пробного')).toHaveValue(setup.startsAt);
     const scheduleTrial = page.getByRole('button', { name: 'Записать на пробное' });
     await expect(scheduleTrial).toBeEnabled();
     await scheduleTrial.click();
     await expect(page.getByText('Пробное сегодня', { exact: true })).toBeVisible();
+    const materialized = await page.evaluate(
+      async ({ groupId: currentGroupId, startsAt }) => {
+        const stored = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+          state?: { token?: string };
+        };
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        const token = stored.state?.token ?? '';
+        const day = new Date(startsAt);
+        const lessons = await api.lessons.list(token, {
+          dateFrom: new Date(day.getFullYear(), day.getMonth(), day.getDate()).toISOString(),
+          dateTo: new Date(
+            day.getFullYear(),
+            day.getMonth(),
+            day.getDate(),
+            23,
+            59,
+            59,
+            999,
+          ).toISOString(),
+          groupId: currentGroupId,
+        });
+        const trials = await api.trials.list(token, { leadId: 'trial-lead-e2e' });
+        return { lessonCount: lessons.length, lessonId: trials[0]?.lessonId };
+      },
+      { groupId: setup.group.id, startsAt: setup.startsAt },
+    );
+    expect(materialized.lessonCount).toBe(1);
+    expect(materialized.lessonId).toBeTruthy();
+    if (!materialized.lessonId) throw new Error('trial lesson unavailable');
     await page.getByRole('button', { name: 'Создать ученика' }).click();
     await page.getByRole('button', { name: 'Добавить ученика' }).click();
     await expect(page.getByText('Ученик уже создан и связан.')).toBeVisible();
@@ -197,7 +249,7 @@ test('записывает заявку на пробное и автомати�
           { status: 'PRESENT', studentId: currentStudentId },
         ]);
       },
-      { lessonId: setup.lesson.id, studentId },
+      { lessonId: materialized.lessonId, studentId },
     );
     await page.getByRole('link', { name: 'Главная' }).click();
     await expect(page.getByText('Связаться после пробного: Иванова Мария')).toBeVisible();
