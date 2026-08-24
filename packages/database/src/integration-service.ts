@@ -2085,7 +2085,7 @@ export class IntegrationApiClient {
         deviceId,
         token,
         'POST',
-        undefined,
+        {},
         undefined,
         true,
       );

@@ -90,7 +90,7 @@ it('strictly allowlists WEB admin update payloads', async () => {
   );
 });
 
-it('sends the canonical empty WEB claim request and accepts a 204 response', async () => {
+it('sends the canonical empty-object WEB claim request and accepts a 204 response', async () => {
   let requestUrl = '';
   let requestInit: RequestInit | undefined;
   const api = new IntegrationApiClient((url, init) => {
@@ -108,7 +108,7 @@ it('sends the canonical empty WEB claim request and accepts a 204 response', asy
   ).resolves.toBe('CLAIMED');
   expect(requestUrl).toBe('https://web.example/api/integration/v1/actions/admin-action/claim');
   expect(requestInit).toMatchObject({ method: 'POST' });
-  expect(requestInit?.body).toBeUndefined();
+  expect(requestInit?.body).toBe('{}');
   expect(requestInit?.headers).toMatchObject({
     Authorization: 'Bearer token',
     'X-ARAVA-API-Version': 'v1',
