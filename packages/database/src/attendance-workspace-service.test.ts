@@ -16,6 +16,8 @@ import {
   type DatabaseClient,
 } from './index';
 import { ApplicationService } from './services';
+import { FinanceService } from './finance-service';
+import { ManagementService } from './management-service';
 import { StudioService } from './studio-service';
 
 describe('Attendance 2.0 workspace', () => {
@@ -36,6 +38,7 @@ describe('Attendance 2.0 workspace', () => {
       database,
       application,
       () => new Date('2026-08-23T10:30:00'),
+      studio,
     );
     const owner = await application.login({
       email: INITIAL_OWNER_EMAIL,
@@ -146,7 +149,9 @@ describe('Attendance 2.0 workspace', () => {
       branch,
       cancelled,
       coachToken: coachSession.token,
+      coach,
       current,
+      group,
       otherBranch,
       student,
       upcoming,
@@ -156,7 +161,7 @@ describe('Attendance 2.0 workspace', () => {
   it('returns actual lessons, canonical roster counts and branch-scoped data', async () => {
     const data = await fixture();
     const day = await workspace.today(ownerToken, '2026-08-23');
-    expect(day.lessons).toHaveLength(3);
+    expect(day.lessons).toHaveLength(2);
     expect(day.lessons).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -169,11 +174,11 @@ describe('Attendance 2.0 workspace', () => {
           effectiveTrainerName: 'Елена Подменова',
           id: data.upcoming.id,
         }),
-        expect.objectContaining({ id: data.cancelled.id, status: 'CANCELLED' }),
       ]),
     );
+    expect(day.lessons.some(({ id }) => id === data.cancelled.id)).toBe(false);
     const adminDay = await workspace.today(data.adminToken, '2026-08-23');
-    expect(adminDay.lessons).toHaveLength(3);
+    expect(adminDay.lessons).toHaveLength(2);
     expect(adminDay.lessons.every(({ branchId }) => branchId === data.branch.id)).toBe(true);
 
     const restricted = await application.createUser(ownerToken, {
@@ -274,6 +279,112 @@ describe('Attendance 2.0 workspace', () => {
     expect(detail.participants).toEqual([
       expect.objectContaining({ status: 'PRESENT', studentId: data.student.id }),
     ]);
+  });
+
+  it('resolves and materializes a past weekly occurrence once and reconciles canonical effects', async () => {
+    const data = await fixture();
+    const pastDate = '2026-08-20';
+    await database.weeklySchedule.create({
+      data: {
+        branchId: data.branch.id,
+        coachId: data.coach.id,
+        endTime: '19:30',
+        groupId: data.group.id,
+        isActive: true,
+        startTime: '18:30',
+        validFrom: new Date('2026-08-01T00:00:00'),
+        weekday: 4,
+      },
+    });
+
+    const pastDay = await workspace.today(ownerToken, pastDate);
+    expect(pastDay.lessons).toEqual([
+      expect.objectContaining({
+        attendanceExpected: 1,
+        source: 'WEEKLY_SCHEDULE',
+      }),
+    ]);
+    const occurrence = pastDay.lessons[0];
+    if (!occurrence) throw new Error('Historical occurrence was not resolved.');
+    const firstLesson = await workspace.openOccurrence(ownerToken, {
+      groupId: occurrence.groupId,
+      startsAt: occurrence.startsAt,
+    });
+    const repeatedLesson = await workspace.openOccurrence(ownerToken, {
+      groupId: occurrence.groupId,
+      startsAt: occurrence.startsAt,
+    });
+    expect(repeatedLesson.id).toBe(firstLesson.id);
+    expect(
+      await database.lesson.count({
+        where: { groupId: data.group.id, startsAt: new Date(occurrence.startsAt) },
+      }),
+    ).toBe(1);
+
+    const finance = new FinanceService(database, application);
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: data.branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 4,
+      name: 'Исторические посещения',
+      price: 40_000,
+      type: 'LESSON_PACK',
+      validityDays: 60,
+    });
+    const subscription = await finance.createSubscription(ownerToken, {
+      salePrice: 40_000,
+      startsAt: '2026-08-01',
+      studentId: data.student.id,
+      tariffId: tariff.id,
+    });
+    const management = new ManagementService(database, application);
+    await management.createPayrollRule(ownerToken, {
+      amountPerAttendee: 10_000,
+      branchId: data.branch.id,
+      coachId: data.coach.id,
+      groupId: data.group.id,
+      isActive: true,
+      type: 'PER_ATTENDEE',
+      validFrom: '2026-08-01',
+    });
+    const period = await management.createPayrollPeriod(ownerToken, {
+      branchId: data.branch.id,
+      dateFrom: pastDate,
+      dateTo: pastDate,
+    });
+
+    await studio.saveAttendance(ownerToken, firstLesson.id, [
+      { status: 'PRESENT', studentId: data.student.id },
+    ]);
+    await studio.saveAttendance(ownerToken, firstLesson.id, [
+      { status: 'PRESENT', studentId: data.student.id },
+    ]);
+    expect(await database.attendance.count({ where: { lessonId: firstLesson.id } })).toBe(1);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(1);
+    expect((await management.calculatePayrollPeriod(ownerToken, period.id)).totalAmount).toBe(
+      10_000,
+    );
+
+    await studio.saveAttendance(ownerToken, firstLesson.id, [
+      { status: 'ABSENT', studentId: data.student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(0);
+    expect((await management.calculatePayrollPeriod(ownerToken, period.id)).totalAmount).toBe(0);
+
+    await studio.saveAttendance(ownerToken, firstLesson.id, [
+      { status: 'PRESENT', studentId: data.student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(1);
+    expect((await management.calculatePayrollPeriod(ownerToken, period.id)).totalAmount).toBe(
+      10_000,
+    );
+    await expect(
+      workspace.openOccurrence(data.coachToken, {
+        groupId: occurrence.groupId,
+        startsAt: occurrence.startsAt,
+      }),
+    ).rejects.toThrow('Рабочее место «Посещения» доступно владельцу и администраторам.');
   });
 });
 

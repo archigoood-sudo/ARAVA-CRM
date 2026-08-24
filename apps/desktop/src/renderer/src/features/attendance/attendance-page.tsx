@@ -97,8 +97,11 @@ export function AttendancePage() {
     PRESENT: participants.filter(({ status }) => status === 'PRESENT').length,
     UNMARKED: participants.filter(({ status }) => !status).length,
   };
+  const workspaceDate = searchParams.get('date');
   const returnTo =
-    searchParams.get('from') === 'workspace' ? '/attendance' : `/lessons/${lessonId}`;
+    searchParams.get('from') === 'workspace'
+      ? `/attendance${workspaceDate ? `?date=${workspaceDate}` : ''}`
+      : `/lessons/${lessonId}`;
 
   return (
     <main className="mx-auto w-full max-w-[1320px] animate-fade-in p-7 pb-16 min-[1500px]:p-9">
@@ -107,7 +110,7 @@ export function AttendancePage() {
         to={returnTo}
       >
         <ArrowLeft className="size-4" />
-        {returnTo === '/attendance' ? 'Все занятия сегодня' : 'К занятию'}
+        {returnTo.startsWith('/attendance') ? 'К выбранному дню' : 'К занятию'}
       </Link>
 
       <header className="mb-5 flex flex-wrap items-end justify-between gap-5">

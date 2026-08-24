@@ -482,6 +482,10 @@ export const attendanceEntryInputSchema: z.ZodType<AttendanceEntryInput> = z.obj
 });
 
 export const attendanceEntriesSchema = z.array(attendanceEntryInputSchema).max(1000);
+export const attendanceOccurrenceInputSchema = z.object({
+  groupId: z.string().min(1).max(100),
+  startsAt: isoDateTime,
+});
 
 const moneyAmount = z.number().int().min(0, t('validation.money')).max(1_000_000_000);
 const positiveMoneyAmount = z

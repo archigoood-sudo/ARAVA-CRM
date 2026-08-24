@@ -25,6 +25,7 @@ import {
 import {
   IPC_CHANNELS,
   attendanceEntriesSchema,
+  attendanceOccurrenceInputSchema,
   attendanceWorkspaceDateSchema,
   chatListQuerySchema,
   chatSendInputSchema,
@@ -838,6 +839,11 @@ export function createIpcHandlers(
       studio.getAttendance(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeLessonId),
+      ),
+    [IPC_CHANNELS.attendanceOpenOccurrence]: (unsafeToken, unsafeInput) =>
+      attendanceWorkspace.openOccurrence(
+        sessionTokenSchema.parse(unsafeToken),
+        attendanceOccurrenceInputSchema.parse(unsafeInput),
       ),
     [IPC_CHANNELS.attendanceSave]: (unsafeToken, unsafeLessonId, unsafeEntries) =>
       studio.saveAttendance(

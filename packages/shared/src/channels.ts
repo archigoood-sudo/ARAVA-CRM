@@ -315,6 +315,7 @@ export const IPC_CHANNELS = {
   lessonList: 'lesson:list',
   lessonUpdate: 'lesson:update',
   attendanceGet: 'attendance:get',
+  attendanceOpenOccurrence: 'attendance:open-occurrence',
   attendanceSave: 'attendance:save',
   attendanceScanOptions: 'attendance:scan-options',
   attendanceToday: 'attendance:today',
@@ -1782,7 +1783,9 @@ export interface AttendanceWorkspaceLesson {
   groupId: string;
   groupName: string;
   id: string;
+  lessonId?: string | undefined;
   roomName?: string | undefined;
+  source: 'LESSON' | 'WEEKLY_SCHEDULE';
   startsAt: string;
   status: LessonStatus;
 }
@@ -1790,6 +1793,11 @@ export interface AttendanceWorkspaceLesson {
 export interface AttendanceWorkspaceDay {
   date: string;
   lessons: AttendanceWorkspaceLesson[];
+}
+
+export interface AttendanceOccurrenceInput {
+  groupId: string;
+  startsAt: string;
 }
 
 export interface AttendanceScanLessonOption {
@@ -2763,6 +2771,7 @@ export interface AravaDesktopApi {
   };
   attendance: {
     get: (token: string, lessonId: string) => Promise<AttendanceLessonDetail>;
+    openOccurrence: (token: string, input: AttendanceOccurrenceInput) => Promise<LessonSummary>;
     scanOptions: (token: string, studentId: string, date: string) => Promise<AttendanceScanOptions>;
     save: (
       token: string,

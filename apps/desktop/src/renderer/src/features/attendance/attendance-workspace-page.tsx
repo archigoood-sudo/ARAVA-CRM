@@ -1,10 +1,19 @@
 import { formatDate, type AttendanceWorkspaceLesson } from '@arava/shared';
-import { Badge, Card, EmptyState, ErrorState, LoadingState, cn } from '@arava/ui';
-import { useQuery } from '@tanstack/react-query';
-import { CalendarCheck2, CheckCircle2, Clock3, UsersRound } from 'lucide-react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Badge, Button, Card, EmptyState, ErrorState, Input, LoadingState, cn } from '@arava/ui';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  CalendarCheck2,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  UsersRound,
+} from 'lucide-react';
+import { useState } from 'react';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
+import { invalidateLessonCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import {
@@ -29,8 +38,15 @@ function timeRange(lesson: AttendanceWorkspaceLesson): string {
   return `${time(lesson.startsAt)}–${time(lesson.endsAt)}`;
 }
 
-function LessonCard({ lesson }: { lesson: AttendanceWorkspaceLesson }) {
-  const navigate = useNavigate();
+function LessonCard({
+  isOpening,
+  lesson,
+  onOpen,
+}: {
+  isOpening: boolean;
+  lesson: AttendanceWorkspaceLesson;
+  onOpen: (lesson: AttendanceWorkspaceLesson) => void;
+}) {
   const cancelled = lesson.status === 'CANCELLED';
   const progress = attendanceProgress(lesson);
   return (
@@ -42,7 +58,7 @@ function LessonCard({ lesson }: { lesson: AttendanceWorkspaceLesson }) {
           : 'hover:-translate-y-0.5 hover:border-neutral-300 hover:shadow-soft',
       )}
       disabled={cancelled}
-      onClick={() => navigate(`/attendance/${lesson.id}?from=workspace`)}
+      onClick={() => onOpen(lesson)}
       type="button"
     >
       <div className="flex items-start justify-between gap-5">
@@ -73,55 +89,131 @@ function LessonCard({ lesson }: { lesson: AttendanceWorkspaceLesson }) {
           {progress}
         </Badge>
       </div>
+      {isOpening ? <p className="mt-3 text-sm text-muted-foreground">Открываем занятие…</p> : null}
     </button>
   );
 }
 
+function shiftDate(date: string, days: number): string {
+  const value = new Date(`${date}T12:00:00`);
+  value.setDate(value.getDate() + days);
+  return localDateKey(value);
+}
+
 export function AttendanceWorkspacePage() {
   const role = useAuthStore(({ user }) => user?.role);
-  const date = localDateKey();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialDate = searchParams.get('date');
+  const [date, setDate] = useState(() =>
+    initialDate && /^\d{4}-\d{2}-\d{2}$/u.test(initialDate) ? initialDate : localDateKey(),
+  );
+  const today = localDateKey();
+  const navigate = useNavigate();
+  const client = useQueryClient();
   const attendance = useQuery({
     enabled: role !== 'COACH',
     queryFn: () => getDesktopApi().attendance.today(getSessionToken(), date),
     queryKey: queryKeys.attendanceToday(date),
     refetchInterval: 30_000,
   });
+  const openOccurrence = useMutation({
+    mutationFn: (lesson: AttendanceWorkspaceLesson) =>
+      lesson.lessonId
+        ? Promise.resolve({ id: lesson.lessonId })
+        : getDesktopApi().attendance.openOccurrence(getSessionToken(), {
+            groupId: lesson.groupId,
+            startsAt: lesson.startsAt,
+          }),
+    onSuccess: async ({ id }) => {
+      await invalidateLessonCaches(client);
+      void navigate(`/attendance/${id}?from=workspace&date=${date}`);
+    },
+  });
+  const selectDate = (nextDate: string) => {
+    setDate(nextDate);
+    setSearchParams(nextDate === today ? {} : { date: nextDate }, { replace: true });
+  };
   if (role === 'COACH') return <Navigate replace to="/schedule" />;
-  if (attendance.isLoading) return <LoadingState label="Загружаем занятия на сегодня…" />;
+  if (attendance.isLoading) return <LoadingState label="Загружаем занятия…" />;
   if (!attendance.data || attendance.isError)
     return (
       <ErrorState
-        message="Не удалось загрузить занятия на сегодня."
+        message="Не удалось загрузить занятия на выбранную дату."
         onRetry={() => void attendance.refetch()}
         retryLabel="Повторить"
         title="Что-то пошло не так"
       />
     );
   const groups = groupAttendanceLessons(attendance.data.lessons);
+  const isToday = date === today;
+  const dateTitle = isToday
+    ? `Сегодня, ${formatDate(`${date}T12:00:00`, { dateStyle: 'long' })}`
+    : formatDate(`${date}T12:00:00`, { dateStyle: 'full' });
   return (
     <main className="mx-auto w-full max-w-[1320px] animate-fade-in p-7 pb-14 min-[1500px]:p-9">
-      <header className="mb-6 flex items-end justify-between gap-6">
+      <header className="mb-5 flex flex-wrap items-end justify-between gap-6">
         <div>
           <p className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
             <CalendarCheck2 className="size-4" /> Ежедневное рабочее место
           </p>
           <h1 className="mt-2 text-4xl font-semibold tracking-[-0.045em]">Посещения</h1>
-          <p className="mt-2 text-lg text-muted-foreground">
-            Сегодня, {formatDate(`${date}T12:00:00`, { dateStyle: 'long' })}
-          </p>
+          <p className="mt-2 text-lg text-muted-foreground">{dateTitle}</p>
         </div>
         <div className="rounded-2xl border border-border bg-surface px-4 py-3 text-right">
           <p className="text-2xl font-semibold">{attendance.data.lessons.length}</p>
-          <p className="text-xs text-muted-foreground">занятий сегодня</p>
+          <p className="text-xs text-muted-foreground">занятий</p>
         </div>
       </header>
+
+      <Card className="mb-6 flex flex-wrap items-center gap-2 p-3">
+        <Button
+          aria-label="Предыдущий день"
+          onClick={() => selectDate(shiftDate(date, -1))}
+          size="icon"
+          type="button"
+          variant="secondary"
+        >
+          <ChevronLeft className="size-4" />
+        </Button>
+        <Button onClick={() => selectDate(today)} type="button" variant="secondary">
+          Сегодня
+        </Button>
+        <Button
+          aria-label="Следующий день"
+          onClick={() => selectDate(shiftDate(date, 1))}
+          size="icon"
+          type="button"
+          variant="secondary"
+        >
+          <ChevronRight className="size-4" />
+        </Button>
+        <label className="ml-auto flex min-w-[220px] items-center gap-2 text-sm font-medium">
+          <CalendarCheck2 className="size-4 text-muted-foreground" />
+          <span>Дата</span>
+          <Input
+            aria-label="Дата посещений"
+            className="min-w-0"
+            onChange={(event) => {
+              if (event.target.value) selectDate(event.target.value);
+            }}
+            type="date"
+            value={date}
+          />
+        </label>
+      </Card>
+
+      {openOccurrence.isError ? (
+        <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          Не удалось открыть занятие. Обновите список и попробуйте снова.
+        </p>
+      ) : null}
 
       {attendance.data.lessons.length === 0 ? (
         <Card className="p-8">
           <EmptyState
-            description="Здесь появятся созданные занятия текущего дня."
+            description="Здесь появятся занятия из расписания на выбранную дату."
             icon={Clock3}
-            title="Сегодня занятий нет"
+            title={isToday ? 'Сегодня занятий нет' : 'На эту дату занятий нет'}
           />
         </Card>
       ) : (
@@ -138,12 +230,23 @@ export function AttendanceWorkspacePage() {
                     <Clock3 className="size-4 text-muted-foreground" />
                   )}
                   <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                    {groupLabels[group]}
+                    {!isToday && group === 'COMPLETED'
+                      ? 'Занятия'
+                      : date > today && group === 'LATER'
+                        ? 'Запланированные'
+                        : groupLabels[group]}
                   </h2>
                 </div>
                 <div className="grid gap-3 xl:grid-cols-2">
                   {groups[group].map((lesson) => (
-                    <LessonCard key={lesson.id} lesson={lesson} />
+                    <LessonCard
+                      isOpening={
+                        openOccurrence.isPending && openOccurrence.variables.id === lesson.id
+                      }
+                      key={lesson.id}
+                      lesson={lesson}
+                      onOpen={(selected) => openOccurrence.mutate(selected)}
+                    />
                   ))}
                 </div>
               </section>

@@ -1170,6 +1170,41 @@ describe('Electron IPC boundary', () => {
     expect(day.lessons).toEqual([
       expect.objectContaining({ attendanceExpected: 1, id: lesson.id }),
     ]);
+    await database.weeklySchedule.create({
+      data: {
+        branchId: branch.id,
+        coachId: coach.id,
+        endTime: '19:00',
+        groupId: group.id,
+        isActive: true,
+        startTime: '18:00',
+        validFrom: new Date('2026-08-01T00:00:00'),
+        weekday: 4,
+      },
+    });
+    const historicalDay = (await handlers[IPC_CHANNELS.attendanceToday]?.(
+      owner.token,
+      '2026-08-20',
+    )) as AttendanceWorkspaceDay;
+    expect(historicalDay.lessons).toEqual([expect.objectContaining({ source: 'WEEKLY_SCHEDULE' })]);
+    const historicalOccurrence = historicalDay.lessons[0];
+    if (!historicalOccurrence) throw new Error('Historical occurrence was not resolved.');
+    const materialized = (await handlers[IPC_CHANNELS.attendanceOpenOccurrence]?.(owner.token, {
+      groupId: group.id,
+      startsAt: historicalOccurrence.startsAt,
+    })) as { id: string };
+    expect(materialized.id).toBeTruthy();
+    expect(
+      await database.lesson.count({
+        where: { groupId: group.id, startsAt: new Date(historicalOccurrence.startsAt) },
+      }),
+    ).toBe(1);
+    await expect(
+      handlers[IPC_CHANNELS.attendanceOpenOccurrence]?.(coachSession.token, {
+        groupId: group.id,
+        startsAt: historicalOccurrence.startsAt,
+      }),
+    ).rejects.toThrow('Рабочее место «Посещения» доступно владельцу и администраторам.');
     const options = (await handlers[IPC_CHANNELS.attendanceScanOptions]?.(
       owner.token,
       student.id,

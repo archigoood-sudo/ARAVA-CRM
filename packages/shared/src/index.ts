@@ -5,6 +5,7 @@ export { settingKeySchema, settingUpdateSchema } from './ipc';
 export {
   attendanceEntriesSchema,
   attendanceEntryInputSchema,
+  attendanceOccurrenceInputSchema,
   attendanceStatusSchema,
   attendanceWorkspaceDateSchema,
   analyticsQuerySchema,

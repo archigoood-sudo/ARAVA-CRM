@@ -83,6 +83,21 @@ test('рабочее место отмечает вручную, через по
           status: 'ACTIVE',
           studentId: student.id,
         });
+      const pastDateValue = new Date();
+      pastDateValue.setDate(pastDateValue.getDate() - 1);
+      const pastDate = `${String(pastDateValue.getFullYear())}-${String(
+        pastDateValue.getMonth() + 1,
+      ).padStart(2, '0')}-${String(pastDateValue.getDate()).padStart(2, '0')}`;
+      await api.schedules.create(token, {
+        branchId: branch.id,
+        coachId: trainer.user.id,
+        endTime: '19:30',
+        groupId: group.id,
+        isActive: true,
+        startTime: '18:30',
+        validFrom: '2020-01-01',
+        weekday: ((pastDateValue.getDay() + 6) % 7) + 1,
+      });
       const startsAt = new Date(Date.now() - 10 * 60_000);
       const lesson = await api.lessons.create(token, {
         coachId: trainer.user.id,
@@ -98,6 +113,7 @@ test('рабочее место отмечает вручную, через по
       return {
         cardStudentId: students[2].id,
         lessonId: lesson.id,
+        pastDate,
       };
     });
 
@@ -160,6 +176,26 @@ test('рабочее место отмечает вручную, через по
       ).length;
     }, fixture);
     expect(finalAttendance).toBe(1);
+    await repeatedPrompt.getByRole('button', { name: 'Закрыть' }).last().click();
+
+    await page.getByRole('link', { name: 'Посещения', exact: true }).click();
+    await page.getByRole('button', { name: 'Предыдущий день' }).click();
+    await expect(page.getByLabel('Дата посещений')).toHaveValue(fixture.pastDate);
+    const historicalCard = page.getByRole('button').filter({ hasText: 'Хип-хоп 8–10 лет' });
+    await expect(historicalCard).toContainText('Отмечено 0 из 3');
+    await historicalCard.click();
+    const historicalUrl = page.url();
+    await expect(page).toHaveURL(/\/attendance\/[^/]+\?from=workspace&date=/u);
+    await page.getByRole('button', { name: 'Иванова Алиса: Присутствовал' }).click();
+    await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('1');
+    await page.getByRole('button', { name: 'Иванова Алиса: Отсутствовал' }).click();
+    await expect(page.getByText('Отсутствуют', { exact: true }).locator('..')).toContainText('1');
+
+    await page.getByRole('link', { name: 'К выбранному дню' }).click();
+    await expect(page.getByLabel('Дата посещений')).toHaveValue(fixture.pastDate);
+    await page.getByRole('button').filter({ hasText: 'Хип-хоп 8–10 лет' }).click();
+    await expect(page).toHaveURL(historicalUrl);
+    await expect(page.getByText('Отсутствуют', { exact: true }).locator('..')).toContainText('1');
   } finally {
     await application.close();
   }

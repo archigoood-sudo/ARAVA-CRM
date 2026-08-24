@@ -20,6 +20,7 @@ function lesson(
     groupId: 'group',
     groupName: id,
     id,
+    source: 'LESSON',
     startsAt,
     status: 'PLANNED',
     ...overrides,

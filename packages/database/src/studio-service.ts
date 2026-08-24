@@ -1037,6 +1037,19 @@ export class StudioService {
             },
           );
       }
+      if (entries.length > 0 && lesson.status === 'PLANNED' && lesson.endsAt <= new Date()) {
+        await transaction.lesson.update({
+          data: { status: 'COMPLETED' },
+          where: { id: lesson.id },
+        });
+        await this.audit(
+          transaction,
+          actor.id,
+          'LESSON_COMPLETED_BY_ATTENDANCE',
+          'Lesson',
+          lesson.id,
+        );
+      }
       if (!lesson.attendanceCompletedAt && allowedStudents.size > 0) {
         const markedCount = await transaction.attendance.count({ where: { lessonId: lesson.id } });
         if (markedCount >= allowedStudents.size)

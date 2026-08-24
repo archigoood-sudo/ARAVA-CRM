@@ -1,17 +1,21 @@
 import type {
   AttendanceScanLessonOption,
   AttendanceScanOptions,
+  AttendanceOccurrenceInput,
   AttendanceWorkspaceDay,
   AttendanceWorkspaceLesson,
   AuthenticatedUser,
+  LessonSummary,
 } from '@arava/shared';
 import type { EnrollmentStatus, Prisma, StudentStatus } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
-import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
+import { assertBranchAccess, assertPermission } from './permissions';
 import { endOfLocalDay, startOfLocalDay } from './schedule';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
+import { LessonOccurrenceService } from './lesson-occurrence-service';
+import { StudioService } from './studio-service';
 
 const currentEnrollmentStatuses: EnrollmentStatus[] = ['ACTIVE', 'TRIAL'];
 const currentStudentStatuses: StudentStatus[] = ['ACTIVE', 'TRIAL', 'FROZEN'];
@@ -33,6 +37,24 @@ const workspaceLessonInclude = {
 } satisfies Prisma.LessonInclude;
 
 type WorkspaceLessonRecord = Prisma.LessonGetPayload<{ include: typeof workspaceLessonInclude }>;
+
+const workspaceScheduleInclude = {
+  branch: { select: { name: true } },
+  coach: { select: { fullName: true } },
+  group: {
+    select: {
+      coach: { select: { fullName: true } },
+      direction: true,
+      id: true,
+      name: true,
+    },
+  },
+  roomEntity: { select: { name: true } },
+} satisfies Prisma.WeeklyScheduleInclude;
+
+type WorkspaceScheduleRecord = Prisma.WeeklyScheduleGetPayload<{
+  include: typeof workspaceScheduleInclude;
+}>;
 
 function membershipValidAt(
   enrollment: {
@@ -86,63 +108,83 @@ export class AttendanceWorkspaceService {
     private readonly database: DatabaseClient,
     private readonly application: ApplicationService,
     private readonly now: () => Date = () => new Date(),
+    private readonly studio: StudioService = new StudioService(database, application),
   ) {}
 
   async today(token: string, date: string): Promise<AttendanceWorkspaceDay> {
     const actor = await this.workspaceActor(token);
     const from = startOfLocalDay(date);
-    const to = endOfLocalDay(date);
-    const branchIds = accessibleBranchIds(actor);
-    const lessons = await this.database.lesson.findMany({
-      include: workspaceLessonInclude,
-      orderBy: { startsAt: 'asc' },
-      where: {
-        startsAt: { gte: from, lte: to },
-        ...(branchIds ? { branchId: { in: branchIds } } : {}),
-      },
-    });
-    const groupIds = [...new Set(lessons.map(({ groupId }) => groupId))];
-    const enrollments = groupIds.length
-      ? await this.database.enrollment.findMany({
-          include: { student: { select: { archivedAt: true, status: true } } },
-          where: {
-            groupId: { in: groupIds },
-            joinedAt: { lte: to },
-            OR: [{ leftAt: null }, { leftAt: { gte: from } }],
-          },
-        })
-      : [];
-    const byGroup = new Map<string, typeof enrollments>();
-    for (const enrollment of enrollments) {
-      const group = byGroup.get(enrollment.groupId) ?? [];
-      group.push(enrollment);
-      byGroup.set(enrollment.groupId, group);
-    }
-    const summaries: AttendanceWorkspaceLesson[] = lessons.map((lesson) => {
-      const markedStudentIds = new Set(lesson.attendance.map(({ studentId }) => studentId));
-      const expectedStudentIds = new Set(markedStudentIds);
-      for (const enrollment of byGroup.get(lesson.groupId) ?? []) {
-        if (membershipValidAt(enrollment, lesson.startsAt))
-          expectedStudentIds.add(enrollment.studentId);
-      }
-      return {
-        attendanceCompletedAt: lesson.attendanceCompletedAt?.toISOString(),
-        attendanceExpected: expectedStudentIds.size,
-        attendanceMarked: markedStudentIds.size,
-        branchId: lesson.branchId,
-        branchName: lesson.branch.name,
-        direction: lesson.group.direction,
-        effectiveTrainerName: effectiveTrainerName(lesson),
-        endsAt: lesson.endsAt.toISOString(),
-        groupId: lesson.groupId,
-        groupName: lesson.group.name,
-        id: lesson.id,
-        roomName: lesson.roomEntity?.name ?? lesson.room ?? undefined,
-        startsAt: lesson.startsAt.toISOString(),
-        status: lesson.status,
-      };
+    const occurrences = await new LessonOccurrenceService(this.database).resolveDay(actor, from);
+    const lessonIds = occurrences.flatMap(({ lessonId }) => (lessonId ? [lessonId] : []));
+    const scheduleIds = occurrences.flatMap(({ scheduleTemplateId, source }) =>
+      source === 'WEEKLY_SCHEDULE' && scheduleTemplateId ? [scheduleTemplateId] : [],
+    );
+    const [lessons, schedules] = await Promise.all([
+      lessonIds.length
+        ? this.database.lesson.findMany({
+            include: workspaceLessonInclude,
+            where: { id: { in: lessonIds } },
+          })
+        : Promise.resolve([] as WorkspaceLessonRecord[]),
+      scheduleIds.length
+        ? this.database.weeklySchedule.findMany({
+            include: workspaceScheduleInclude,
+            where: { id: { in: scheduleIds } },
+          })
+        : Promise.resolve([] as WorkspaceScheduleRecord[]),
+    ]);
+    const lessonById = new Map(lessons.map((lesson) => [lesson.id, lesson]));
+    const scheduleById = new Map(schedules.map((schedule) => [schedule.id, schedule]));
+    const summaries = occurrences.flatMap((occurrence): AttendanceWorkspaceLesson[] => {
+      const lesson = occurrence.lessonId ? lessonById.get(occurrence.lessonId) : undefined;
+      const schedule = occurrence.scheduleTemplateId
+        ? scheduleById.get(occurrence.scheduleTemplateId)
+        : undefined;
+      const metadata = lesson
+        ? {
+            branchName: lesson.branch.name,
+            direction: lesson.group.direction,
+            effectiveTrainerName: effectiveTrainerName(lesson),
+            groupName: lesson.group.name,
+            roomName: lesson.roomEntity?.name ?? lesson.room ?? undefined,
+          }
+        : schedule
+          ? {
+              branchName: schedule.branch.name,
+              direction: schedule.group.direction,
+              effectiveTrainerName: schedule.coach?.fullName ?? schedule.group.coach?.fullName,
+              groupName: schedule.group.name,
+              roomName: schedule.roomEntity?.name ?? schedule.room ?? undefined,
+            }
+          : undefined;
+      if (!metadata) return [];
+      return [
+        {
+          ...(lesson?.attendanceCompletedAt
+            ? { attendanceCompletedAt: lesson.attendanceCompletedAt.toISOString() }
+            : {}),
+          attendanceExpected: occurrence.expectedStudents,
+          attendanceMarked: occurrence.attendanceMarked,
+          branchId: occurrence.branchId,
+          ...metadata,
+          endsAt: occurrence.endsAt.toISOString(),
+          groupId: occurrence.groupId,
+          id:
+            occurrence.lessonId ??
+            `occurrence:${occurrence.groupId}:${String(occurrence.startsAt.getTime())}`,
+          ...(occurrence.lessonId ? { lessonId: occurrence.lessonId } : {}),
+          source: occurrence.source,
+          startsAt: occurrence.startsAt.toISOString(),
+          status: lesson?.status ?? 'PLANNED',
+        },
+      ];
     });
     return { date, lessons: summaries };
+  }
+
+  async openOccurrence(token: string, input: AttendanceOccurrenceInput): Promise<LessonSummary> {
+    await this.workspaceActor(token);
+    return this.studio.materializeLessonOccurrence(token, input);
   }
 
   async scanOptions(
