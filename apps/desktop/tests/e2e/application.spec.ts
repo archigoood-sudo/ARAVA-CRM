@@ -205,6 +205,13 @@ test('вход, создание филиала, ученика и контак�
     await expect(firstRoomSection).not.toContainText('Ритм E2E');
     await expect(secondRoomSection).toContainText('Ритм E2E');
     await expect(secondRoomSection).not.toContainText('Импульс E2E');
+    await window.getByRole('link', { name: 'Главная', exact: true }).click();
+    const todayLessons = window
+      .getByRole('region', { name: 'Сегодня' })
+      .getByRole('button')
+      .filter({ hasText: 'Занятий' });
+    await expect(todayLessons).toContainText('2');
+    await window.getByRole('link', { name: 'Расписание', exact: true }).click();
     await window.getByRole('button', { name: 'Создать занятия' }).click();
     await expect(window.getByText(/Создано занятий:/u)).toBeVisible();
     await window.evaluate(() => {

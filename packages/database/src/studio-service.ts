@@ -34,9 +34,9 @@ import {
 import type { DatabaseClient } from './index';
 import { assertBranchAccess, assertPermission, accessibleBranchIds } from './permissions';
 import {
-  combineLocalDateAndTime,
   endOfLocalDay,
   isoWeekday,
+  scheduleOccurrenceForLocalDate,
   scheduleWindowsOverlap,
   startOfLocalDay,
 } from './schedule';
@@ -721,13 +721,9 @@ export class StudioService {
     let skipped = 0;
     for (const schedule of schedules) {
       for (const day = new Date(from); day <= to; day.setDate(day.getDate() + 1)) {
-        if (isoWeekday(day) !== schedule.weekday) continue;
-        const startsAt = combineLocalDateAndTime(day, schedule.startTime);
-        if (
-          startsAt < schedule.validFrom ||
-          (schedule.validTo && startsAt > endOfLocalDay(schedule.validTo))
-        )
-          continue;
+        const occurrence = scheduleOccurrenceForLocalDate(schedule, day);
+        if (!occurrence) continue;
+        const { endsAt, startsAt } = occurrence;
         const exception = await this.database.calendarException.findFirst({
           where: {
             OR: [{ branchId: null }, { branchId: schedule.branchId }],
@@ -746,7 +742,6 @@ export class StudioService {
           skipped += 1;
           continue;
         }
-        const endsAt = combineLocalDateAndTime(day, schedule.endTime);
         try {
           await this.calendar.assertEventAvailable({
             ...(schedule.coachId ? { coachId: schedule.coachId } : {}),

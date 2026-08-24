@@ -40,6 +40,7 @@ import {
   type AttentionSummary,
   type AttendanceScanOptions,
   type AttendanceWorkspaceDay,
+  type DashboardStats,
   type BackupEntry,
   type BackupRestoreSelection,
   type BackupStatus,
@@ -102,6 +103,56 @@ describe('Electron IPC boundary', () => {
     })) as AuthSession;
     expect(session.user.role).toBe('OWNER');
     expect(session.user).not.toHaveProperty('passwordHash');
+  });
+
+  it('counts a canonical recurring lesson on the dashboard before Lesson materialization', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!DashboardOccurrence2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Расписание Dashboard' });
+    const studio = new StudioService(database, service);
+    const group = await studio.createGroup(owner.token, {
+      branchId: branch.id,
+      capacity: 20,
+      direction: 'Хип-хоп',
+      name: 'KDS BABY',
+      status: 'ACTIVE',
+    });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Мила',
+      lastName: 'Петрова',
+      status: 'ACTIVE',
+    });
+    await studio.addEnrollment(owner.token, group.id, {
+      joinedAt: '2026-01-01',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: student.id,
+    });
+    const today = new Date();
+    await database.weeklySchedule.create({
+      data: {
+        branchId: branch.id,
+        endTime: '19:30',
+        groupId: group.id,
+        isActive: true,
+        startTime: '18:30',
+        validFrom: new Date(2026, 0, 1),
+        weekday: today.getDay() || 7,
+      },
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+
+    await expect(handlers[IPC_CHANNELS.dashboardStats]?.(owner.token)).resolves.toMatchObject({
+      expectedToday: 1,
+      lessonsToday: 1,
+    } satisfies Partial<DashboardStats>);
   });
 
   it('keeps integration IPC OWNER-only and never returns device credentials', async () => {

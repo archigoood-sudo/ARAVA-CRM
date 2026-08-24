@@ -7,6 +7,7 @@ import {
   FinanceService,
   GlobalSearchService,
   LeadService,
+  LessonOccurrenceService,
   ManagementService,
   AqsiPaymentService,
   PaymentOperationService,
@@ -172,6 +173,7 @@ export function createIpcHandlers(
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
   const attendanceWorkspace = new AttendanceWorkspaceService(database, service);
+  const lessonOccurrences = new LessonOccurrenceService(database);
   const finance = new FinanceService(database, service);
   const paymentOperations = new PaymentOperationService(database, service);
   const management = new ManagementService(database, service);
@@ -1523,39 +1525,7 @@ export function createIpcHandlers(
             ...coachGroupScope,
           },
         }),
-        database.lesson.findMany({
-          include: {
-            _count: { select: { attendance: true } },
-            group: {
-              include: {
-                _count: {
-                  select: {
-                    enrollments: {
-                      where: { leftAt: null, status: { in: ['ACTIVE', 'TRIAL'] } },
-                    },
-                  },
-                },
-                enrollments: {
-                  select: { id: true },
-                  where: { leftAt: null, status: 'TRIAL' },
-                },
-              },
-            },
-          },
-          where: {
-            startsAt: { gte: dayStart, lte: dayEnd },
-            status: { not: 'CANCELLED' },
-            ...(branchIds ? { branchId: { in: branchIds } } : {}),
-            ...(actor.role === 'COACH'
-              ? {
-                  OR: [
-                    { coachId: actor.id },
-                    { group: { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] } },
-                  ],
-                }
-              : {}),
-          },
-        }),
+        lessonOccurrences.resolveDay(actor, dayStart),
         database.subscription.findMany({
           select: { expiresAt: true, lessonLimit: true, lessonsUsed: true },
           where: {
@@ -1568,12 +1538,9 @@ export function createIpcHandlers(
           ? Promise.resolve({ outstandingDebt: 0, revenueThisMonth: 0, revenueToday: 0 })
           : finance.financeStats(sessionTokenSchema.parse(unsafeToken)),
       ]);
-      const expectedToday = lessons.reduce(
-        (total, lesson) => total + lesson.group._count.enrollments,
-        0,
-      );
+      const expectedToday = lessons.reduce((total, lesson) => total + lesson.expectedStudents, 0);
       const attendanceMarked = lessons.reduce(
-        (total, lesson) => total + lesson._count.attendance,
+        (total, lesson) => total + lesson.attendanceMarked,
         0,
       );
       const now = new Date();
@@ -1646,7 +1613,7 @@ export function createIpcHandlers(
           ({ expiresAt }) => expiresAt && expiresAt >= now && expiresAt <= expiringBoundary,
         ).length,
         trialStudents,
-        trialsToday: lessons.reduce((total, lesson) => total + lesson.group.enrollments.length, 0),
+        trialsToday: lessons.reduce((total, lesson) => total + lesson.trialStudents, 0),
         users,
       };
     },

@@ -6,6 +6,11 @@ export interface ScheduleWindow {
   weekday: number;
 }
 
+export interface ScheduleOccurrence {
+  endsAt: Date;
+  startsAt: Date;
+}
+
 export function timeRangesOverlap(
   firstStart: string,
   firstEnd: string,
@@ -55,4 +60,21 @@ export function endOfLocalDay(value: Date | string): Date {
 export function isoWeekday(date: Date): number {
   const weekday = date.getDay();
   return weekday === 0 ? 7 : weekday;
+}
+
+export function scheduleOccurrenceForLocalDate(
+  schedule: ScheduleWindow,
+  date: Date,
+): ScheduleOccurrence | undefined {
+  if (isoWeekday(date) !== schedule.weekday) return undefined;
+  const startsAt = combineLocalDateAndTime(date, schedule.startTime);
+  if (
+    startsAt < schedule.validFrom ||
+    (schedule.validTo && startsAt > endOfLocalDay(schedule.validTo))
+  )
+    return undefined;
+  return {
+    endsAt: combineLocalDateAndTime(date, schedule.endTime),
+    startsAt,
+  };
 }
