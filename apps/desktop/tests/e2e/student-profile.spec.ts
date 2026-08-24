@@ -153,7 +153,9 @@ test('расширенный профиль объединяет работу а
     await search.getByLabel('Поиск по приложению').fill('Профильная E2E Анна');
     await search.getByRole('button', { name: /Профильная E2E Анна/u }).click();
     await expect(page).toHaveURL(new RegExp(`/students/${context.studentId}$`, 'u'));
-    await expect(page.getByText('Требует внимания')).toBeVisible();
+    await expect(
+      page.getByRole('main').getByText('Требует внимания', { exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole('link', { name: 'Группа профиля E2E', exact: true })).toBeVisible();
     await expect(page.getByText('Абонемент профиля E2E').first()).toBeVisible();
     await expect(page.getByText(/Долг:/u).first()).toBeVisible();
