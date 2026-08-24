@@ -61,6 +61,12 @@ test('вход, создание филиала, ученика и контак�
     await expect(roomDialog.getByRole('button', { name: 'Сохранить' })).toBeEnabled();
     await roomDialog.getByRole('button', { name: 'Сохранить' }).click();
     await expect(window.getByText('Зал E2E')).toBeVisible();
+    await addRoomButton.click();
+    await expect(roomDialog).toBeVisible();
+    await roomNameField.fill('Зал 2 E2E');
+    await roomCapacityField.fill('15');
+    await roomDialog.getByRole('button', { name: 'Сохранить' }).click();
+    await expect(window.getByText('Зал 2 E2E')).toBeVisible();
 
     await window.getByRole('link', { name: 'Ученики' }).click();
     await window.getByRole('button', { name: 'Добавить ученика' }).click();
@@ -169,8 +175,39 @@ test('вход, создание филиала, ученика и контак�
     await scheduleDialog.locator('select').nth(4).selectOption({ label: 'Зал E2E' });
     await scheduleDialog.getByRole('button', { name: 'Сохранить расписание' }).click();
     await expect(scheduleDialog).not.toBeVisible();
+    await window.getByRole('button', { name: 'Добавить в расписание' }).click();
+    await scheduleDialog.locator('select').nth(1).selectOption({ label: 'Ритм E2E' });
+    await scheduleDialog
+      .locator('select')
+      .nth(2)
+      .selectOption(String(new Date().getDay() || 7));
+    await scheduleDialog.locator('select').nth(4).selectOption({ label: 'Зал 2 E2E' });
+    await scheduleDialog.getByRole('button', { name: 'Сохранить расписание' }).click();
+    await expect(scheduleDialog).not.toBeVisible();
+    const firstRoomSection = window.locator('[data-room-id]').filter({ hasText: 'Зал E2E' });
+    const secondRoomSection = window.locator('[data-room-id]').filter({ hasText: 'Зал 2 E2E' });
+    await expect(firstRoomSection).toContainText('Импульс E2E');
+    await expect(firstRoomSection).not.toContainText('Ритм E2E');
+    await expect(secondRoomSection).toContainText('Ритм E2E');
+    await expect(secondRoomSection).not.toContainText('Импульс E2E');
     await window.getByRole('button', { name: 'Создать занятия' }).click();
     await expect(window.getByText(/Создано занятий:/u)).toBeVisible();
+    await window.evaluate(() => {
+      globalThis.print = () => document.documentElement.setAttribute('data-print-called', 'true');
+    });
+    await firstRoomSection.getByRole('button', { name: 'Печать недели' }).click();
+    await expect
+      .poll(() => window.evaluate(() => document.documentElement.dataset.printCalled))
+      .toBe('true');
+    const printSheet = window.getByTestId('room-week-print-sheet');
+    await expect(printSheet).toContainText('Зал E2E');
+    await expect(printSheet).toContainText('Импульс E2E');
+    await expect(printSheet).not.toContainText('Ритм E2E');
+    await expect(printSheet).toContainText(/—/u);
+    await window.emulateMedia({ media: 'print' });
+    await expect(firstRoomSection.getByRole('button', { name: 'Печать недели' })).not.toBeVisible();
+    await window.emulateMedia({ media: 'screen' });
+    await window.evaluate(() => globalThis.dispatchEvent(new Event('afterprint')));
     await window.getByRole('button', { name: 'Открыть посещаемость' }).first().click();
     await expect(window.getByRole('heading', { name: 'Импульс E2E', exact: true })).toBeVisible();
     await window.getByRole('button', { name: 'Отметить всех присутствующими' }).click();

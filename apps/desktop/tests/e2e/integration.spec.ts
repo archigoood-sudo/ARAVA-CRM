@@ -70,6 +70,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
   let conflictOpen = true;
   let recoveryMode = false;
   const receivedChatMessages: string[] = [];
+  const receivedChatImages: string[] = [];
   const chat = {
     branchId: null,
     crmGroupId: null,
@@ -124,6 +125,17 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       });
       return;
     }
+    if (request.url?.startsWith('/api/integration/v1/chats/private-e2e/attachments/')) {
+      receivedChatImages.push(request.url);
+      if (request.url.endsWith('/image-missing')) {
+        response.writeHead(404, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ code: 'NOT_FOUND', message: 'Изображение недоступно.' }));
+        return;
+      }
+      response.writeHead(200, { 'Content-Length': '8', 'Content-Type': 'image/jpeg' });
+      response.end(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 1, 2, 3]));
+      return;
+    }
     if (request.url?.startsWith('/api/integration/v1/chats/private-e2e/messages')) {
       if (request.method === 'POST') {
         receivedChatMessages.push(typeof body.text === 'string' ? body.text : '');
@@ -135,6 +147,22 @@ test('OWNER подключает сайт, выполняет initial/offline sy
         hasMore: false,
         messages: [
           {
+            attachments: [
+              {
+                height: 480,
+                id: 'image-e2e',
+                mimeType: 'image/jpeg',
+                originalName: 'фото клиента.jpg',
+                type: 'image',
+                width: 640,
+              },
+              {
+                id: 'image-missing',
+                mimeType: 'image/jpeg',
+                originalName: 'недоступное фото.jpg',
+                type: 'image',
+              },
+            ],
             body: 'Сообщение клиента',
             createdAt: '2026-08-18T12:00:00.000Z',
             id: 'client-message-e2e',
@@ -431,6 +459,17 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await expect(page.getByRole('heading', { level: 2, name: 'Чаты' })).toBeVisible();
     await expect(page.getByText('Анна Клиент', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('Сообщение клиента', { exact: true }).last()).toBeVisible();
+    const clientImage = page.getByRole('button', {
+      name: 'Открыть изображение: фото клиента.jpg',
+    });
+    await expect(clientImage).toBeVisible();
+    await expect(page.getByText('Изображение недоступно', { exact: true })).toBeVisible();
+    await clientImage.click();
+    await expect(page.getByRole('dialog').getByAltText('фото клиента.jpg')).toBeVisible();
+    await page.getByRole('button', { name: 'Закрыть окно' }).last().click();
+    await expect
+      .poll(() => receivedChatImages.filter((path) => path.endsWith('/image-e2e')).length)
+      .toBe(1);
     await page.getByLabel('Сообщение').fill('Ответ администратора');
     await page.getByRole('button', { name: 'Отправить' }).click();
     await expect.poll(() => receivedChatMessages).toEqual(['Ответ администратора']);

@@ -52,6 +52,14 @@ export class ChatService {
     return conversation;
   }
 
+  async image(token: string, conversationId: string, attachmentId: string) {
+    const actor = await this.application.authenticate(token);
+    const conversation = await this.integration.getRemoteChat(this.context(actor), conversationId);
+    await this.assertAccess(actor, conversation);
+    this.remember(actor, conversation);
+    return this.integration.getRemoteChatImage(this.context(actor), conversationId, attachmentId);
+  }
+
   async messages(token: string, conversationId: string, before?: string): Promise<ChatMessagePage> {
     const actor = await this.application.authenticate(token);
     const page = await this.integration.getRemoteChatMessages(
@@ -104,6 +112,7 @@ export class ChatService {
       where: { idempotencyKey },
     });
     return {
+      attachments: [],
       body: input.text,
       createdAt: queued.createdAt.toISOString(),
       id: input.clientMessageId,
@@ -183,6 +192,7 @@ export class ChatService {
           return [];
         return [
           {
+            attachments: [],
             body: payload.text,
             createdAt: row.createdAt.toISOString(),
             id: payload.clientMessageId,

@@ -5,6 +5,7 @@ import {
   type LessonGenerateInput,
   type LessonInput,
   type LessonListQuery,
+  type RoomSummary,
   type WeeklyScheduleInput,
   type WeeklyScheduleQuery,
   type WeeklyScheduleSummary,
@@ -38,8 +39,9 @@ import {
   ChevronRight,
   Copy,
   PartyPopper,
+  Printer,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -49,6 +51,7 @@ import { invalidateLessonCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { LessonDialog } from './lesson-dialog';
+import { buildRoomWeekPrintModel, buildRoomWeekSections } from './room-week-model';
 import { ScheduleDialog } from './schedule-dialog';
 
 function calendarRange(view: 'day' | 'month' | 'week', selectedDate: string): LessonListQuery {
@@ -83,6 +86,7 @@ export function SchedulePage() {
   const [scheduleDialog, setScheduleDialog] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<WeeklyScheduleSummary | null>(null);
   const [lessonDialog, setLessonDialog] = useState(false);
+  const [printRoom, setPrintRoom] = useState<RoomSummary | null>(null);
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [generation, setGeneration] = useState<LessonGenerateInput>({
@@ -106,6 +110,20 @@ export function SchedulePage() {
   const lessons = useQuery({
     queryFn: () => getDesktopApi().lessons.list(getSessionToken(), lessonQuery),
     queryKey: queryKeys.lessons(lessonQuery),
+  });
+  const weekLessonQuery = useMemo(
+    () => ({
+      ...calendarRange('week', selectedDate),
+      branchId: filter.branchId,
+      coachId: filter.coachId,
+      groupId: filter.groupId,
+      roomId: filter.roomId,
+    }),
+    [filter.branchId, filter.coachId, filter.groupId, filter.roomId, selectedDate],
+  );
+  const weekLessons = useQuery({
+    queryFn: () => getDesktopApi().lessons.list(getSessionToken(), weekLessonQuery),
+    queryKey: queryKeys.lessons(weekLessonQuery),
   });
   const groups = useQuery({
     queryFn: () => getDesktopApi().groups.list(getSessionToken(), {}),
@@ -188,6 +206,46 @@ export function SchedulePage() {
       setError(getErrorMessage(caught, t('schedule.errorSave')));
     }
   };
+  const visibleRooms = useMemo(
+    () =>
+      (rooms.data ?? []).filter(
+        (room) =>
+          (!filter.branchId || room.branchId === filter.branchId) &&
+          (!filter.roomId || room.id === filter.roomId),
+      ),
+    [filter.branchId, filter.roomId, rooms.data],
+  );
+  const roomSections = useMemo(
+    () => buildRoomWeekSections(visibleRooms, schedules.data ?? []),
+    [schedules.data, visibleRooms],
+  );
+  const knownRoomIds = useMemo(() => new Set((rooms.data ?? []).map(({ id }) => id)), [rooms.data]);
+  const unassignedSchedules = useMemo(
+    () =>
+      filter.roomId
+        ? []
+        : (schedules.data ?? []).filter(
+            (schedule) => !schedule.roomId || !knownRoomIds.has(schedule.roomId),
+          ),
+    [filter.roomId, knownRoomIds, schedules.data],
+  );
+  const printModel = useMemo(
+    () =>
+      printRoom
+        ? buildRoomWeekPrintModel(printRoom, weekLessons.data ?? [], selectedDate)
+        : undefined,
+    [printRoom, selectedDate, weekLessons.data],
+  );
+  useEffect(() => {
+    if (!printModel) return;
+    const clear = () => setPrintRoom(null);
+    window.addEventListener('afterprint', clear, { once: true });
+    const frame = window.requestAnimationFrame(() => window.print());
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('afterprint', clear);
+    };
+  }, [printModel]);
   const days = [1, 2, 3, 4, 5, 6, 7].map(formatWeekday);
   return (
     <main className="mx-auto w-full max-w-[1600px] animate-fade-in p-9 pb-14">
@@ -365,56 +423,145 @@ export function SchedulePage() {
           title={t('common.errorTitle')}
         />
       ) : null}
-      <div className="overflow-x-auto pb-2">
-        <WeekCalendar
-          days={days}
-          emptyLabel={t('schedule.empty')}
-          items={(schedules.data ?? []).map((schedule) => ({
-            color: groups.data?.find(({ id }) => id === schedule.groupId)?.color,
-            content: (
-              <div>
-                <div className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold">
-                      {schedule.startTime}–{schedule.endTime}
-                    </p>
-                    <p className="mt-1 truncate">{schedule.groupName}</p>
-                    <p className="mt-1 text-muted-foreground">
-                      {schedule.room ?? schedule.branchName}
-                    </p>
-                  </div>
-                  {canManage ? (
-                    <span className="flex gap-1">
-                      <button
-                        aria-label={t('common.edit')}
-                        onClick={() => {
-                          setEditingSchedule(schedule);
-                          setScheduleDialog(true);
-                        }}
-                        type="button"
-                      >
-                        <Pencil className="size-3.5" />
-                      </button>
-                      <button
-                        aria-label={t('schedule.deactivate')}
-                        onClick={async () => {
-                          await deactivateSchedule.mutateAsync(schedule.id);
-                          await client.invalidateQueries({ queryKey: ['schedules'] });
-                        }}
-                        type="button"
-                      >
-                        <CalendarX className="size-3.5" />
-                      </button>
-                    </span>
-                  ) : null}
-                </div>
+      <div className="space-y-6" data-testid="room-week-sections">
+        {roomSections.map(({ room, schedules: roomSchedules }) => (
+          <Card className="overflow-hidden" data-room-id={room.id} key={room.id}>
+            <CardHeader className="flex-row items-center justify-between gap-4 border-b border-border">
+              <div className="min-w-0">
+                <CardTitle className="truncate">{room.name}</CardTitle>
+                <p className="mt-1 text-xs text-muted-foreground">{room.branchName}</p>
               </div>
-            ),
-            id: schedule.id,
-            weekday: schedule.weekday,
-          }))}
-        />
+              <Button
+                data-testid={`print-room-week-${room.id}`}
+                disabled={weekLessons.isLoading || weekLessons.isError}
+                onClick={() => setPrintRoom(room)}
+                size="small"
+                variant="outline"
+              >
+                <Printer className="size-4" />
+                Печать недели
+              </Button>
+            </CardHeader>
+            <CardContent className="overflow-x-auto p-4">
+              <WeekCalendar
+                days={days}
+                emptyLabel="Нет занятий"
+                items={roomSchedules.map((schedule) => ({
+                  color: groups.data?.find(({ id }) => id === schedule.groupId)?.color,
+                  content: (
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold">
+                          {schedule.startTime}–{schedule.endTime}
+                        </p>
+                        <p className="mt-1 truncate">{schedule.groupName}</p>
+                        <p className="mt-1 truncate text-muted-foreground">
+                          {schedule.coachName ?? 'Тренер не назначен'}
+                        </p>
+                      </div>
+                      {canManage ? (
+                        <span className="flex shrink-0 gap-1">
+                          <button
+                            aria-label={`${t('common.edit')}: ${schedule.groupName}`}
+                            onClick={() => {
+                              setEditingSchedule(schedule);
+                              setScheduleDialog(true);
+                            }}
+                            type="button"
+                          >
+                            <Pencil className="size-3.5" />
+                          </button>
+                          <button
+                            aria-label={`${t('schedule.deactivate')}: ${schedule.groupName}`}
+                            onClick={async () => {
+                              await deactivateSchedule.mutateAsync(schedule.id);
+                              await client.invalidateQueries({ queryKey: ['schedules'] });
+                            }}
+                            type="button"
+                          >
+                            <CalendarX className="size-3.5" />
+                          </button>
+                        </span>
+                      ) : null}
+                    </div>
+                  ),
+                  id: schedule.id,
+                  weekday: schedule.weekday,
+                }))}
+              />
+            </CardContent>
+          </Card>
+        ))}
+        {!schedules.isLoading && roomSections.length === 0 ? (
+          <Card className="p-8 text-center text-sm text-muted-foreground">
+            В доступных филиалах нет активных залов.
+          </Card>
+        ) : null}
+        {unassignedSchedules.length ? (
+          <Card className="overflow-hidden border-amber-200">
+            <CardHeader className="border-b border-amber-200 bg-amber-50/70">
+              <CardTitle>Без назначенного зала</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Назначьте зал, чтобы расписание появилось в соответствующем разделе.
+              </p>
+            </CardHeader>
+            <CardContent className="overflow-x-auto p-4">
+              <WeekCalendar
+                days={days}
+                emptyLabel="Нет занятий"
+                items={unassignedSchedules.map((schedule) => ({
+                  content: (
+                    <div>
+                      <p className="font-semibold">
+                        {schedule.startTime}–{schedule.endTime}
+                      </p>
+                      <p className="mt-1 truncate">{schedule.groupName}</p>
+                    </div>
+                  ),
+                  id: schedule.id,
+                  weekday: schedule.weekday,
+                }))}
+              />
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
+      {printModel ? (
+        <section
+          aria-label={`Расписание на неделю: ${printModel.roomName}`}
+          className="room-week-print-sheet"
+          data-testid="room-week-print-sheet"
+        >
+          <header>
+            <p>ARAVA CRM · Студия танца</p>
+            <h1>{printModel.roomName}</h1>
+            <h2>{printModel.weekRange}</h2>
+          </header>
+          <div className="room-week-print-grid">
+            {printModel.days.map((day) => (
+              <section key={day.date}>
+                <h3>{day.label}</h3>
+                {day.lessons.length ? (
+                  day.lessons.map((lesson) => (
+                    <article
+                      className={lesson.cancelled ? 'is-cancelled' : undefined}
+                      key={lesson.id}
+                    >
+                      <b>{lesson.time}</b>
+                      <strong>{lesson.groupName}</strong>
+                      <span>{lesson.trainerName}</span>
+                      {lesson.replacement ? <small>Замена</small> : null}
+                      {lesson.cancelled ? <small>Отменено</small> : null}
+                    </article>
+                  ))
+                ) : (
+                  <p>Нет занятий</p>
+                )}
+              </section>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <Card className="mt-5">
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle>{t('lesson.details')}</CardTitle>

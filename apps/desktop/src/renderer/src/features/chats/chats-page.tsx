@@ -1,9 +1,10 @@
-import type { ChatFilter, ChatMessage, ChatSummary } from '@arava/shared';
+import type { ChatFilter, ChatImageAttachment, ChatMessage, ChatSummary } from '@arava/shared';
 import {
   Avatar,
   Badge,
   Button,
   Card,
+  Dialog,
   EmptyState,
   ErrorState,
   Input,
@@ -11,7 +12,7 @@ import {
   PageHeader,
 } from '@arava/ui';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { MessageCircle, RefreshCw, Search, Send, UsersRound } from 'lucide-react';
+import { ImageOff, MessageCircle, RefreshCw, Search, Send, UsersRound } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -285,7 +286,12 @@ function ConversationView({
         ) : null}
         <div className="space-y-4">
           {allMessages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            <MessageBubble
+              accessKey={accessKey}
+              conversationId={conversation.id}
+              key={message.id}
+              message={message}
+            />
           ))}
         </div>
       </div>
@@ -315,7 +321,15 @@ function ConversationView({
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  accessKey,
+  conversationId,
+  message,
+}: {
+  accessKey: string;
+  conversationId: string;
+  message: ChatMessage;
+}) {
   const studio = message.senderType === 'admin' || message.senderType === 'trainer';
   return (
     <div className={`flex ${studio ? 'justify-end' : 'justify-start'}`}>
@@ -326,7 +340,21 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <b>{message.senderName}</b>
           <Badge>{roleLabel(message.senderRole)}</Badge>
         </div>
-        <p className="whitespace-pre-wrap break-words text-sm leading-6">{message.body}</p>
+        {message.attachments.length ? (
+          <div className="mb-2 grid max-w-md gap-2">
+            {message.attachments.map((attachment) => (
+              <ChatImage
+                accessKey={accessKey}
+                attachment={attachment}
+                conversationId={conversationId}
+                key={attachment.id}
+              />
+            ))}
+          </div>
+        ) : null}
+        {message.body ? (
+          <p className="whitespace-pre-wrap break-words text-sm leading-6">{message.body}</p>
+        ) : null}
         <div
           className={`mt-2 flex justify-end gap-2 text-[10px] ${studio ? 'text-neutral-400' : 'text-muted-foreground'}`}
         >
@@ -336,6 +364,74 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function ChatImage({
+  accessKey,
+  attachment,
+  conversationId,
+}: {
+  accessKey: string;
+  attachment: ChatImageAttachment;
+  conversationId: string;
+}) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const image = useQuery({
+    queryFn: () => getDesktopApi().chats.image(getSessionToken(), conversationId, attachment.id),
+    queryKey: ['chat-image', accessKey, conversationId, attachment.id],
+    staleTime: 60 * 60_000,
+  });
+  if (image.isError) {
+    return (
+      <div
+        className="flex min-h-28 items-center justify-center gap-2 rounded-xl border border-current/15 bg-black/5 px-4 text-xs opacity-75"
+        role="img"
+      >
+        <ImageOff className="size-4" />
+        Изображение недоступно
+      </div>
+    );
+  }
+  if (!image.data) {
+    return (
+      <div className="min-h-28 animate-pulse rounded-xl bg-black/10" role="status">
+        <span className="sr-only">Загружаем изображение…</span>
+      </div>
+    );
+  }
+  const alternative = attachment.originalName ?? 'Изображение из чата';
+  return (
+    <>
+      <button
+        aria-label={`Открыть изображение: ${alternative}`}
+        className="block overflow-hidden rounded-xl bg-black/5"
+        onClick={() => setPreviewOpen(true)}
+        type="button"
+      >
+        <img
+          alt={alternative}
+          className="max-h-72 w-full object-contain"
+          height={attachment.height}
+          src={image.data.dataUrl}
+          width={attachment.width}
+        />
+      </button>
+      <Dialog
+        closeLabel="Закрыть окно"
+        onClose={() => setPreviewOpen(false)}
+        open={previewOpen}
+        title="Изображение из чата"
+      >
+        <div className="flex max-h-[75vh] items-center justify-center overflow-auto rounded-2xl bg-neutral-950 p-3">
+          <img
+            alt={alternative}
+            className="max-h-[70vh] max-w-full object-contain"
+            src={image.data.dataUrl}
+          />
+        </div>
+      </Dialog>
+    </>
   );
 }
 

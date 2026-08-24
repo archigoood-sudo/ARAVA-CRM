@@ -279,6 +279,7 @@ export const IPC_CHANNELS = {
   webActionList: 'web-action:list',
   webActionReject: 'web-action:reject',
   chatGet: 'chat:get',
+  chatImage: 'chat:image',
   chatList: 'chat:list',
   chatMessages: 'chat:messages',
   chatRead: 'chat:read',
@@ -2313,7 +2314,21 @@ export interface ChatListResult {
 
 export type ChatMessageStatus = 'PENDING' | 'SENT' | 'ERROR';
 
+export interface ChatImageAttachment {
+  height?: number | undefined;
+  id: string;
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+  originalName?: string | undefined;
+  width?: number | undefined;
+}
+
+export interface ChatImageData {
+  attachmentId: string;
+  dataUrl: string;
+}
+
 export interface ChatMessage {
+  attachments: ChatImageAttachment[];
   body: string;
   createdAt: string;
   id: string;
@@ -2451,6 +2466,7 @@ export interface AravaDesktopApi {
   };
   chats: {
     get: (token: string, conversationId: string) => Promise<ChatSummary>;
+    image: (token: string, conversationId: string, attachmentId: string) => Promise<ChatImageData>;
     list: (token: string, query: ChatListQuery) => Promise<ChatListResult>;
     messages: (token: string, conversationId: string, before?: string) => Promise<ChatMessagePage>;
     read: (token: string, conversationId: string) => Promise<void>;

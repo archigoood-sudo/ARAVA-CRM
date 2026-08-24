@@ -299,6 +299,12 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeConversationId),
       ),
+    [IPC_CHANNELS.chatImage]: (unsafeToken, unsafeConversationId, unsafeAttachmentId) =>
+      requireChats().image(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeConversationId),
+        identifierSchema.parse(unsafeAttachmentId),
+      ),
     [IPC_CHANNELS.chatMessages]: (unsafeToken, unsafeConversationId, unsafeBefore) =>
       requireChats().messages(
         sessionTokenSchema.parse(unsafeToken),

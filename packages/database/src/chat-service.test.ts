@@ -113,6 +113,13 @@ describe('ChatService', () => {
     ]);
     await expect(service.get(coachSession.token, 'private-a')).rejects.toThrow('Нет доступа');
     await expect(service.get(adminSession.token, 'group-b')).rejects.toThrow('Нет доступа');
+    await expect(service.image(ownerToken, 'private-a', 'image-one')).resolves.toEqual({
+      attachmentId: 'image-one',
+      dataUrl: 'data:image/png;base64,AQID',
+    });
+    await expect(service.image(coachSession.token, 'private-a', 'image-one')).rejects.toThrow(
+      'Нет доступа',
+    );
   });
 
   it('queues one idempotent pending message and can send offline after an authorized chat was opened', async () => {
@@ -205,6 +212,9 @@ function mockIntegration(conversations: ChatSummary[]): IntegrationService {
       if (!conversation) throw new Error('not found');
       return Promise.resolve(page(conversation));
     }),
+    getRemoteChatImage: vi.fn((_context, _conversationId: string, attachmentId: string) =>
+      Promise.resolve({ attachmentId, dataUrl: 'data:image/png;base64,AQID' }),
+    ),
     listRemoteChats: vi.fn(() => Promise.resolve(list)),
     markRemoteChatRead: vi.fn(() => Promise.resolve()),
     processPending: vi.fn(() => Promise.resolve()),

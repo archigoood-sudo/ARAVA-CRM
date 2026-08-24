@@ -1522,3 +1522,93 @@ describe('Sprint 4.5A multi-device integration', () => {
     }
   });
 });
+
+describe('chat image integration transport', () => {
+  it('parses supported attachments and downloads them through authenticated device transport', async () => {
+    const calls: { headers: Headers; path: string }[] = [];
+    const client = new IntegrationApiClient((input, init) => {
+      const url = new URL(input);
+      calls.push({ headers: new Headers(init.headers), path: url.pathname });
+      if (url.pathname.endsWith('/messages')) {
+        return Promise.resolve(
+          Response.json({
+            conversation: {
+              branchId: null,
+              crmGroupId: null,
+              id: 'chat-one',
+              lastMessage: 'Фото',
+              lastMessageAt: '2026-08-24T12:00:00.000Z',
+              linkedStudents: [],
+              subtitle: '',
+              title: 'Клиент',
+              type: 'PRIVATE_ADMIN',
+              unreadCount: 1,
+              updatedAt: '2026-08-24T12:00:00.000Z',
+            },
+            hasMore: false,
+            messages: [
+              {
+                attachments: [
+                  {
+                    height: 480,
+                    id: 'image-one',
+                    mimeType: 'image/png',
+                    originalName: 'photo.png',
+                    type: 'image',
+                    width: 640,
+                  },
+                  { id: 'video-one', mimeType: 'video/webm', type: 'video' },
+                ],
+                body: '',
+                createdAt: '2026-08-24T12:00:00.000Z',
+                id: 'message-one',
+                senderName: 'Клиент',
+                senderRole: 'CLIENT',
+                senderType: 'client',
+              },
+            ],
+            nextCursor: null,
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(Uint8Array.from([1, 2, 3]), {
+          headers: { 'Content-Length': '3', 'Content-Type': 'image/png' },
+        }),
+      );
+    });
+    const context = { branchIds: [], name: 'Владелец', role: 'OWNER' as const, userId: 'owner' };
+
+    const messages = await client.chatMessages(
+      'https://crm.example.test',
+      'device-one',
+      'secret-device-token',
+      context,
+      'chat-one',
+    );
+    expect(messages.messages[0]?.attachments).toEqual([
+      {
+        height: 480,
+        id: 'image-one',
+        mimeType: 'image/png',
+        originalName: 'photo.png',
+        width: 640,
+      },
+    ]);
+
+    const image = await client.chatImage(
+      'https://crm.example.test',
+      'device-one',
+      'secret-device-token',
+      context,
+      'chat-one',
+      'image-one',
+    );
+    expect(image).toEqual({ attachmentId: 'image-one', dataUrl: 'data:image/png;base64,AQID' });
+    expect(calls[1]).toMatchObject({
+      path: '/api/integration/v1/chats/chat-one/attachments/image-one',
+    });
+    expect(calls[1]?.headers.get('authorization')).toBe('Bearer secret-device-token');
+    expect(JSON.stringify(image)).not.toContain('secret-device-token');
+  });
+});

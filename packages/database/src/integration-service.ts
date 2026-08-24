@@ -6,6 +6,7 @@ import type {
   BackupEntry,
   ChatListQuery,
   ChatListResult,
+  ChatImageData,
   ChatMessagePage,
   ChatSendInput,
   ChatSummary,
@@ -54,6 +55,7 @@ export const INTEGRATION_BATCH_SIZE = 25;
 export const INITIAL_SYNC_HISTORY_DAYS = 30;
 export const INITIAL_SYNC_FUTURE_DAYS = 180;
 const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_CHAT_IMAGE_BYTES = 15 * 1024 * 1024;
 const STUCK_PROCESSING_MS = 10 * 60_000;
 const RETRY_DELAYS_MS = [15_000, 60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000] as const;
 
@@ -130,6 +132,8 @@ export interface IntegrationCredentialStore {
 }
 
 export interface IntegrationFetchResponse {
+  arrayBuffer?(): Promise<ArrayBuffer>;
+  headers?: { get(name: string): string | null };
   json(): Promise<unknown>;
   ok: boolean;
   status: number;
@@ -680,7 +684,31 @@ function parseChatMessagePage(value: unknown): ChatMessagePage {
     ) {
       return invalidChatResponse();
     }
+    const attachments = Array.isArray(message.attachments)
+      ? message.attachments.flatMap((attachment) => {
+          if (
+            !isRecord(attachment) ||
+            typeof attachment.id !== 'string' ||
+            attachment.type !== 'image' ||
+            !['image/jpeg', 'image/png', 'image/webp'].includes(String(attachment.mimeType))
+          ) {
+            return [];
+          }
+          return [
+            {
+              ...(typeof attachment.height === 'number' ? { height: attachment.height } : {}),
+              id: attachment.id,
+              mimeType: attachment.mimeType as 'image/jpeg' | 'image/png' | 'image/webp',
+              ...(typeof attachment.originalName === 'string'
+                ? { originalName: attachment.originalName }
+                : {}),
+              ...(typeof attachment.width === 'number' ? { width: attachment.width } : {}),
+            },
+          ];
+        })
+      : [];
     return {
+      attachments,
       body: message.body,
       createdAt: message.createdAt,
       id: message.id,
@@ -885,6 +913,75 @@ export class IntegrationApiClient {
         );
       }
       return payload;
+    } catch (error) {
+      if (error instanceof IntegrationApiError) throw error;
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new IntegrationApiError('TIMEOUT', true, 'Сервер не ответил вовремя.');
+      }
+      throw new IntegrationApiError('NETWORK_UNAVAILABLE', true, 'Нет соединения с сайтом.');
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async requestBinary(
+    baseUrl: string,
+    path: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+  ): Promise<ChatImageData> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetchImplementation(this.endpoint(baseUrl, path), {
+        headers: {
+          Accept: 'image/jpeg,image/png,image/webp',
+          Authorization: `Bearer ${token}`,
+          'X-ARAVA-API-Version': INTEGRATION_API_VERSION,
+          'X-ARAVA-CRM-Context': Buffer.from(JSON.stringify(context), 'utf8').toString('base64url'),
+          'X-ARAVA-Device-ID': deviceId,
+        },
+        method: 'GET',
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        let payload: unknown;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = undefined;
+        }
+        const bodyRecord: ApiErrorBody = isRecord(payload) ? payload : {};
+        throw new IntegrationApiError(
+          optionalString(bodyRecord.code) ?? `HTTP_${String(response.status)}`,
+          response.status === 429 || response.status >= 500,
+          optionalString(bodyRecord.message) ?? 'Изображение недоступно.',
+        );
+      }
+      const mimeType = response.headers?.get('content-type')?.split(';', 1)[0]?.trim();
+      if (!mimeType || !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+        throw new IntegrationApiError(
+          'INVALID_RESPONSE',
+          false,
+          'Сервер вернул неподдерживаемый формат изображения.',
+        );
+      }
+      const declaredSize = Number(response.headers?.get('content-length') ?? 0);
+      if (declaredSize > MAX_CHAT_IMAGE_BYTES) {
+        throw new IntegrationApiError('INVALID_RESPONSE', false, 'Изображение слишком большое.');
+      }
+      if (!response.arrayBuffer) {
+        throw new IntegrationApiError('INVALID_RESPONSE', false, 'Изображение недоступно.');
+      }
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (!bytes.length || bytes.length > MAX_CHAT_IMAGE_BYTES) {
+        throw new IntegrationApiError('INVALID_RESPONSE', false, 'Изображение недоступно.');
+      }
+      return {
+        attachmentId: path.slice(path.lastIndexOf('/') + 1),
+        dataUrl: `data:${mimeType};base64,${bytes.toString('base64')}`,
+      };
     } catch (error) {
       if (error instanceof IntegrationApiError) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
@@ -1781,6 +1878,23 @@ export class IntegrationApiClient {
     return parseChatMessagePage(payload);
   }
 
+  async chatImage(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    conversationId: string,
+    attachmentId: string,
+  ): Promise<ChatImageData> {
+    return this.requestBinary(
+      baseUrl,
+      `chats/${encodeURIComponent(conversationId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      deviceId,
+      token,
+      context,
+    );
+  }
+
   async sendChatMessage(
     baseUrl: string,
     deviceId: string,
@@ -2607,6 +2721,22 @@ export class IntegrationService {
       context,
       conversationId,
       before,
+    );
+  }
+
+  async getRemoteChatImage(
+    context: CrmChatRequestContext,
+    conversationId: string,
+    attachmentId: string,
+  ): Promise<ChatImageData> {
+    const connection = await this.chatConnection();
+    return this.api.chatImage(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      conversationId,
+      attachmentId,
     );
   }
 

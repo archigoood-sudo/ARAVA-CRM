@@ -71,3 +71,133 @@
     text-wrap: balance;
   }
 }
+
+.room-week-print-sheet {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 9mm;
+  }
+
+  body {
+    overflow: visible !important;
+    background: white !important;
+    color: #111 !important;
+  }
+
+  body > #root > * {
+    display: none !important;
+  }
+
+  body > #root:has(.room-week-print-sheet) > * {
+    display: block !important;
+  }
+
+  body > #root:has(.room-week-print-sheet) > * > *:not(:has(.room-week-print-sheet)),
+  body > #root:has(.room-week-print-sheet) main > *:not(.room-week-print-sheet) {
+    display: none !important;
+  }
+
+  .room-week-print-sheet {
+    position: absolute;
+    inset: 0;
+    display: block !important;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    background: white;
+    color: #111;
+    font-family: Arial, sans-serif;
+  }
+
+  .room-week-print-sheet > header {
+    margin-bottom: 7mm;
+    border-bottom: 1px solid #777;
+    padding-bottom: 4mm;
+  }
+
+  .room-week-print-sheet > header p {
+    margin: 0 0 2mm;
+    font-size: 9pt;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .room-week-print-sheet h1 {
+    margin: 0;
+    font-size: 22pt;
+    line-height: 1.1;
+  }
+
+  .room-week-print-sheet h2 {
+    margin: 2mm 0 0;
+    font-size: 11pt;
+    font-weight: 500;
+  }
+
+  .room-week-print-grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 2mm;
+    width: 100%;
+  }
+
+  .room-week-print-grid > section {
+    min-width: 0;
+    border: 1px solid #999;
+    break-inside: avoid;
+  }
+
+  .room-week-print-grid h3 {
+    min-height: 10mm;
+    margin: 0;
+    border-bottom: 1px solid #999;
+    padding: 2mm;
+    background: #f2f2f2 !important;
+    font-size: 8.5pt;
+    line-height: 1.2;
+  }
+
+  .room-week-print-grid article {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.8mm;
+    border-bottom: 1px solid #ccc;
+    padding: 2mm;
+    font-size: 8pt;
+    line-height: 1.25;
+    break-inside: avoid;
+    overflow-wrap: anywhere;
+  }
+
+  .room-week-print-grid article:last-child {
+    border-bottom: 0;
+  }
+
+  .room-week-print-grid article.is-cancelled {
+    color: #555;
+    text-decoration: line-through;
+  }
+
+  .room-week-print-grid article strong {
+    font-size: 8.5pt;
+  }
+
+  .room-week-print-grid article small {
+    font-weight: 700;
+    text-decoration: none;
+    text-transform: uppercase;
+  }
+
+  .room-week-print-grid > section > p {
+    margin: 0;
+    padding: 3mm 2mm;
+    color: #777;
+    font-size: 8pt;
+  }
+}

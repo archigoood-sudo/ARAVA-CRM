@@ -416,6 +416,10 @@ describe('Electron IPC boundary', () => {
           nextCursor: null,
         }),
       ),
+      getRemoteChatImage: vi.fn(
+        (_context: unknown, _conversationId: string, attachmentId: string) =>
+          Promise.resolve({ attachmentId, dataUrl: 'data:image/png;base64,AQID' }),
+      ),
       listRemoteChats: vi.fn(() =>
         Promise.resolve({
           conversations: [conversation],
@@ -445,6 +449,9 @@ describe('Electron IPC boundary', () => {
       expect.objectContaining({ role: 'OWNER', userId: owner.user.id }),
       {},
     );
+    await expect(
+      handlers[IPC_CHANNELS.chatImage]?.(owner.token, conversation.id, 'image-one'),
+    ).resolves.toEqual({ attachmentId: 'image-one', dataUrl: 'data:image/png;base64,AQID' });
   });
 
   it('validates secure user, session, and owner recovery IPC operations', async () => {

@@ -41,6 +41,8 @@ const desktopApi: AravaDesktopApi = {
   },
   chats: {
     get: (token, conversationId) => invoke(IPC_CHANNELS.chatGet, token, conversationId),
+    image: (token, conversationId, attachmentId) =>
+      invoke(IPC_CHANNELS.chatImage, token, conversationId, attachmentId),
     list: (token, query) => invoke(IPC_CHANNELS.chatList, token, query),
     messages: (token, conversationId, before) =>
       invoke(IPC_CHANNELS.chatMessages, token, conversationId, before),
