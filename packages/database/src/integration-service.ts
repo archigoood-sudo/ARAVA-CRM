@@ -737,6 +737,7 @@ function parseLeadSummary(value: unknown): LeadSummary {
     ...(optional(value.convertedStudentCrmId)
       ? { convertedStudentCrmId: optional(value.convertedStudentCrmId) }
       : {}),
+    ...(optional(value.crmGroupId) ? { crmGroupId: optional(value.crmGroupId) } : {}),
     createdAt: value.createdAt,
     ...(optional(value.direction) ? { direction: optional(value.direction) } : {}),
     id: value.id,
@@ -1682,6 +1683,33 @@ export class IntegrationApiClient {
     return parseLeadDetail(payload.lead);
   }
 
+  async updateLeadGroup(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    leadId: string,
+    crmGroupId: string | undefined,
+    idempotencyKey: string,
+  ): Promise<LeadDetail> {
+    const payload = await this.request(
+      baseUrl,
+      `leads/${encodeURIComponent(leadId)}`,
+      deviceId,
+      token,
+      'PATCH',
+      { crmGroupId: crmGroupId ?? null, idempotencyKey },
+      context,
+    );
+    if (!isRecord(payload))
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер не подтвердил целевую группу заявки.',
+      );
+    return parseLeadDetail(payload.lead);
+  }
+
   async convertLead(
     baseUrl: string,
     deviceId: string,
@@ -2512,6 +2540,24 @@ export class IntegrationService {
       context,
       leadId,
       status,
+      idempotencyKey,
+    );
+  }
+
+  async updateRemoteLeadGroup(
+    context: CrmChatRequestContext,
+    leadId: string,
+    crmGroupId: string | undefined,
+    idempotencyKey: string,
+  ): Promise<LeadDetail> {
+    const connection = await this.chatConnection();
+    return this.api.updateLeadGroup(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      leadId,
+      crmGroupId,
       idempotencyKey,
     );
   }

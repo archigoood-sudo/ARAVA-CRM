@@ -269,7 +269,9 @@ export const IPC_CHANNELS = {
   integrationTestConnection: 'integration:test-connection',
   integrationUpdateSettings: 'integration:update-settings',
   leadConvert: 'lead:convert',
+  leadAssignGroup: 'lead:assign-group',
   leadCreate: 'lead:create',
+  leadCreateStudent: 'lead:create-student',
   leadGet: 'lead:get',
   leadList: 'lead:list',
   leadUpdateStatus: 'lead:update-status',
@@ -2115,6 +2117,7 @@ export interface LeadSummary {
   childName: string;
   convertedAt?: string | undefined;
   convertedStudentCrmId?: string | undefined;
+  crmGroupId?: string | undefined;
   createdAt: string;
   direction?: string | undefined;
   id: string;
@@ -2130,6 +2133,23 @@ export interface LeadSummary {
   utmContent?: string | undefined;
   utmMedium?: string | undefined;
   utmSource?: string | undefined;
+}
+
+export interface LeadGroupAssignmentInput {
+  crmGroupId?: string | undefined;
+}
+
+export interface LeadStudentConversionInput {
+  addToGroup: boolean;
+  allowDuplicate: boolean;
+  groupId?: string | undefined;
+  student: StudentInput;
+}
+
+export interface LeadStudentConversionResult {
+  lead: LeadDetail;
+  membershipCreated: boolean;
+  student: StudentSummary;
 }
 
 export interface LeadExistingStudentCandidate {
@@ -2413,7 +2433,17 @@ export interface AravaDesktopApi {
     reject: (token: string, id: string, reason?: string) => Promise<WebActionSummary>;
   };
   leads: {
+    assignGroup: (
+      token: string,
+      id: string,
+      input: LeadGroupAssignmentInput,
+    ) => Promise<LeadDetail>;
     convert: (token: string, id: string, crmStudentId: string) => Promise<LeadDetail>;
+    createStudent: (
+      token: string,
+      id: string,
+      input: LeadStudentConversionInput,
+    ) => Promise<LeadStudentConversionResult>;
     create: (token: string, input: LeadCreateInput) => Promise<LeadDetail>;
     get: (token: string, id: string) => Promise<LeadDetail>;
     list: (token: string, query: LeadListQuery) => Promise<LeadListResult>;

@@ -65,6 +65,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
   let receivedOperations = 0;
   let leadStatus = 'NEW';
   let convertedStudentId: string | null = null;
+  let targetGroupId: string | null = null;
   const receivedPaymentPaths: string[] = [];
   let conflictOpen = true;
   let recoveryMode = false;
@@ -88,6 +89,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     childName: 'Иванова Мария',
     convertedAt: convertedStudentId ? new Date().toISOString() : null,
     convertedStudentCrmId: convertedStudentId,
+    crmGroupId: targetGroupId,
     createdAt: '2026-08-23T10:00:00.000Z',
     direction: 'Хип-хоп',
     existingStudentCandidates: [
@@ -170,6 +172,8 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     }
     if (request.url === '/api/integration/v1/leads/lead-e2e') {
       if (request.method === 'PATCH' && typeof body.status === 'string') leadStatus = body.status;
+      if (request.method === 'PATCH' && 'crmGroupId' in body)
+        targetGroupId = typeof body.crmGroupId === 'string' ? body.crmGroupId : null;
       respond(response, { apiVersion: 'v1', lead: websiteLead() });
       return;
     }
@@ -430,12 +434,20 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByLabel('Сообщение').fill('Ответ администратора');
     await page.getByRole('button', { name: 'Отправить' }).click();
     await expect.poll(() => receivedChatMessages).toEqual(['Ответ администратора']);
-    await page.evaluate(async () => {
+    const leadGroup = await page.evaluate(async () => {
       const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
         state?: { token?: string };
       };
       const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
-      await api.branches.create(persisted.state?.token ?? '', { name: 'Филиал заявок E2E' });
+      const token = persisted.state?.token ?? '';
+      const branch = await api.branches.create(token, { name: 'Филиал заявок E2E' });
+      return api.groups.create(token, {
+        branchId: branch.id,
+        capacity: 20,
+        direction: 'Хип-хоп',
+        name: 'WEB-группа E2E',
+        status: 'RECRUITING',
+      });
     });
     await page.getByRole('link', { name: 'Заявки' }).click();
     await expect(page.getByRole('link', { name: /Заявки 1/u })).toBeVisible();
@@ -451,6 +463,8 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       page.getByTestId('lead-detail').getByText('Связались', { exact: true }).first(),
     ).toBeVisible();
     await expect(page.getByText('Возможно, этот человек уже есть в CRM')).toBeVisible();
+    await page.getByLabel('Целевая группа заявки').selectOption(leadGroup.id);
+    await expect(page.getByLabel('Целевая группа заявки')).toHaveValue(leadGroup.id);
     await page.getByRole('button', { name: 'Всё равно создать нового' }).click();
     await page.getByRole('button', { name: 'Создать ученика' }).click();
     await expect(page.getByLabel('Фамилия')).toHaveValue('Иванова');
@@ -459,6 +473,23 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByRole('button', { name: 'Добавить ученика' }).click();
     await expect(page.getByText('Ученик уже создан и связан.')).toBeVisible();
     expect(convertedStudentId).toBeTruthy();
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          async ({ groupId, studentId }) => {
+            const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+              state?: { token?: string };
+            };
+            const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+            const group = await api.groups.get(persisted.state?.token ?? '', groupId);
+            return group.participants.some(
+              (participant) => participant.studentId === studentId && !participant.leftAt,
+            );
+          },
+          { groupId: leadGroup.id, studentId: convertedStudentId ?? '' },
+        ),
+      )
+      .toBe(true);
     await page.getByRole('link', { name: 'Настройки' }).click();
     await page.getByRole('button', { name: 'Первичная синхронизация' }).click();
     await expect(page.getByText('Данные для первичной синхронизации')).toBeVisible();

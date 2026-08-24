@@ -59,7 +59,9 @@ import {
   lessonInputSchema,
   lessonListQuerySchema,
   leadCreateInputSchema,
+  leadGroupAssignmentInputSchema,
   leadListQuerySchema,
+  leadStudentConversionInputSchema,
   leadStatusSchema,
   passwordChangeSchema,
   paymentInputSchema,
@@ -192,7 +194,7 @@ export function createIpcHandlers(
     ? new AqsiPaymentService(paymentOperations, integration)
     : undefined;
   const chats = integration ? new ChatService(database, service, integration) : undefined;
-  const leads = integration ? new LeadService(service, integration) : undefined;
+  const leads = integration ? new LeadService(database, service, integration, studio) : undefined;
   const requireIntegration = () => {
     if (!integration) throw new Error('Сервис интеграции не инициализирован.');
     return integration;
@@ -322,6 +324,12 @@ export function createIpcHandlers(
       ),
     [IPC_CHANNELS.leadGet]: (unsafeToken, unsafeId) =>
       requireLeads().get(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.leadAssignGroup]: (unsafeToken, unsafeId, unsafeInput) =>
+      requireLeads().assignGroup(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        leadGroupAssignmentInputSchema.parse(unsafeInput),
+      ),
     [IPC_CHANNELS.leadCreate]: (unsafeToken, unsafeInput) =>
       requireLeads().create(
         sessionTokenSchema.parse(unsafeToken),
@@ -338,6 +346,12 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
         identifierSchema.parse(unsafeStudentId),
+      ),
+    [IPC_CHANNELS.leadCreateStudent]: (unsafeToken, unsafeId, unsafeInput) =>
+      requireLeads().createStudent(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        leadStudentConversionInputSchema.parse(unsafeInput),
       ),
 
     [IPC_CHANNELS.publicationList]: (unsafeToken) =>

@@ -217,6 +217,14 @@ describe('Electron IPC boundary', () => {
       newPassword: 'Owner!LeadsIpc2026',
     });
     const branch = await service.createBranch(owner.token, { name: 'Заявки IPC' });
+    const studio = new StudioService(database, service);
+    const group = await studio.createGroup(owner.token, {
+      branchId: branch.id,
+      capacity: 12,
+      direction: 'Хип-хоп',
+      name: 'Заявки · группа',
+      status: 'RECRUITING',
+    });
     const coach = await service.createUser(owner.token, {
       branchIds: [branch.id],
       email: 'leads-coach-ipc@arava.local',
@@ -232,18 +240,23 @@ describe('Electron IPC boundary', () => {
       currentPassword: 'Coach!LeadsIpc2026',
       newPassword: 'Coach!LeadsIpcChanged2026',
     });
-    const lead = {
+    let convertedStudentCrmId: string | undefined;
+    const currentLead = () => ({
+      branchCrmId: branch.id,
       childName: 'Мария',
+      crmGroupId: group.id,
+      ...(convertedStudentCrmId ? { convertedStudentCrmId } : {}),
       createdAt: new Date().toISOString(),
       existingStudentCandidates: [],
       id: 'lead-ipc',
       originalPhone: '+79990000000',
       phone: '+79990000000',
       source: 'WEBSITE' as const,
-      status: 'NEW' as const,
+      status: convertedStudentCrmId ? ('CONVERTED' as const) : ('NEW' as const),
       statusHistory: [],
       updatedAt: new Date().toISOString(),
-    };
+    });
+    const lead = currentLead();
     const listRemoteLeads = vi.fn().mockResolvedValue({
       leads: [lead],
       newCount: 1,
@@ -251,11 +264,27 @@ describe('Electron IPC boundary', () => {
       summary: { NEW: 1 },
     });
     const updateRemoteLeadStatus = vi.fn().mockResolvedValue({ ...lead, status: 'CONTACTED' });
+    const getRemoteLead = vi.fn(() => Promise.resolve(currentLead()));
+    const updateRemoteLeadGroup = vi.fn(() => Promise.resolve(currentLead()));
+    const convertRemoteLead = vi.fn((_context, _id, studentId: string) => {
+      convertedStudentCrmId = studentId;
+      return Promise.resolve(currentLead());
+    });
     const integration = {
       service: {
+        convertRemoteLead,
+        getRemoteLead,
         listRemoteLeads,
+        updateRemoteLeadGroup,
         updateRemoteLeadStatus,
-      } as Pick<IntegrationService, 'listRemoteLeads' | 'updateRemoteLeadStatus'>,
+      } as Pick<
+        IntegrationService,
+        | 'convertRemoteLead'
+        | 'getRemoteLead'
+        | 'listRemoteLeads'
+        | 'updateRemoteLeadGroup'
+        | 'updateRemoteLeadStatus'
+      >,
     } as unknown as IntegrationManager;
     const handlers = createIpcHandlers(database, service, '/test/arava.db', { integration });
 
@@ -271,12 +300,43 @@ describe('Electron IPC boundary', () => {
       'CONTACTED',
       expect.stringMatching(/^lead-status:/u),
     );
+    await expect(
+      handlers[IPC_CHANNELS.leadAssignGroup]?.(owner.token, lead.id, {
+        crmGroupId: group.id,
+      }),
+    ).resolves.toMatchObject({ crmGroupId: group.id });
+    const conversion = await handlers[IPC_CHANNELS.leadCreateStudent]?.(owner.token, lead.id, {
+      addToGroup: true,
+      allowDuplicate: false,
+      groupId: group.id,
+      student: {
+        branchId: branch.id,
+        firstName: 'Мария',
+        lastName: 'Иванова',
+        phone: '+7 999 000-00-00',
+        status: 'TRIAL',
+      },
+    });
+    expect(conversion).toMatchObject({ membershipCreated: true });
+    expect(await database.student.count()).toBe(1);
+    expect(await database.enrollment.count()).toBe(1);
+    expect(() =>
+      handlers[IPC_CHANNELS.leadCreateStudent]?.(owner.token, lead.id, {
+        addToGroup: true,
+        allowDuplicate: false,
+        groupId: group.id,
+        student: { branchId: branch.id, firstName: 'Мария', status: 'TRIAL' },
+      }),
+    ).toThrow();
     expect(() =>
       handlers[IPC_CHANNELS.leadUpdateStatus]?.(owner.token, lead.id, 'INVALID'),
     ).toThrow();
     await expect(handlers[IPC_CHANNELS.leadList]?.(coachSession.token, {})).rejects.toThrow(
       'Тренеру недоступен',
     );
+    await expect(
+      handlers[IPC_CHANNELS.leadAssignGroup]?.(coachSession.token, lead.id, {}),
+    ).rejects.toThrow('Тренеру недоступен');
   });
 
   it('returns application version and build metadata from system information', async () => {

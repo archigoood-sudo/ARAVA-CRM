@@ -19,11 +19,13 @@ import {
 } from './integration-service';
 import { LeadService } from './lead-service';
 import { ApplicationService } from './services';
+import { StudioService } from './studio-service';
 
 const lead = {
   branchCrmId: 'branch-a',
   childAge: 9,
   childName: 'Мария Иванова',
+  crmGroupId: 'group-a',
   createdAt: '2026-08-23T10:00:00.000Z',
   direction: 'Хип-хоп',
   existingStudentCandidates: [],
@@ -112,6 +114,15 @@ describe('Lead Integration API', () => {
       'CONTACTED',
       'lead-status-key',
     );
+    const assigned = await api.updateLeadGroup(
+      'https://example.test',
+      'device-a',
+      'private-token',
+      context,
+      lead.id,
+      'group-b',
+      'lead-group-key',
+    );
     const converted = await api.convertLead(
       'https://example.test',
       'device-a',
@@ -127,6 +138,7 @@ describe('Lead Integration API', () => {
       ['GET', '/api/integration/v1/leads/lead-a'],
       ['POST', '/api/integration/v1/leads'],
       ['PATCH', '/api/integration/v1/leads/lead-a'],
+      ['PATCH', '/api/integration/v1/leads/lead-a'],
       ['POST', '/api/integration/v1/leads/lead-a/convert'],
     ]);
     expect(new URL(requests[0]?.url ?? '').searchParams.get('search')).toBe('+7999');
@@ -138,6 +150,7 @@ describe('Lead Integration API', () => {
     expect(detail).not.toHaveProperty('secret');
     expect(created).not.toHaveProperty('secret');
     expect(updated.status).toBe('CONTACTED');
+    expect(assigned.crmGroupId).toBe('group-a');
     expect(converted.convertedStudentCrmId).toBe('student-a');
     expect(JSON.stringify({ created, detail, list, updated, converted })).not.toContain(
       'private-token',
@@ -250,7 +263,12 @@ describe('LeadService permissions', () => {
       summary: { NEW: 1 },
     });
     const integration = { listRemoteLeads } as unknown as IntegrationService;
-    const service = new LeadService(application, integration);
+    const service = new LeadService(
+      database,
+      application,
+      integration,
+      new StudioService(database, application),
+    );
 
     await expect(service.list(ownerToken, {})).resolves.toMatchObject({ newCount: 1 });
     await expect(service.list(adminSession.token, {})).resolves.toMatchObject({ newCount: 1 });
@@ -260,5 +278,140 @@ describe('LeadService permissions', () => {
       branchIds: [branch.id],
       role: 'ADMIN',
     });
+  });
+});
+
+describe('LeadService safe conversion', () => {
+  let application: ApplicationService;
+  let database: DatabaseClient;
+  let directory: string;
+  let ownerToken: string;
+
+  beforeEach(async () => {
+    directory = await mkdtemp(join(tmpdir(), 'arava-lead-conversion-'));
+    database = createDatabaseClient(toSqliteUrl(join(directory, 'leads.db')));
+    await initializeDatabase(database);
+    application = new ApplicationService(database);
+    const owner = await application.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    ownerToken = owner.token;
+    await application.changePassword(ownerToken, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!LeadConversion2026',
+    });
+  });
+
+  afterEach(async () => {
+    await closeDatabase(database);
+    await rm(directory, { force: true, recursive: true });
+  });
+
+  it('creates one traced student and optional membership, then reuses them on retry', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Центр' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 20,
+      direction: 'Хип-хоп',
+      name: 'Импульс',
+      status: 'RECRUITING',
+    });
+    let convertedStudentCrmId: string | undefined;
+    const remoteLead = () => ({
+      ...lead,
+      branchCrmId: branch.id,
+      crmGroupId: group.id,
+      ...(convertedStudentCrmId ? { convertedStudentCrmId, status: 'CONVERTED' as const } : {}),
+    });
+    const integration = {
+      convertRemoteLead: vi.fn((_context, _id, studentId: string) => {
+        convertedStudentCrmId = studentId;
+        return Promise.resolve(remoteLead());
+      }),
+      getRemoteLead: vi.fn(() => Promise.resolve(remoteLead())),
+    } as unknown as IntegrationService;
+    const service = new LeadService(database, application, integration, studio);
+    const input = {
+      addToGroup: true,
+      allowDuplicate: false,
+      groupId: group.id,
+      student: {
+        branchId: branch.id,
+        firstName: 'Мария',
+        lastName: 'Иванова',
+        phone: '+7 999 123-45-67',
+        status: 'TRIAL' as const,
+      },
+    };
+
+    const first = await service.createStudent(ownerToken, lead.id, input);
+    const second = await service.createStudent(ownerToken, lead.id, input);
+
+    expect(first.membershipCreated).toBe(true);
+    expect(second.student.id).toBe(first.student.id);
+    expect(await database.student.count()).toBe(1);
+    expect(await database.enrollment.count()).toBe(1);
+    expect(
+      await database.auditLog.findFirst({
+        where: { action: 'WEB_LEAD_STUDENT_CREATED', entityId: lead.id },
+      }),
+    ).toBeTruthy();
+    expect(
+      await database.syncOutbox.count({ where: { entityType: 'STUDENT_IDENTITY' } }),
+    ).toBeGreaterThan(0);
+    expect(
+      await database.syncOutbox.count({ where: { entityType: 'GROUP_MEMBERSHIP' } }),
+    ).toBeGreaterThan(0);
+  });
+
+  it('warns about a local phone match and rejects an inaccessible target group', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Центр' });
+    const other = await application.createBranch(ownerToken, { name: 'Север' });
+    await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Мария',
+      lastName: 'Существующая',
+      phone: '+79991234567',
+      status: 'ACTIVE',
+    });
+    const admin = await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'scoped-lead-admin@arava.local',
+      fullName: 'Администратор',
+      password: 'Admin!ScopedLead2026',
+      role: 'ADMIN',
+    });
+    const session = await application.login({
+      email: admin.email,
+      password: 'Admin!ScopedLead2026',
+    });
+    await application.changePassword(session.token, {
+      currentPassword: 'Admin!ScopedLead2026',
+      newPassword: 'Admin!ScopedLeadChanged2026',
+    });
+    const studio = new StudioService(database, application);
+    const hiddenGroup = await studio.createGroup(ownerToken, {
+      branchId: other.id,
+      capacity: 10,
+      direction: 'Балет',
+      name: 'Скрытая',
+      status: 'ACTIVE',
+    });
+    const updateRemoteLeadGroup = vi.fn();
+    const integration = {
+      getRemoteLead: vi.fn(() => Promise.resolve({ ...lead, branchCrmId: branch.id })),
+      updateRemoteLeadGroup,
+    } as unknown as IntegrationService;
+    const service = new LeadService(database, application, integration, studio);
+
+    await expect(service.get(session.token, lead.id)).resolves.toMatchObject({
+      existingStudentCandidates: [expect.objectContaining({ displayName: 'Существующая Мария' })],
+    });
+    await expect(
+      service.assignGroup(session.token, lead.id, { crmGroupId: hiddenGroup.id }),
+    ).rejects.toThrow();
+    expect(updateRemoteLeadGroup).not.toHaveBeenCalled();
   });
 });

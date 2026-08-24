@@ -824,6 +824,15 @@ export const leadCreateInputSchema: z.ZodType<LeadCreateInput> = z.object({
   studentAge: z.number().int().min(3).max(99).optional(),
   studentName: z.string().trim().min(1, 'Укажите имя ученика.').max(100),
 });
+export const leadGroupAssignmentInputSchema = z.object({
+  crmGroupId: optionalIdentifier,
+});
+export const leadStudentConversionInputSchema = z.object({
+  addToGroup: z.boolean(),
+  allowDuplicate: z.boolean(),
+  groupId: optionalIdentifier,
+  student: studentInputSchema,
+});
 export const publicationInputSchema = z
   .object({
     audienceMode: z.enum(PUBLICATION_AUDIENCES),

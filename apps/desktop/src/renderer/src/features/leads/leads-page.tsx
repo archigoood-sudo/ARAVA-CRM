@@ -13,6 +13,7 @@ import {
   Avatar,
   Button,
   Card,
+  Checkbox,
   Dialog,
   EmptyState,
   ErrorState,
@@ -26,7 +27,7 @@ import {
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Inbox, Plus, RefreshCw, Search, UserPlus } from 'lucide-react';
-import { useDeferredValue, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -64,6 +65,8 @@ export function LeadsPage() {
   const [selectedId, setSelectedId] = useState(searchParameters.get('leadId') ?? '');
   const [manualOpen, setManualOpen] = useState(false);
   const [studentOpen, setStudentOpen] = useState(false);
+  const [addToGroup, setAddToGroup] = useState(true);
+  const [selectedGroupId, setSelectedGroupId] = useState('');
   const [allowDuplicate, setAllowDuplicate] = useState(false);
   const [studentError, setStudentError] = useState<string>();
   const [flowError, setFlowError] = useState<Error>();
@@ -94,6 +97,11 @@ export function LeadsPage() {
     queryFn: () => getDesktopApi().branches.list(getSessionToken()),
     queryKey: queryKeys.branches(),
   });
+  const groups = useQuery({
+    enabled: user?.role !== 'COACH',
+    queryFn: () => getDesktopApi().groups.list(getSessionToken(), {}),
+    queryKey: queryKeys.groups({}),
+  });
   const invalidate = async (id?: string) => {
     await client.invalidateQueries({ queryKey: ['leads', accessKey] });
     if (id) await client.invalidateQueries({ queryKey: queryKeys.lead(id, accessKey) });
@@ -108,49 +116,46 @@ export function LeadsPage() {
       getDesktopApi().leads.convert(getSessionToken(), id, studentId),
     onSuccess: (updated) => invalidate(updated.id),
   });
+  const assignGroup = useMutation({
+    mutationFn: ({ id, groupId }: { groupId?: string; id: string }) =>
+      getDesktopApi().leads.assignGroup(getSessionToken(), id, { crmGroupId: groupId }),
+    onSuccess: (updated) => {
+      client.setQueryData(queryKeys.lead(updated.id, accessKey), updated);
+      return invalidate(updated.id);
+    },
+  });
+
+  const current = detail.data;
+  useEffect(() => {
+    setSelectedGroupId(current?.crmGroupId ?? '');
+    setAddToGroup(Boolean(current?.crmGroupId));
+  }, [current?.crmGroupId, current?.id]);
+  const selectedGroup = groups.data?.find(({ id }) => id === selectedGroupId);
+  const selectableGroups =
+    groups.data?.filter(({ status }) => status === 'ACTIVE' || status === 'RECRUITING') ?? [];
+  const prefillBranches = selectedGroup ? [{ id: selectedGroup.branchId }] : (branches.data ?? []);
+  const initialStudent = current ? studentPrefill(current, prefillBranches) : undefined;
 
   if (user?.role === 'COACH') return <Navigate replace to="/dashboard" />;
-  const current = detail.data;
-  const initialStudent = current ? studentPrefill(current, branches.data ?? []) : undefined;
 
   const saveStudent = async (input: StudentInput) => {
     if (!current) return;
     setStudentError(undefined);
     setFlowError(undefined);
     try {
-      const student = await getDesktopApi().students.create(getSessionToken(), input);
-      let contactError: unknown;
-      if (current.parentName) {
-        try {
-          await getDesktopApi().contacts.create(getSessionToken(), student.id, {
-            fullName: current.parentName,
-            isPrimary: true,
-            phone: current.phone,
-            relationship: 'Родитель',
-            whatsapp: false,
-          });
-        } catch (error) {
-          contactError = error;
-        }
-      }
-      const converted = await getDesktopApi().leads.convert(
-        getSessionToken(),
-        current.id,
-        student.id,
-      );
-      client.setQueryData(queryKeys.lead(current.id, accessKey), converted);
+      const result = await getDesktopApi().leads.createStudent(getSessionToken(), current.id, {
+        addToGroup,
+        allowDuplicate,
+        ...(selectedGroupId ? { groupId: selectedGroupId } : {}),
+        student: input,
+      });
+      client.setQueryData(queryKeys.lead(current.id, accessKey), result.lead);
       await Promise.all([
         invalidate(current.id),
-        invalidateStudentIdentityCaches(client, student.id),
+        invalidateStudentIdentityCaches(client, result.student.id),
+        client.invalidateQueries({ queryKey: ['groups'] }),
       ]);
       setStudentOpen(false);
-      if (contactError) {
-        setFlowError(
-          new Error(
-            'Ученик создан и связан с заявкой, но контакт родителя не добавлен. Добавьте его в профиле ученика.',
-          ),
-        );
-      }
     } catch (error) {
       setStudentError(getErrorMessage(error, 'Не удалось создать ученика из заявки.'));
     }
@@ -284,15 +289,24 @@ export function LeadsPage() {
           ) : null}
           {current ? (
             <LeadDetailView
-              actionError={flowError ?? updateStatus.error ?? convert.error}
+              actionError={flowError ?? updateStatus.error ?? assignGroup.error ?? convert.error}
               allowDuplicate={allowDuplicate}
               canCreateStudent={!branches.isLoading && (branches.data?.length ?? 0) > 0}
+              addToGroup={addToGroup}
+              groups={selectableGroups}
               lead={current}
               onAllowDuplicate={() => setAllowDuplicate(true)}
               onCreateStudent={() => setStudentOpen(true)}
+              onAddToGroup={setAddToGroup}
+              onGroup={(groupId) => {
+                setSelectedGroupId(groupId);
+                setAddToGroup(Boolean(groupId));
+                assignGroup.mutate({ id: current.id, ...(groupId ? { groupId } : {}) });
+              }}
               onLink={(studentId) => convert.mutate({ id: current.id, studentId })}
               onStatus={(value) => updateStatus.mutate({ id: current.id, value })}
               statusPending={updateStatus.isPending}
+              selectedGroupId={selectedGroupId}
             />
           ) : null}
         </section>
@@ -358,24 +372,34 @@ function LeadRow({
 
 function LeadDetailView({
   actionError,
+  addToGroup,
   allowDuplicate,
   canCreateStudent,
+  groups,
   lead,
   onAllowDuplicate,
   onCreateStudent,
+  onAddToGroup,
+  onGroup,
   onLink,
   onStatus,
   statusPending,
+  selectedGroupId,
 }: {
   actionError: unknown;
+  addToGroup: boolean;
   allowDuplicate: boolean;
   canCreateStudent: boolean;
+  groups: { branchName: string; id: string; name: string }[];
   lead: LeadDetail;
   onAllowDuplicate: () => void;
   onCreateStudent: () => void;
+  onAddToGroup: (value: boolean) => void;
+  onGroup: (groupId: string) => void;
   onLink: (studentId: string) => void;
   onStatus: (status: LeadStatus) => void;
   statusPending: boolean;
+  selectedGroupId: string;
 }) {
   const converted = Boolean(lead.convertedStudentCrmId);
   return (
@@ -432,6 +456,38 @@ function LeadDetailView({
           ))}
         </Select>
       </div>
+      {!converted ? (
+        <div className="mt-5 rounded-2xl border border-border bg-surface p-4">
+          <Label>Целевая группа</Label>
+          <Select
+            aria-label="Целевая группа заявки"
+            className="mt-2"
+            onChange={(event) => onGroup(event.target.value)}
+            value={groups.some(({ id }) => id === selectedGroupId) ? selectedGroupId : ''}
+          >
+            <option value="">Требуется выбрать вручную</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name} · {group.branchName}
+              </option>
+            ))}
+          </Select>
+          {lead.crmGroupId && !groups.some(({ id }) => id === lead.crmGroupId) ? (
+            <p className="mt-2 text-xs text-amber-700">
+              Группа из заявки больше недоступна. Выберите актуальную группу вручную.
+            </p>
+          ) : null}
+          {selectedGroupId ? (
+            <label className="mt-3 flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={addToGroup}
+                onChange={(event) => onAddToGroup(event.target.checked)}
+              />
+              После создания добавить ученика в эту группу
+            </label>
+          ) : null}
+        </div>
+      ) : null}
       {converted && lead.convertedStudentCrmId ? (
         <div className="mt-5 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-200">
           <b>Ученик уже создан и связан.</b>

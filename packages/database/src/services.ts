@@ -932,6 +932,59 @@ export class ApplicationService {
     return studentSummary(student);
   }
 
+  async createStudentFromWebLead(
+    token: string,
+    leadId: string,
+    input: StudentInput,
+  ): Promise<{ reused: boolean; student: StudentSummary }> {
+    const actor = await this.authenticate(token);
+    assertPermission(actor, 'students:manage');
+    assertBranchAccess(actor, input.branchId);
+    await this.requireActiveBranch(input.branchId);
+    const existingTrace = await this.database.auditLog.findFirst({
+      orderBy: { createdAt: 'desc' },
+      where: { action: 'WEB_LEAD_STUDENT_CREATED', entityId: leadId, entityType: 'Lead' },
+    });
+    if (existingTrace?.detail) {
+      const detail = JSON.parse(existingTrace.detail) as { studentId?: unknown };
+      if (typeof detail.studentId === 'string') {
+        const existing = await this.database.student.findUnique({
+          include: { branch: true },
+          where: { id: detail.studentId },
+        });
+        if (existing) {
+          assertBranchAccess(actor, existing.branchId);
+          return { reused: true, student: studentSummary(existing) };
+        }
+      }
+    }
+    const student = await this.database.$transaction(async (transaction) => {
+      const created = await transaction.student.create({
+        data: studentData(input),
+        include: { branch: true },
+      });
+      await transaction.auditLog.createMany({
+        data: [
+          {
+            action: 'STUDENT_CREATED',
+            actorUserId: actor.id,
+            entityId: created.id,
+            entityType: 'Student',
+          },
+          {
+            action: 'WEB_LEAD_STUDENT_CREATED',
+            actorUserId: actor.id,
+            detail: JSON.stringify({ studentId: created.id }),
+            entityId: leadId,
+            entityType: 'Lead',
+          },
+        ],
+      });
+      return created;
+    });
+    return { reused: false, student: studentSummary(student) };
+  }
+
   async updateStudent(token: string, id: string, input: StudentInput): Promise<StudentSummary> {
     const actor = await this.authenticate(token);
     assertPermission(actor, 'students:manage');
