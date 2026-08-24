@@ -64,6 +64,8 @@ import {
   leadListQuerySchema,
   leadStudentConversionInputSchema,
   leadStatusSchema,
+  trialListQuerySchema,
+  trialScheduleInputSchema,
   passwordChangeSchema,
   paymentInputSchema,
   paymentListQuerySchema,
@@ -360,6 +362,16 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
         leadStudentConversionInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.trialList]: (unsafeToken, unsafeQuery) =>
+      requireLeads().listTrials(
+        sessionTokenSchema.parse(unsafeToken),
+        trialListQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.trialSchedule]: (unsafeToken, unsafeInput) =>
+      requireLeads().scheduleTrial(
+        sessionTokenSchema.parse(unsafeToken),
+        trialScheduleInputSchema.parse(unsafeInput),
       ),
 
     [IPC_CHANNELS.publicationList]: (unsafeToken) =>

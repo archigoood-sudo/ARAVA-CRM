@@ -8,6 +8,9 @@ import type {
   LeadStudentConversionInput,
   LeadStudentConversionResult,
   LeadStatus,
+  TrialAppointmentSummary,
+  TrialListQuery,
+  TrialScheduleInput,
 } from '@arava/shared';
 import { randomUUID } from 'node:crypto';
 
@@ -156,6 +159,170 @@ export class LeadService {
       `lead-convert:${id}:${created.student.id}`,
     );
     return { lead: converted, membershipCreated, student: created.student };
+  }
+
+  async scheduleTrial(token: string, input: TrialScheduleInput): Promise<TrialAppointmentSummary> {
+    const actor = await this.actor(token);
+    const [lead, group, lesson] = await Promise.all([
+      this.integration.getRemoteLead(this.context(actor), input.leadId),
+      this.studio.getGroup(token, input.groupId),
+      this.studio.getLesson(token, input.lessonId),
+    ]);
+    if (group.archivedAt || !['ACTIVE', 'RECRUITING'].includes(group.status))
+      throw new DomainError('VALIDATION', 'Для пробного доступна только действующая группа.');
+    if (lesson.groupId !== group.id)
+      throw new DomainError('VALIDATION', 'Выбранное занятие относится к другой группе.');
+    if (lesson.status === 'CANCELLED')
+      throw new DomainError('VALIDATION', 'Нельзя записать на отменённое занятие.');
+    if (new Date(lesson.endsAt) <= new Date())
+      throw new DomainError('VALIDATION', 'Выберите текущее или предстоящее занятие.');
+
+    await this.integration.updateRemoteLeadGroup(
+      this.context(actor),
+      lead.id,
+      group.id,
+      `trial-group:${lead.id}:${lesson.id}`,
+    );
+    await this.integration.updateRemoteLeadStatus(
+      this.context(actor),
+      lead.id,
+      'TRIAL_BOOKED',
+      `trial-status:${lead.id}:${lesson.id}`,
+    );
+
+    const appointment = await this.database.$transaction(async (transaction) => {
+      const now = new Date();
+      await transaction.trialAppointment.updateMany({
+        data: { supersededAt: now },
+        where: { externalLeadId: lead.id, supersededAt: null, lessonId: { not: lesson.id } },
+      });
+      const saved = await transaction.trialAppointment.upsert({
+        create: {
+          createdByUserId: actor.id,
+          externalLeadId: lead.id,
+          groupId: group.id,
+          lessonId: lesson.id,
+        },
+        update: { groupId: group.id, supersededAt: null },
+        where: { externalLeadId_lessonId: { externalLeadId: lead.id, lessonId: lesson.id } },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'TRIAL_SCHEDULED',
+          actorUserId: actor.id,
+          detail: JSON.stringify({ groupId: group.id, lessonId: lesson.id }),
+          entityId: saved.id,
+          entityType: 'TrialAppointment',
+        },
+      });
+      return saved;
+    });
+    const [result] = await this.listTrials(token, { leadId: lead.id });
+    if (result?.id !== appointment.id)
+      throw new DomainError('NOT_FOUND', 'Запись на пробное не найдена после сохранения.');
+    return result;
+  }
+
+  async listTrials(token: string, query: TrialListQuery): Promise<TrialAppointmentSummary[]> {
+    const actor = await this.actor(token);
+    const branchIds = actor.role === 'OWNER' ? undefined : actor.branchIds;
+    const appointments = await this.database.trialAppointment.findMany({
+      include: {
+        group: { include: { branch: { select: { name: true } } } },
+        lesson: true,
+      },
+      orderBy: { lesson: { startsAt: 'asc' } },
+      where: {
+        supersededAt: null,
+        ...(query.leadId ? { externalLeadId: query.leadId } : {}),
+        ...(branchIds ? { group: { branchId: { in: branchIds } } } : {}),
+      },
+    });
+    if (!appointments.length) return [];
+    const remote = query.leadId
+      ? [await this.integration.getRemoteLead(this.context(actor), query.leadId)]
+      : (await this.integration.listRemoteLeads(this.context(actor), {})).leads;
+    const leads = new Map(remote.map((lead) => [lead.id, lead]));
+    const now = new Date();
+    const from = query.dateFrom ? new Date(query.dateFrom) : undefined;
+    const to = query.dateTo ? new Date(query.dateTo) : undefined;
+    const summaries = await Promise.all(
+      appointments.map(async (appointment): Promise<TrialAppointmentSummary | undefined> => {
+        const lead = leads.get(appointment.externalLeadId);
+        if (!lead) return undefined;
+        const studentId = lead.convertedStudentCrmId;
+        if (query.studentId && studentId !== query.studentId) return undefined;
+        const attendance = studentId
+          ? await this.database.attendance.findUnique({
+              where: { lessonId_studentId: { lessonId: appointment.lessonId, studentId } },
+            })
+          : null;
+        const purchased = studentId
+          ? await this.database.subscription.findFirst({
+              where: {
+                purchasedAt: { gte: appointment.lesson.startsAt },
+                status: { not: 'CANCELLED' },
+                studentId,
+              },
+            })
+          : null;
+        const state = this.trialState({
+          attendanceStatus: attendance?.status,
+          endsAt: appointment.lesson.endsAt,
+          leadStatus: lead.status,
+          lessonStatus: appointment.lesson.status,
+          now,
+          purchased: Boolean(purchased),
+          startsAt: appointment.lesson.startsAt,
+        });
+        const inRange =
+          (!from || appointment.lesson.startsAt >= from) &&
+          (!to || appointment.lesson.startsAt <= to);
+        if (!inRange && !(query.includeFollowUp && state === 'FOLLOW_UP')) return undefined;
+        return {
+          ...(attendance ? { attendanceStatus: attendance.status } : {}),
+          branchId: appointment.group.branchId,
+          branchName: appointment.group.branch.name,
+          endsAt: appointment.lesson.endsAt.toISOString(),
+          groupId: appointment.groupId,
+          groupName: appointment.group.name,
+          id: appointment.id,
+          leadId: lead.id,
+          leadName: lead.childName,
+          lessonId: appointment.lessonId,
+          lessonStatus: appointment.lesson.status,
+          startsAt: appointment.lesson.startsAt.toISOString(),
+          state,
+          ...(studentId ? { studentId } : {}),
+        };
+      }),
+    );
+    return summaries.filter((item): item is TrialAppointmentSummary => Boolean(item));
+  }
+
+  private trialState(input: {
+    attendanceStatus?: string | undefined;
+    endsAt: Date;
+    leadStatus: LeadStatus;
+    lessonStatus: string;
+    now: Date;
+    purchased: boolean;
+    startsAt: Date;
+  }): TrialAppointmentSummary['state'] {
+    if (input.leadStatus === 'REJECTED' || input.leadStatus === 'NOT_RELEVANT') return 'CLOSED';
+    if (input.lessonStatus === 'CANCELLED') return 'CANCELLED';
+    if (input.purchased) return 'SUBSCRIPTION_PURCHASED';
+    const attended =
+      input.leadStatus === 'TRIAL_ATTENDED' ||
+      ['PRESENT', 'LATE', 'TRIAL'].includes(input.attendanceStatus ?? '');
+    if (attended) return 'FOLLOW_UP';
+    if (['ABSENT', 'EXCUSED'].includes(input.attendanceStatus ?? '')) return 'MISSED';
+    if (input.leadStatus === 'NO_ANSWER' && input.startsAt <= input.now) return 'MISSED';
+    const start = new Date(input.startsAt);
+    const today = new Date(input.now);
+    start.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
+    return start.getTime() === today.getTime() ? 'TODAY' : 'SCHEDULED';
   }
 
   private async withLocalCandidates(

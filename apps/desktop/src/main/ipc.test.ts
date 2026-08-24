@@ -276,6 +276,12 @@ describe('Electron IPC boundary', () => {
       name: 'Заявки · группа',
       status: 'RECRUITING',
     });
+    const trialStartsAt = new Date(Date.now() + 3_600_000);
+    const trialLesson = await studio.createLesson(owner.token, {
+      endsAt: new Date(trialStartsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: trialStartsAt.toISOString(),
+    });
     const coach = await service.createUser(owner.token, {
       branchIds: [branch.id],
       email: 'leads-coach-ipc@arava.local',
@@ -371,6 +377,16 @@ describe('Electron IPC boundary', () => {
     expect(conversion).toMatchObject({ membershipCreated: true });
     expect(await database.student.count()).toBe(1);
     expect(await database.enrollment.count()).toBe(1);
+    await expect(
+      handlers[IPC_CHANNELS.trialSchedule]?.(owner.token, {
+        groupId: group.id,
+        leadId: lead.id,
+        lessonId: trialLesson.id,
+      }),
+    ).resolves.toMatchObject({ groupId: group.id, leadId: lead.id, lessonId: trialLesson.id });
+    await expect(
+      handlers[IPC_CHANNELS.trialList]?.(owner.token, { leadId: lead.id }),
+    ).resolves.toHaveLength(1);
     expect(() =>
       handlers[IPC_CHANNELS.leadCreateStudent]?.(owner.token, lead.id, {
         addToGroup: true,
@@ -388,6 +404,9 @@ describe('Electron IPC boundary', () => {
     await expect(
       handlers[IPC_CHANNELS.leadAssignGroup]?.(coachSession.token, lead.id, {}),
     ).rejects.toThrow('Тренеру недоступен');
+    await expect(handlers[IPC_CHANNELS.trialList]?.(coachSession.token, {})).rejects.toThrow(
+      'Тренеру недоступен',
+    );
   });
 
   it('returns application version and build metadata from system information', async () => {

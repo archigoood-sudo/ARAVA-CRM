@@ -273,6 +273,9 @@ describe('LeadService permissions', () => {
     await expect(service.list(ownerToken, {})).resolves.toMatchObject({ newCount: 1 });
     await expect(service.list(adminSession.token, {})).resolves.toMatchObject({ newCount: 1 });
     await expect(service.list(coachSession.token, {})).rejects.toThrow('Тренеру недоступен');
+    await expect(service.listTrials(ownerToken, {})).resolves.toEqual([]);
+    await expect(service.listTrials(adminSession.token, {})).resolves.toEqual([]);
+    await expect(service.listTrials(coachSession.token, {})).rejects.toThrow('Тренеру недоступен');
     expect(listRemoteLeads).toHaveBeenCalledTimes(2);
     expect(listRemoteLeads.mock.calls[1]?.[0]).toMatchObject({
       branchIds: [branch.id],
@@ -413,5 +416,141 @@ describe('LeadService safe conversion', () => {
       service.assignGroup(session.token, lead.id, { crmGroupId: hiddenGroup.id }),
     ).rejects.toThrow();
     expect(updateRemoteLeadGroup).not.toHaveBeenCalled();
+  });
+
+  it('schedules one canonical trial and derives attendance, follow-up, purchase, and permissions', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Пробные' });
+    const hiddenBranch = await application.createBranch(ownerToken, { name: 'Закрытый филиал' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 12,
+      direction: 'Хип-хоп',
+      name: 'Старт',
+      status: 'RECRUITING',
+    });
+    const startsAt = new Date(Date.now() + 3_600_000);
+    const endsAt = new Date(startsAt.getTime() + 3_600_000);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: endsAt.toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Мария',
+      lastName: 'Пробная',
+      status: 'TRIAL',
+    });
+    let remoteStatus: 'NEW' | 'REJECTED' | 'TRIAL_ATTENDED' | 'TRIAL_BOOKED' = 'NEW';
+    const remoteLead = () => ({
+      ...lead,
+      branchCrmId: branch.id,
+      convertedStudentCrmId: student.id,
+      crmGroupId: group.id,
+      status: remoteStatus,
+    });
+    const integration = {
+      getRemoteLead: vi.fn(() => Promise.resolve(remoteLead())),
+      listRemoteLeads: vi.fn(() =>
+        Promise.resolve({
+          leads: [remoteLead()],
+          newCount: 0,
+          serverTimestamp: new Date().toISOString(),
+          summary: {},
+        }),
+      ),
+      updateRemoteLeadGroup: vi.fn(() => Promise.resolve(remoteLead())),
+      updateRemoteLeadStatus: vi.fn((_context, _id, status: typeof remoteStatus) => {
+        remoteStatus = status;
+        return Promise.resolve(remoteLead());
+      }),
+    } as unknown as IntegrationService;
+    const service = new LeadService(database, application, integration, studio);
+
+    await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      leadId: lead.id,
+      lessonId: lesson.id,
+    });
+    await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      leadId: lead.id,
+      lessonId: lesson.id,
+    });
+    expect(await database.trialAppointment.count()).toBe(1);
+    expect(['TODAY', 'SCHEDULED']).toContain(
+      (await service.listTrials(ownerToken, { leadId: lead.id }))[0]?.state,
+    );
+
+    await database.attendance.create({
+      data: {
+        lessonId: lesson.id,
+        markedAt: new Date(),
+        markedByUserId: (await application.authenticate(ownerToken)).id,
+        status: 'ABSENT',
+        studentId: student.id,
+      },
+    });
+    expect((await service.listTrials(ownerToken, { leadId: lead.id }))[0]?.state).toBe('MISSED');
+    await database.attendance.update({
+      data: { status: 'PRESENT' },
+      where: { lessonId_studentId: { lessonId: lesson.id, studentId: student.id } },
+    });
+    await database.lesson.update({
+      data: {
+        endsAt: new Date(Date.now() - 1_000),
+        startsAt: new Date(Date.now() - 3_601_000),
+      },
+      where: { id: lesson.id },
+    });
+    expect((await service.listTrials(ownerToken, { includeFollowUp: true }))[0]?.state).toBe(
+      'FOLLOW_UP',
+    );
+
+    const tariff = await database.tariff.create({
+      data: {
+        currency: 'RUB',
+        isActive: true,
+        name: 'Пробный пакет',
+        price: 1000,
+        type: 'LESSON_PACK',
+        lessonCount: 4,
+      },
+    });
+    await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: (await application.authenticate(ownerToken)).id,
+        purchasedAt: new Date(),
+        salePrice: 1000,
+        startsAt: new Date(),
+        status: 'ACTIVE',
+        studentId: student.id,
+        tariffId: tariff.id,
+      },
+    });
+    expect((await service.listTrials(ownerToken, { leadId: lead.id }))[0]?.state).toBe(
+      'SUBSCRIPTION_PURCHASED',
+    );
+    remoteStatus = 'REJECTED';
+    expect((await service.listTrials(ownerToken, { leadId: lead.id }))[0]?.state).toBe('CLOSED');
+
+    const admin = await application.createUser(ownerToken, {
+      branchIds: [hiddenBranch.id],
+      email: 'trial-admin@arava.local',
+      fullName: 'Чужой администратор',
+      password: 'Admin!Trial2026',
+      role: 'ADMIN',
+    });
+    const adminSession = await application.login({
+      email: admin.email,
+      password: 'Admin!Trial2026',
+    });
+    await application.changePassword(adminSession.token, {
+      currentPassword: 'Admin!Trial2026',
+      newPassword: 'Admin!TrialChanged2026',
+    });
+    await expect(service.listTrials(adminSession.token, {})).resolves.toEqual([]);
   });
 });

@@ -28,6 +28,7 @@ export const queryKeys = {
   integrationStatus: ['integration', 'status'] as const,
   lead: (id: string, accessKey: string) => ['leads', accessKey, 'detail', id] as const,
   leads: (accessKey: string, query: object = {}) => ['leads', accessKey, 'list', query] as const,
+  trials: (accessKey: string, query: object = {}) => ['trials', accessKey, query] as const,
   webActions: (userId?: string) => ['web-actions', userId] as const,
   attendance: (lessonId: string) => ['attendance', lessonId] as const,
   attendanceToday: (date: string) => ['attendance', 'today', date] as const,

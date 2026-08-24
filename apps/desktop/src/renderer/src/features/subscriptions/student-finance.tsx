@@ -172,6 +172,7 @@ export function StudentFinance({
       queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
       queryClient.invalidateQueries({ queryKey: ['student-profile'] }),
       queryClient.invalidateQueries({ queryKey: ['attention'] }),
+      queryClient.invalidateQueries({ queryKey: ['trials'] }),
       queryClient.invalidateQueries({ queryKey: ['payment-operations'] }),
     ]);
   };

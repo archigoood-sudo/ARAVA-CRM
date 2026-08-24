@@ -52,6 +52,8 @@ import {
   type LessonListQuery,
   type LeadCreateInput,
   type LeadListQuery,
+  type TrialListQuery,
+  type TrialScheduleInput,
   type RoomClosureInput,
   type RoomInput,
   type RoomRentalInput,
@@ -832,6 +834,18 @@ export const leadStudentConversionInputSchema = z.object({
   allowDuplicate: z.boolean(),
   groupId: optionalIdentifier,
   student: studentInputSchema,
+});
+export const trialScheduleInputSchema: z.ZodType<TrialScheduleInput> = z.object({
+  groupId: identifierSchema,
+  leadId: identifierSchema,
+  lessonId: identifierSchema,
+});
+export const trialListQuerySchema: z.ZodType<TrialListQuery> = z.object({
+  dateFrom: z.string().datetime().optional(),
+  dateTo: z.string().datetime().optional(),
+  includeFollowUp: z.boolean().optional(),
+  leadId: optionalIdentifier,
+  studentId: optionalIdentifier,
 });
 export const publicationInputSchema = z
   .object({

@@ -14,6 +14,7 @@ export async function invalidateStudentIdentityCaches(
     invalidateGlobalSearchCache(client),
     client.invalidateQueries({ queryKey: ['dashboard'] }),
     client.invalidateQueries({ queryKey: ['attention'] }),
+    client.invalidateQueries({ queryKey: ['trials'] }),
     ...(studentId
       ? [client.invalidateQueries({ queryKey: ['groups', 'eligible-for-student', studentId] })]
       : []),
@@ -31,6 +32,7 @@ export async function invalidateAttendanceCaches(client: QueryClient): Promise<v
     client.invalidateQueries({ queryKey: ['payroll'] }),
     client.invalidateQueries({ queryKey: ['dashboard'] }),
     client.invalidateQueries({ queryKey: ['attention'] }),
+    client.invalidateQueries({ queryKey: ['trials'] }),
   ]);
 }
 
@@ -42,6 +44,7 @@ export async function invalidateFinanceCaches(client: QueryClient): Promise<void
     client.invalidateQueries({ queryKey: ['student-profile'] }),
     client.invalidateQueries({ queryKey: ['dashboard'] }),
     client.invalidateQueries({ queryKey: ['attention'] }),
+    client.invalidateQueries({ queryKey: ['trials'] }),
   ]);
 }
 

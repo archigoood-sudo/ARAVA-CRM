@@ -279,6 +279,8 @@ export const IPC_CHANNELS = {
   leadCreateStudent: 'lead:create-student',
   leadGet: 'lead:get',
   leadList: 'lead:list',
+  trialList: 'trial:list',
+  trialSchedule: 'trial:schedule',
   leadUpdateStatus: 'lead:update-status',
   webActionApprove: 'web-action:approve',
   webActionList: 'web-action:list',
@@ -2228,6 +2230,47 @@ export interface LeadCreateInput {
   studentName: string;
 }
 
+export type TrialWorkflowState =
+  | 'SCHEDULED'
+  | 'TODAY'
+  | 'ATTENDED'
+  | 'MISSED'
+  | 'FOLLOW_UP'
+  | 'SUBSCRIPTION_PURCHASED'
+  | 'CLOSED'
+  | 'CANCELLED';
+
+export interface TrialScheduleInput {
+  groupId: string;
+  leadId: string;
+  lessonId: string;
+}
+
+export interface TrialListQuery {
+  dateFrom?: string | undefined;
+  dateTo?: string | undefined;
+  includeFollowUp?: boolean | undefined;
+  leadId?: string | undefined;
+  studentId?: string | undefined;
+}
+
+export interface TrialAppointmentSummary {
+  attendanceStatus?: AttendanceStatus | undefined;
+  branchId: string;
+  branchName: string;
+  endsAt: string;
+  groupId: string;
+  groupName: string;
+  id: string;
+  leadId: string;
+  leadName: string;
+  lessonId: string;
+  lessonStatus: LessonStatus;
+  startsAt: string;
+  state: TrialWorkflowState;
+  studentId?: string | undefined;
+}
+
 export interface IntegrationConflictDifference {
   candidate: unknown;
   canonical: unknown;
@@ -2514,6 +2557,10 @@ export interface AravaDesktopApi {
     get: (token: string, id: string) => Promise<LeadDetail>;
     list: (token: string, query: LeadListQuery) => Promise<LeadListResult>;
     updateStatus: (token: string, id: string, status: LeadStatus) => Promise<LeadDetail>;
+  };
+  trials: {
+    list: (token: string, query: TrialListQuery) => Promise<TrialAppointmentSummary[]>;
+    schedule: (token: string, input: TrialScheduleInput) => Promise<TrialAppointmentSummary>;
   };
   chats: {
     get: (token: string, conversationId: string) => Promise<ChatSummary>;

@@ -288,6 +288,7 @@ model User {
   createdSubstitutions   TrainerSubstitution[] @relation("SubstitutionCreator")
   substitutedLessons     TrainerSubstitution[] @relation("SubstituteTrainer")
   originalSubstitutions  TrainerSubstitution[] @relation("OriginalTrainer")
+  createdTrialAppointments TrialAppointment[]  @relation("TrialAppointmentCreator")
   createdMembershipCards MembershipCard[]      @relation("CardCreator")
   performedCardEvents    CardEvent[]           @relation("CardEventPerformer")
   cardScans              CardScanEvent[]       @relation("CardScanPerformer")
@@ -501,6 +502,7 @@ model DanceGroup {
   enrollments      Enrollment[]
   schedules        WeeklySchedule[]
   lessons          Lesson[]
+  trialAppointments TrialAppointment[]
   payrollRules     PayrollRule[]
   payrollAccruals  PayrollAccrual[]
   createdAt        DateTime         @default(now())
@@ -584,6 +586,7 @@ model Lesson {
   ledgerEntries         SubscriptionLedger[]
   payrollAccruals       PayrollAccrual[]
   substitution          TrainerSubstitution?
+  trialAppointments     TrialAppointment[]
   createdAt             DateTime             @default(now())
   updatedAt             DateTime             @updatedAt
 
@@ -595,6 +598,26 @@ model Lesson {
   @@index([roomId, startsAt])
   @@index([groupId, startsAt])
   @@index([attendanceCompletedAt])
+}
+
+model TrialAppointment {
+  id              String     @id @default(cuid())
+  externalLeadId  String
+  groupId         String
+  group           DanceGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  lessonId        String
+  lesson          Lesson     @relation(fields: [lessonId], references: [id], onDelete: Restrict)
+  createdByUserId String
+  createdByUser   User       @relation("TrialAppointmentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  supersededAt    DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@unique([externalLeadId, lessonId])
+  @@index([externalLeadId, supersededAt])
+  @@index([lessonId, supersededAt])
+  @@index([groupId, supersededAt])
+  @@index([createdByUserId])
 }
 
 model RoomRental {

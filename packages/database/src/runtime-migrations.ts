@@ -730,4 +730,15 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'CREATE INDEX "PaymentOperation_createdByUserId_createdAt_idx" ON "PaymentOperation"("createdByUserId", "createdAt")',
     ],
   },
+  {
+    id: '20260824000000_trial_lessons',
+    statements: [
+      'CREATE TABLE "TrialAppointment" (\n  "id" TEXT NOT NULL PRIMARY KEY,\n  "externalLeadId" TEXT NOT NULL,\n  "groupId" TEXT NOT NULL,\n  "lessonId" TEXT NOT NULL,\n  "createdByUserId" TEXT NOT NULL,\n  "supersededAt" DATETIME,\n  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  "updatedAt" DATETIME NOT NULL,\n  CONSTRAINT "TrialAppointment_groupId_fkey" FOREIGN KEY ("groupId") REFERENCES "DanceGroup" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT "TrialAppointment_lessonId_fkey" FOREIGN KEY ("lessonId") REFERENCES "Lesson" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT "TrialAppointment_createdByUserId_fkey" FOREIGN KEY ("createdByUserId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE\n)',
+      'CREATE UNIQUE INDEX "TrialAppointment_externalLeadId_lessonId_key" ON "TrialAppointment"("externalLeadId", "lessonId")',
+      'CREATE INDEX "TrialAppointment_externalLeadId_supersededAt_idx" ON "TrialAppointment"("externalLeadId", "supersededAt")',
+      'CREATE INDEX "TrialAppointment_lessonId_supersededAt_idx" ON "TrialAppointment"("lessonId", "supersededAt")',
+      'CREATE INDEX "TrialAppointment_groupId_supersededAt_idx" ON "TrialAppointment"("groupId", "supersededAt")',
+      'CREATE INDEX "TrialAppointment_createdByUserId_idx" ON "TrialAppointment"("createdByUserId")',
+    ],
+  },
 ];

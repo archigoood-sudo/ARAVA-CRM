@@ -8,6 +8,7 @@ import {
   type LeadStatus,
   type LeadSummary,
   type StudentInput,
+  type TrialAppointmentSummary,
 } from '@arava/shared';
 import {
   Avatar,
@@ -26,7 +27,15 @@ import {
   Textarea,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Inbox, Plus, RefreshCw, Search, UserPlus } from 'lucide-react';
+import {
+  AlertTriangle,
+  CalendarClock,
+  Inbox,
+  Plus,
+  RefreshCw,
+  Search,
+  UserPlus,
+} from 'lucide-react';
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 
@@ -52,6 +61,17 @@ const statusTone: Record<
   TRIAL_BOOKED: 'info',
 };
 
+const trialStateLabels: Record<TrialAppointmentSummary['state'], string> = {
+  ATTENDED: 'Пришёл',
+  CANCELLED: 'Занятие отменено',
+  CLOSED: 'Заявка закрыта',
+  FOLLOW_UP: 'Связаться после пробного',
+  MISSED: 'Не пришёл',
+  SCHEDULED: 'Пробное запланировано',
+  SUBSCRIPTION_PURCHASED: 'Абонемент оформлен',
+  TODAY: 'Пробное сегодня',
+};
+
 export function LeadsPage() {
   const user = useAuthStore((state) => state.user);
   const accessKey = `${user?.id ?? ''}:${user?.role ?? ''}:${[...(user?.branchIds ?? [])].sort().join(',')}`;
@@ -70,6 +90,15 @@ export function LeadsPage() {
   const [allowDuplicate, setAllowDuplicate] = useState(false);
   const [studentError, setStudentError] = useState<string>();
   const [flowError, setFlowError] = useState<Error>();
+  const [selectedLessonId, setSelectedLessonId] = useState('');
+  const lessonRange = useMemo(() => {
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(from);
+    to.setDate(to.getDate() + 60);
+    to.setHours(23, 59, 59, 999);
+    return { dateFrom: from.toISOString(), dateTo: to.toISOString() };
+  }, []);
   const query = useMemo<LeadListQuery>(
     () => ({
       direction: direction || undefined,
@@ -102,8 +131,25 @@ export function LeadsPage() {
     queryFn: () => getDesktopApi().groups.list(getSessionToken(), {}),
     queryKey: queryKeys.groups({}),
   });
+  const trial = useQuery({
+    enabled: Boolean(selectedId) && user?.role !== 'COACH',
+    queryFn: () => getDesktopApi().trials.list(getSessionToken(), { leadId: selectedId }),
+    queryKey: queryKeys.trials(accessKey, { leadId: selectedId }),
+    retry: false,
+  });
+  const trialLessons = useQuery({
+    enabled: Boolean(selectedGroupId) && user?.role !== 'COACH',
+    queryFn: () =>
+      getDesktopApi().lessons.list(getSessionToken(), {
+        ...lessonRange,
+        groupId: selectedGroupId,
+      }),
+    queryKey: queryKeys.lessons({ ...lessonRange, groupId: selectedGroupId }),
+  });
   const invalidate = async (id?: string) => {
     await client.invalidateQueries({ queryKey: ['leads', accessKey] });
+    await client.invalidateQueries({ queryKey: ['trials'] });
+    await client.invalidateQueries({ queryKey: ['dashboard'] });
     if (id) await client.invalidateQueries({ queryKey: queryKeys.lead(id, accessKey) });
   };
   const updateStatus = useMutation({
@@ -124,11 +170,32 @@ export function LeadsPage() {
       return invalidate(updated.id);
     },
   });
+  const scheduleTrial = useMutation({
+    mutationFn: ({
+      groupId,
+      leadId,
+      lessonId,
+    }: {
+      groupId: string;
+      leadId: string;
+      lessonId: string;
+    }) => getDesktopApi().trials.schedule(getSessionToken(), { groupId, leadId, lessonId }),
+    onSuccess: async (saved) => {
+      setSelectedLessonId('');
+      await Promise.all([
+        invalidate(saved.leadId),
+        client.invalidateQueries({ queryKey: ['trials'] }),
+        client.invalidateQueries({ queryKey: ['dashboard'] }),
+        client.invalidateQueries({ queryKey: ['attention'] }),
+      ]);
+    },
+  });
 
   const current = detail.data;
   useEffect(() => {
     setSelectedGroupId(current?.crmGroupId ?? '');
     setAddToGroup(Boolean(current?.crmGroupId));
+    setSelectedLessonId('');
   }, [current?.crmGroupId, current?.id]);
   const selectedGroup = groups.data?.find(({ id }) => id === selectedGroupId);
   const selectableGroups =
@@ -289,12 +356,19 @@ export function LeadsPage() {
           ) : null}
           {current ? (
             <LeadDetailView
-              actionError={flowError ?? updateStatus.error ?? assignGroup.error ?? convert.error}
+              actionError={
+                flowError ??
+                updateStatus.error ??
+                assignGroup.error ??
+                convert.error ??
+                scheduleTrial.error
+              }
               allowDuplicate={allowDuplicate}
               canCreateStudent={!branches.isLoading && (branches.data?.length ?? 0) > 0}
               addToGroup={addToGroup}
               groups={selectableGroups}
               lead={current}
+              lessons={(trialLessons.data ?? []).filter(({ status }) => status !== 'CANCELLED')}
               onAllowDuplicate={() => setAllowDuplicate(true)}
               onCreateStudent={() => setStudentOpen(true)}
               onAddToGroup={setAddToGroup}
@@ -305,6 +379,18 @@ export function LeadsPage() {
               }}
               onLink={(studentId) => convert.mutate({ id: current.id, studentId })}
               onStatus={(value) => updateStatus.mutate({ id: current.id, value })}
+              onScheduleTrial={() => {
+                if (!selectedGroupId || !selectedLessonId) return;
+                scheduleTrial.mutate({
+                  groupId: selectedGroupId,
+                  leadId: current.id,
+                  lessonId: selectedLessonId,
+                });
+              }}
+              onTrialLesson={setSelectedLessonId}
+              scheduledTrial={trial.data?.[0]}
+              selectedLessonId={selectedLessonId}
+              trialPending={scheduleTrial.isPending}
               statusPending={updateStatus.isPending}
               selectedGroupId={selectedGroupId}
             />
@@ -377,14 +463,20 @@ function LeadDetailView({
   canCreateStudent,
   groups,
   lead,
+  lessons,
   onAllowDuplicate,
   onCreateStudent,
   onAddToGroup,
   onGroup,
   onLink,
   onStatus,
+  onScheduleTrial,
+  onTrialLesson,
+  scheduledTrial,
   statusPending,
   selectedGroupId,
+  selectedLessonId,
+  trialPending,
 }: {
   actionError: unknown;
   addToGroup: boolean;
@@ -392,14 +484,20 @@ function LeadDetailView({
   canCreateStudent: boolean;
   groups: { branchName: string; id: string; name: string }[];
   lead: LeadDetail;
+  lessons: { endsAt: string; id: string; startsAt: string }[];
   onAllowDuplicate: () => void;
   onCreateStudent: () => void;
   onAddToGroup: (value: boolean) => void;
   onGroup: (groupId: string) => void;
   onLink: (studentId: string) => void;
   onStatus: (status: LeadStatus) => void;
+  onScheduleTrial: () => void;
+  onTrialLesson: (lessonId: string) => void;
+  scheduledTrial?: TrialAppointmentSummary | undefined;
   statusPending: boolean;
   selectedGroupId: string;
+  selectedLessonId: string;
+  trialPending: boolean;
 }) {
   const converted = Boolean(lead.convertedStudentCrmId);
   return (
@@ -488,6 +586,78 @@ function LeadDetailView({
           ) : null}
         </div>
       ) : null}
+      <div className="mt-5 rounded-2xl border border-border bg-surface p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Пробное занятие
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Конкретное занятие связывает заявку с посещаемостью и последующей продажей.
+            </p>
+          </div>
+          <CalendarClock className="size-5 text-muted-foreground" />
+        </div>
+        {scheduledTrial ? (
+          <div className="mt-3 rounded-xl bg-muted/60 p-3 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <b>{trialStateLabels[scheduledTrial.state]}</b>
+              <span className="text-xs text-muted-foreground">
+                {formatDateTime(scheduledTrial.startsAt)}
+              </span>
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              {scheduledTrial.groupName} · {scheduledTrial.branchName}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link
+                className="inline-flex h-9 items-center justify-center rounded-xl border border-border bg-background px-3 text-sm font-semibold hover:bg-muted"
+                to={`/attendance/${scheduledTrial.lessonId}`}
+              >
+                Открыть посещения
+              </Link>
+              {scheduledTrial.state === 'FOLLOW_UP' && scheduledTrial.studentId ? (
+                <Link
+                  className="inline-flex h-9 items-center justify-center rounded-xl bg-foreground px-3 text-sm font-semibold text-background hover:opacity-90"
+                  to={`/students/${scheduledTrial.studentId}?action=subscription`}
+                >
+                  Оформить абонемент
+                </Link>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <Select
+            aria-label="Занятие для пробного"
+            disabled={!selectedGroupId || trialPending}
+            onChange={(event) => onTrialLesson(event.target.value)}
+            value={selectedLessonId}
+          >
+            <option value="">
+              {selectedGroupId ? 'Выберите дату и занятие' : 'Сначала выберите группу'}
+            </option>
+            {lessons.map((lesson) => (
+              <option key={lesson.id} value={lesson.id}>
+                {formatDateTime(lesson.startsAt)}
+              </option>
+            ))}
+          </Select>
+          <Button
+            disabled={!selectedGroupId || !selectedLessonId || trialPending}
+            onClick={onScheduleTrial}
+            variant="outline"
+          >
+            {scheduledTrial ? 'Перенести пробное' : 'Записать на пробное'}
+          </Button>
+        </div>
+        {selectedGroupId && lessons.length === 0 ? (
+          <p className="mt-2 text-xs text-amber-700">
+            На ближайшие 60 дней нет созданных занятий этой группы. Сначала сформируйте занятия в
+            расписании.
+          </p>
+        ) : null}
+      </div>
       {converted && lead.convertedStudentCrmId ? (
         <div className="mt-5 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-200">
           <b>Ученик уже создан и связан.</b>

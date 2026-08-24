@@ -3887,6 +3887,7 @@ export class IntegrationService {
       this.database.roomClosure.count(),
       this.database.calendarException.count(),
       this.database.webAction.count(),
+      this.database.trialAppointment.count(),
     ]);
     if (checks.some((count) => count > 0)) {
       throw new DomainError(

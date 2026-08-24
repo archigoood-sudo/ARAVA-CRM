@@ -1,4 +1,9 @@
-import type { AttentionItem, ChatSummary, DashboardStats, LeadSummary } from '@arava/shared';
+import type {
+  AttentionItem,
+  ChatSummary,
+  LeadSummary,
+  TrialAppointmentSummary,
+} from '@arava/shared';
 
 export interface DashboardActionItem {
   actionLabel: string;
@@ -44,13 +49,13 @@ export function buildDashboardWorkspace({
   chats,
   leads,
   now,
-  stats,
+  trials,
 }: {
   attention: AttentionItem[];
   chats: ChatSummary[];
   leads: LeadSummary[];
   now: Date;
-  stats: DashboardStats;
+  trials: TrialAppointmentSummary[];
 }): DashboardWorkspace {
   const dayEnd = new Date(now);
   dayEnd.setHours(23, 59, 59, 999);
@@ -101,19 +106,45 @@ export function buildDashboardWorkspace({
   const dueToday = attention
     .filter((item) => item.dueAt && new Date(item.dueAt) <= dayEnd)
     .map(fromAttention);
-  const trialItem: DashboardActionItem[] = stats.trialsToday
-    ? [
-        {
-          actionLabel: 'Открыть посещения',
-          actionRoute: '/attendance',
-          description: `Сегодня ожидается пробных посещений: ${String(stats.trialsToday)}.`,
-          id: 'today:trials',
-          priority: 'YELLOW',
-          title: 'Пробные занятия сегодня',
-        },
-      ]
-    : [];
-  const todayItems = take([...leadItems, ...chatItems, ...trialItem, ...dueToday], 8);
+  const trialItems: DashboardActionItem[] = trials
+    .filter((trial) => {
+      const startsAt = new Date(trial.startsAt);
+      return (
+        trial.state !== 'FOLLOW_UP' &&
+        trial.state !== 'SUBSCRIPTION_PURCHASED' &&
+        trial.state !== 'CLOSED' &&
+        startsAt <= dayEnd &&
+        startsAt >= new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      );
+    })
+    .map((trial) => ({
+      actionLabel: trial.studentId ? 'Открыть посещения' : 'Открыть заявку',
+      actionRoute: trial.studentId
+        ? `/attendance/${trial.lessonId}`
+        : `/leads?leadId=${encodeURIComponent(trial.leadId)}`,
+      description: `${trial.groupName} · ${new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(trial.startsAt))}`,
+      id: `trial:today:${trial.id}`,
+      meta: trial.branchName,
+      priority: trial.state === 'MISSED' ? 'RED' : 'YELLOW',
+      title: `${trial.leadName} · пробное`,
+    }));
+  const followUpItems: DashboardActionItem[] = trials
+    .filter(({ state }) => state === 'FOLLOW_UP')
+    .map((trial) => ({
+      actionLabel: trial.studentId ? 'Оформить абонемент' : 'Открыть заявку',
+      actionRoute: trial.studentId
+        ? `/students/${trial.studentId}?action=subscription`
+        : `/leads?leadId=${encodeURIComponent(trial.leadId)}`,
+      description: `${trial.groupName} · пробное ${new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(new Date(trial.startsAt))}`,
+      id: `trial:follow-up:${trial.id}`,
+      meta: trial.branchName,
+      priority: 'RED',
+      title: `Связаться после пробного: ${trial.leadName}`,
+    }));
+  const todayItems = take(
+    [...followUpItems, ...leadItems, ...chatItems, ...trialItems, ...dueToday],
+    8,
+  );
 
   const upcomingItems = take(
     attention

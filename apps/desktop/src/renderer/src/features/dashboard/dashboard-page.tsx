@@ -99,6 +99,24 @@ export function DashboardPage() {
     refetchOnMount: 'always',
     retry: false,
   });
+  const trials = useQuery({
+    enabled: manager,
+    queryFn: () => {
+      const dateFrom = new Date();
+      dateFrom.setHours(0, 0, 0, 0);
+      const dateTo = new Date(dateFrom);
+      dateTo.setHours(23, 59, 59, 999);
+      return getDesktopApi().trials.list(getSessionToken(), {
+        dateFrom: dateFrom.toISOString(),
+        dateTo: dateTo.toISOString(),
+        includeFollowUp: true,
+      });
+    },
+    queryKey: queryKeys.trials(accessKey, { dashboard: true }),
+    refetchInterval: 30_000,
+    refetchOnMount: 'always',
+    retry: false,
+  });
   const firstName = user?.fullName.trim().split(/\s+/u)[0] ?? '';
   const now = useMemo(() => new Date(), []);
   const currentStats = stats.data ?? EMPTY_STATS;
@@ -109,10 +127,19 @@ export function DashboardPage() {
         chats: chats.data?.conversations ?? [],
         leads: leads.data?.leads ?? [],
         now,
-        stats: currentStats,
+        trials: trials.data ?? [],
       }),
-    [attention.data, chats.data?.conversations, currentStats, leads.data?.leads, now],
+    [attention.data, chats.data?.conversations, leads.data?.leads, now, trials.data],
   );
+  const trialsToday =
+    trials.data?.filter((trial) => {
+      const date = new Date(trial.startsAt);
+      return (
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth() &&
+        date.getDate() === now.getDate()
+      );
+    }).length ?? currentStats.trialsToday;
   const subscriptionAttention =
     attention.data?.filter(({ category }) => category === 'SUBSCRIPTIONS').length ?? 0;
   const paymentProblems =
@@ -120,7 +147,13 @@ export function DashboardPage() {
       ({ category, severity }) => category === 'PAYMENTS' && severity === 'CRITICAL',
     ).length ?? currentStats.problematicPayments;
   const refresh = () => {
-    void Promise.all([stats.refetch(), attention.refetch(), leads.refetch(), chats.refetch()]);
+    void Promise.all([
+      stats.refetch(),
+      attention.refetch(),
+      leads.refetch(),
+      chats.refetch(),
+      trials.refetch(),
+    ]);
   };
 
   return (
@@ -182,7 +215,7 @@ export function DashboardPage() {
               label="Пробных"
               loading={stats.isLoading}
               onClick={() => navigate('/attendance')}
-              value={currentStats.trialsToday}
+              value={trialsToday}
             />
             <TodayCounter
               icon={Inbox}
