@@ -1535,6 +1535,10 @@ export function createIpcHandlers(
                     },
                   },
                 },
+                enrollments: {
+                  select: { id: true },
+                  where: { leftAt: null, status: 'TRIAL' },
+                },
               },
             },
           },
@@ -1575,9 +1579,9 @@ export function createIpcHandlers(
       const now = new Date();
       const expiringBoundary = new Date(now.getTime() + 5 * 86_400_000);
       const managementScope = branchIds ? { branchId: { in: branchIds } } : {};
-      const [expenseToday, cashToday, payrollPendingApproval] =
+      const [expenseToday, cashToday, payrollPendingApproval, problematicPayments] =
         actor.role === 'COACH'
-          ? [{ _sum: { amount: null } }, [], 0]
+          ? [{ _sum: { amount: null } }, [], 0, 0]
           : await Promise.all([
               database.expense.aggregate({
                 _sum: { amount: true },
@@ -1595,6 +1599,12 @@ export function createIpcHandlers(
                 where: {
                   ...(branchIds ? { branchId: { in: branchIds } } : {}),
                   status: 'CALCULATED',
+                },
+              }),
+              database.paymentOperation.count({
+                where: {
+                  ...managementScope,
+                  status: { in: ['FAILED', 'EXPIRED'] },
                 },
               }),
             ]);
@@ -1628,6 +1638,7 @@ export function createIpcHandlers(
         netCashFlow,
         outstandingDebt: financeSummary.outstandingDebt,
         payrollPendingApproval,
+        problematicPayments,
         revenueThisMonth: financeSummary.revenueThisMonth,
         revenueToday: financeSummary.revenueToday,
         students,
@@ -1635,6 +1646,7 @@ export function createIpcHandlers(
           ({ expiresAt }) => expiresAt && expiresAt >= now && expiresAt <= expiringBoundary,
         ).length,
         trialStudents,
+        trialsToday: lessons.reduce((total, lesson) => total + lesson.group.enrollments.length, 0),
         users,
       };
     },

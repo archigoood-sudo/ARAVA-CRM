@@ -1824,6 +1824,7 @@ export interface DashboardStats {
   groupsWithPlaces: number;
   groupsLowOccupancy: number;
   lessonsToday: number;
+  problematicPayments: number;
   lowLessonBalance: number;
   outstandingDebt: number;
   netCashFlow: number;
@@ -1832,6 +1833,7 @@ export interface DashboardStats {
   revenueToday: number;
   students: number;
   trialStudents: number;
+  trialsToday: number;
   users: number;
   subscriptionsExpiringSoon: number;
 }

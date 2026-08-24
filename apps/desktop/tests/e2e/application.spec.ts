@@ -83,7 +83,17 @@ test('вход, создание филиала, ученика и контак�
     await studentDialog.getByRole('button', { name: 'Добавить ученика' }).click();
     await expect(window.getByRole('link', { name: /Соколова Ирина/u })).toBeVisible();
 
-    await window.getByRole('link', { name: /Петрова Мила/u }).click();
+    await window.getByRole('link', { name: 'Главная', exact: true }).click();
+    await expect(window.getByRole('heading', { exact: true, name: 'Сегодня' })).toBeVisible();
+    await expect(window.getByRole('heading', { name: 'Требует внимания' })).toBeVisible();
+    const noSubscriptionTask = window
+      .locator('article')
+      .filter({ hasText: 'У Петрова Мила нет действующего абонемента.' });
+    await expect(noSubscriptionTask).toBeVisible();
+    await noSubscriptionTask.getByRole('button', { name: 'Оформить абонемент' }).click();
+    await expect(window.getByRole('heading', { name: 'Петрова Мила' })).toBeVisible();
+    await window.getByRole('dialog').getByRole('button', { name: 'Отмена' }).click();
+
     await window.getByRole('button', { name: 'Добавить контакт' }).click();
     const contactDialog = window.getByRole('dialog');
     await contactDialog.getByLabel('Имя и фамилия контактного лица').fill('Анна Петрова');
@@ -121,6 +131,11 @@ test('вход, создание филиала, ученика и контак�
     await paymentDialog.getByLabel('Сумма, ₽').fill('3000');
     await paymentDialog.getByRole('button', { name: 'Сохранить платёж' }).click();
     await expect(paymentDialog).not.toBeVisible();
+
+    await window.getByRole('link', { name: 'Главная', exact: true }).click();
+    await expect(
+      window.locator('article').filter({ hasText: 'Петрова Мила: есть задолженность' }),
+    ).toHaveCount(0);
 
     await window.getByRole('link', { name: 'Группы' }).click();
     await window.getByRole('button', { name: 'Создать группу' }).click();

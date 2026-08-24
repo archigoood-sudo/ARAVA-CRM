@@ -25,6 +25,7 @@ describe('operational cache invalidation', () => {
       ['students', 'options'],
       ['student-profile', 'owner', 'student-1'],
       ['global-search', 'Иванов'],
+      ['dashboard', 'stats'],
       ['attention', 'summary'],
     ]);
 
@@ -35,6 +36,7 @@ describe('operational cache invalidation', () => {
       ['students', 'options'],
       ['student-profile', 'owner', 'student-1'],
       ['global-search', 'Иванов'],
+      ['dashboard', 'stats'],
       ['attention', 'summary'],
     ])
       expect(invalidated(client, key)).toBe(true);

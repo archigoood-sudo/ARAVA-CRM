@@ -168,6 +168,41 @@ describe('Sprint 4.2B attention center', () => {
     expect(payment.amount).toBe(4_000);
   });
 
+  it('surfaces failed payment operations and removes the task after resolution', async () => {
+    const { branch, coach, student } = await branchFoundation('Оплата');
+    const operation = await database.paymentOperation.create({
+      data: {
+        amount: 5_000,
+        branchId: branch.id,
+        createdByUserId: coach.id,
+        currency: 'RUB',
+        failureReason: 'Терминал не подтвердил оплату.',
+        idempotencyKey: 'attention-payment-failure',
+        providerType: 'ACQUIRING',
+        purpose: 'Абонемент',
+        status: 'FAILED',
+        studentId: student.id,
+      },
+    });
+
+    let items = await attention.listItems(ownerToken, { category: 'PAYMENTS' });
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        actionRoute: `/students/${student.id}?section=finance`,
+        entityId: operation.id,
+        id: `payment-operation:failed:${operation.id}`,
+        severity: 'CRITICAL',
+      }),
+    );
+
+    await database.paymentOperation.update({
+      data: { status: 'CANCELLED' },
+      where: { id: operation.id },
+    });
+    items = await attention.listItems(ownerToken, { category: 'PAYMENTS' });
+    expect(items.some(({ entityId }) => entityId === operation.id)).toBe(false);
+  });
+
   it('shows serious integration failures only to OWNER', async () => {
     await database.appSetting.createMany({
       data: [

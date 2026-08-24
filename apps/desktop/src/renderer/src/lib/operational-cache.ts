@@ -12,6 +12,7 @@ export async function invalidateStudentIdentityCaches(
     client.invalidateQueries({ queryKey: ['students'] }),
     client.invalidateQueries({ queryKey: ['student-profile'] }),
     invalidateGlobalSearchCache(client),
+    client.invalidateQueries({ queryKey: ['dashboard'] }),
     client.invalidateQueries({ queryKey: ['attention'] }),
     ...(studentId
       ? [client.invalidateQueries({ queryKey: ['groups', 'eligible-for-student', studentId] })]

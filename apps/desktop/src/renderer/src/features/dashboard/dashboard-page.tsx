@@ -1,6 +1,5 @@
-import { formatDate, t, type StudentListQuery, type StudentStatus } from '@arava/shared';
+import { formatDate, t, type DashboardStats } from '@arava/shared';
 import {
-  Avatar,
   AttentionCard,
   Badge,
   Button,
@@ -9,7 +8,6 @@ import {
   CardHeader,
   CardTitle,
   ErrorState,
-  LoadingState,
   Money,
   StatCard,
 } from '@arava/ui';
@@ -17,38 +15,24 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ArrowRight,
   BellRing,
-  Building2,
+  CalendarClock,
   CalendarDays,
+  CircleAlert,
   CreditCard,
-  HandCoins,
-  Landmark,
-  TrendingDown,
-  WalletCards,
+  Inbox,
+  MessageCircle,
   Plus,
-  ShieldCheck,
+  RefreshCw,
+  Sparkles,
   UserRoundCheck,
-  UsersRound,
 } from 'lucide-react';
+import { useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
-
-const recentStudentsQuery: StudentListQuery = {
-  page: 1,
-  pageSize: 5,
-  sortBy: 'createdAt',
-  sortDirection: 'desc',
-};
-
-const statusStyles: Record<StudentStatus, string> = {
-  ACTIVE: '',
-  ARCHIVED: 'bg-muted text-muted-foreground',
-  FROZEN: 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300',
-  LEFT: 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300',
-  TRIAL: 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300',
-};
+import { buildDashboardWorkspace, type DashboardActionItem } from './dashboard-workspace';
 
 function greetingKey(hour: number) {
   if (hour < 5) return 'dashboard.greeting.night' as const;
@@ -57,60 +41,93 @@ function greetingKey(hour: number) {
   return 'dashboard.greeting.evening' as const;
 }
 
+const EMPTY_STATS: DashboardStats = {
+  activeGroups: 0,
+  attendanceMarked: 0,
+  attendanceUnmarked: 0,
+  branches: 0,
+  expectedToday: 0,
+  expensesToday: 0,
+  groupsLowOccupancy: 0,
+  groupsWithPlaces: 0,
+  lessonsToday: 0,
+  lowLessonBalance: 0,
+  netCashFlow: 0,
+  outstandingDebt: 0,
+  payrollPendingApproval: 0,
+  problematicPayments: 0,
+  revenueThisMonth: 0,
+  revenueToday: 0,
+  students: 0,
+  subscriptionsExpiringSoon: 0,
+  trialStudents: 0,
+  trialsToday: 0,
+  users: 0,
+};
+
 export function DashboardPage() {
   const user = useAuthStore((state) => state.user);
   const navigate = useNavigate();
+  const manager = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const accessKey = `${user?.id ?? ''}:${user?.role ?? ''}:${[...(user?.branchIds ?? [])].sort().join(',')}`;
   const stats = useQuery({
     queryFn: () => getDesktopApi().dashboard.stats(getSessionToken()),
-    queryKey: queryKeys.dashboard,
+    queryKey: [...queryKeys.dashboard, accessKey],
+    refetchInterval: 30_000,
+    refetchOnMount: 'always',
   });
   const attention = useQuery({
-    enabled: user?.role === 'OWNER' || user?.role === 'ADMIN',
-    queryFn: () => getDesktopApi().attention.summary(getSessionToken()),
-    queryKey: queryKeys.attentionSummary(user?.id),
+    enabled: manager,
+    queryFn: () => getDesktopApi().attention.list(getSessionToken(), {}),
+    queryKey: queryKeys.attention({ accessKey, dashboard: true }),
+    refetchInterval: 30_000,
+    refetchOnMount: 'always',
   });
-  const recentStudents = useQuery({
-    queryFn: () => getDesktopApi().students.list(getSessionToken(), recentStudentsQuery),
-    queryKey: queryKeys.students(recentStudentsQuery),
+  const leads = useQuery({
+    enabled: manager,
+    queryFn: () => getDesktopApi().leads.list(getSessionToken(), { status: 'NEW' }),
+    queryKey: queryKeys.leads(accessKey, { status: 'NEW' }),
+    refetchInterval: 30_000,
+    refetchOnMount: 'always',
+    retry: false,
+  });
+  const chats = useQuery({
+    enabled: Boolean(user),
+    queryFn: () => getDesktopApi().chats.list(getSessionToken(), { filter: 'UNREAD' }),
+    queryKey: queryKeys.chats(accessKey, { filter: 'UNREAD' }),
+    refetchInterval: 20_000,
+    refetchOnMount: 'always',
+    retry: false,
   });
   const firstName = user?.fullName.trim().split(/\s+/u)[0] ?? '';
-  const now = new Date();
-  const canManageStudents = user?.role !== 'COACH';
-  const canManageBranches = user?.role === 'OWNER' || user?.role === 'ADMIN';
-  const canAccessFinance = user?.role !== 'COACH';
-  const statMetadata = [
-    { icon: UsersRound, key: 'students', label: t('dashboard.stat.students') },
-    { icon: Building2, key: 'branches', label: t('dashboard.stat.activeBranches') },
-    { icon: ShieldCheck, key: 'users', label: t('dashboard.stat.activeUsers') },
-    { icon: UsersRound, key: 'activeGroups', label: t('dashboard.stat.activeGroups') },
-    {
-      icon: UsersRound,
-      key: 'groupsWithPlaces',
-      label: t('dashboard.stat.groupsWithPlaces'),
-    },
-    { icon: CalendarDays, key: 'lessonsToday', label: t('dashboard.stat.lessonsToday') },
-    { icon: UserRoundCheck, key: 'expectedToday', label: t('dashboard.stat.expectedToday') },
-    { icon: ShieldCheck, key: 'attendanceMarked', label: t('dashboard.stat.attendance') },
-    {
-      icon: UserRoundCheck,
-      key: 'attendanceUnmarked',
-      label: t('dashboard.stat.attendanceUnmarked'),
-    },
-  ] as const;
-  const financeMetadata = [
-    { icon: Landmark, key: 'revenueToday', label: t('dashboard.stat.revenueToday') },
-    { icon: TrendingDown, key: 'expensesToday', label: 'Расходы сегодня' },
-    { icon: WalletCards, key: 'netCashFlow', label: 'Чистый денежный поток' },
-    { icon: Landmark, key: 'revenueThisMonth', label: t('dashboard.stat.revenueMonth') },
-    { icon: CreditCard, key: 'outstandingDebt', label: t('dashboard.stat.outstandingDebt') },
-    { icon: HandCoins, key: 'payrollPendingApproval', label: 'Зарплата к утверждению' },
-  ] as const;
+  const now = useMemo(() => new Date(), []);
+  const currentStats = stats.data ?? EMPTY_STATS;
+  const workspace = useMemo(
+    () =>
+      buildDashboardWorkspace({
+        attention: attention.data ?? [],
+        chats: chats.data?.conversations ?? [],
+        leads: leads.data?.leads ?? [],
+        now,
+        stats: currentStats,
+      }),
+    [attention.data, chats.data?.conversations, currentStats, leads.data?.leads, now],
+  );
+  const subscriptionAttention =
+    attention.data?.filter(({ category }) => category === 'SUBSCRIPTIONS').length ?? 0;
+  const paymentProblems =
+    attention.data?.filter(
+      ({ category, severity }) => category === 'PAYMENTS' && severity === 'CRITICAL',
+    ).length ?? currentStats.problematicPayments;
+  const refresh = () => {
+    void Promise.all([stats.refetch(), attention.refetch(), leads.refetch(), chats.refetch()]);
+  };
 
   return (
-    <main className="mx-auto w-full max-w-[1540px] animate-fade-in p-9 pb-14">
-      <header className="mb-8 flex items-end justify-between gap-8">
+    <main className="mx-auto w-full max-w-[1540px] animate-fade-in p-6 pb-12 2xl:p-9">
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-5">
         <div>
-          <p className="mb-2 text-sm font-medium text-muted-foreground">
+          <p className="mb-1.5 text-sm font-medium text-muted-foreground">
             {t('dashboard.datePrefix', {
               date: formatDate(now, { day: 'numeric', month: 'long', weekday: 'long' }),
             })}
@@ -118,14 +135,23 @@ export function DashboardPage() {
           <h2 className="text-4xl font-semibold tracking-[-0.045em]">
             {t(greetingKey(now.getHours()), { name: firstName })}
           </h2>
-          <p className="mt-2.5 text-base text-muted-foreground">{t('dashboard.subtitle')}</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Всё важное для рабочего дня — в одном месте.
+          </p>
         </div>
-        {canManageStudents ? (
-          <Button onClick={() => navigate('/students')}>
-            <Plus className="size-4" />
-            {t('dashboard.action.addStudent')}
+        <div className="flex gap-2">
+          <Button aria-label="Обновить рабочий день" onClick={refresh} variant="outline">
+            <RefreshCw
+              className={`size-4 ${stats.isFetching || attention.isFetching ? 'animate-spin' : ''}`}
+            />
+            Обновить
           </Button>
-        ) : null}
+          {manager ? (
+            <Button onClick={() => navigate('/students')}>
+              <Plus className="size-4" /> Добавить ученика
+            </Button>
+          ) : null}
+        </div>
       </header>
 
       {stats.isError ? (
@@ -138,258 +164,193 @@ export function DashboardPage() {
           />
         </Card>
       ) : (
-        <section aria-label={t('nav.dashboard')} className="grid grid-cols-3 gap-4">
-          {statMetadata.map(({ icon, key, label }) => (
-            <StatCard
-              icon={icon}
-              key={key}
-              label={label}
+        <section aria-label="Сегодня">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-xl font-semibold tracking-tight">Сегодня</h3>
+            <span className="text-xs text-muted-foreground">Обновляется автоматически</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <TodayCounter
+              icon={CalendarDays}
+              label="Занятий"
               loading={stats.isLoading}
-              value={stats.data?.[key] ?? 0}
+              onClick={() => navigate('/schedule')}
+              value={currentStats.lessonsToday}
             />
-          ))}
-          {canAccessFinance
-            ? financeMetadata.map(({ icon, key, label }) => (
-                <StatCard
-                  icon={icon}
-                  key={key}
-                  label={label}
-                  loading={stats.isLoading}
-                  value={<Money amount={stats.data?.[key] ?? 0} />}
-                />
-              ))
-            : null}
-          <StatCard
-            icon={CreditCard}
-            label={t('dashboard.stat.subscriptionsExpiring')}
-            loading={stats.isLoading}
-            value={stats.data?.subscriptionsExpiringSoon ?? 0}
-          />
-          <StatCard
-            icon={UsersRound}
-            label="Группы с низкой заполняемостью"
-            loading={stats.isLoading}
-            value={stats.data?.groupsLowOccupancy ?? 0}
-          />
-          <StatCard
-            icon={CreditCard}
-            label={t('dashboard.stat.lowBalance')}
-            loading={stats.isLoading}
-            value={stats.data?.lowLessonBalance ?? 0}
-          />
+            <TodayCounter
+              icon={Sparkles}
+              label="Пробных"
+              loading={stats.isLoading}
+              onClick={() => navigate('/attendance')}
+              value={currentStats.trialsToday}
+            />
+            <TodayCounter
+              icon={Inbox}
+              label="Новых заявок"
+              loading={leads.isLoading}
+              onClick={() => navigate('/leads')}
+              value={leads.data?.newCount ?? 0}
+            />
+            <TodayCounter
+              icon={MessageCircle}
+              label="Непрочитанных"
+              loading={chats.isLoading}
+              onClick={() => navigate('/chats')}
+              value={chats.data?.totalUnread ?? 0}
+            />
+            <TodayCounter
+              icon={CreditCard}
+              label="Абонементы"
+              loading={attention.isLoading}
+              onClick={() => navigate('/attention?category=SUBSCRIPTIONS')}
+              tone={subscriptionAttention ? 'warning' : 'neutral'}
+              value={subscriptionAttention}
+            />
+            <TodayCounter
+              icon={CircleAlert}
+              label="Проблемы оплат"
+              loading={attention.isLoading}
+              onClick={() => navigate('/attention?category=PAYMENTS')}
+              tone={paymentProblems ? 'critical' : 'neutral'}
+              value={paymentProblems}
+            />
+          </div>
         </section>
       )}
 
-      {canAccessFinance && attention.data?.total ? (
-        <Card className="mt-5 overflow-hidden">
-          <CardHeader className="flex-row items-center justify-between space-y-0">
-            <div>
-              <div className="flex items-center gap-2">
-                <CardTitle>Требует внимания</CardTitle>
-                <Badge className="bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
-                  {attention.data.total}
-                </Badge>
-                {attention.data.criticalCount ? (
-                  <Badge className="bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300">
-                    Критично: {attention.data.criticalCount}
-                  </Badge>
-                ) : null}
-              </div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Главные операционные задачи на сегодня.
-              </p>
-            </div>
-            <Button onClick={() => navigate('/attention')} size="small" variant="ghost">
-              Показать всё <ArrowRight className="size-4" />
-            </Button>
-          </CardHeader>
-          <CardContent className="px-5 pb-5">
-            <div className="mb-4 flex flex-wrap gap-2">
-              {attention.data.categories.map(({ category, count }) => (
-                <button
-                  className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:border-neutral-400 hover:bg-surface"
-                  key={category}
-                  onClick={() => navigate(`/attention?category=${category}`)}
-                  type="button"
-                >
-                  {attentionCategoryLabel(category)} · {count}
-                </button>
-              ))}
-            </div>
-            <div className="grid gap-3 lg:grid-cols-2">
-              {attention.data.items.map((item) => (
-                <AttentionCard
-                  action={
-                    <Button
-                      aria-label={item.actionLabel}
-                      onClick={() => navigate(item.actionRoute)}
-                      size="small"
-                      variant="ghost"
-                    >
-                      <ArrowRight className="size-4" />
-                    </Button>
-                  }
-                  description={item.description}
-                  icon={<BellRing className="size-4" />}
-                  key={item.id}
-                  meta={item.branchName}
-                  title={item.title}
-                  tone={
-                    item.severity === 'CRITICAL'
-                      ? 'critical'
-                      : item.severity === 'INFO'
-                        ? 'info'
-                        : 'warning'
-                  }
-                />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+      {manager ? (
+        <section className="mt-5 grid items-start gap-5 xl:grid-cols-2">
+          <ActionQueue
+            empty="Срочных проблем нет."
+            icon={BellRing}
+            items={workspace.attention}
+            onNavigate={navigate}
+            title="Требует внимания"
+          />
+          <ActionQueue
+            empty="На сегодня обязательных действий нет."
+            icon={UserRoundCheck}
+            items={workspace.today}
+            onNavigate={navigate}
+            title="Нужно сделать сегодня"
+          />
+        </section>
       ) : null}
 
-      <section className="mt-5 grid grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)] gap-5">
-        <Card className="overflow-hidden">
-          <CardHeader className="flex-row items-center justify-between space-y-0">
-            <div>
-              <CardTitle>{t('dashboard.recentStudents')}</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {t('dashboard.recentStudentsDescription')}
-              </p>
-            </div>
-            <Button onClick={() => navigate('/students')} size="small" variant="ghost">
-              {t('dashboard.action.students')} <ArrowRight className="size-4" />
-            </Button>
+      <section className="mt-5 grid items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+        <ActionQueue
+          empty="На ближайшие семь дней отдельных предупреждений нет."
+          icon={CalendarClock}
+          items={workspace.upcoming}
+          onNavigate={navigate}
+          title="Ближайшее"
+        />
+        <Card>
+          <CardHeader>
+            <CardTitle>Ход дня</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Актуальные операционные показатели.
+            </p>
           </CardHeader>
-          <CardContent className="px-3 pb-3">
-            {recentStudents.isLoading ? <LoadingState label={t('student.loading')} /> : null}
-            {recentStudents.data?.items.length === 0 ? (
-              <p className="px-3 py-12 text-center text-sm text-muted-foreground">
-                {t('dashboard.recentStudentsEmpty')}
-              </p>
+          <CardContent className="grid grid-cols-2 gap-3">
+            <CompactMetric label="Ожидается учеников" value={currentStats.expectedToday} />
+            <CompactMetric label="Отмечено посещений" value={currentStats.attendanceMarked} />
+            <CompactMetric label="Не отмечено" value={currentStats.attendanceUnmarked} />
+            {manager ? (
+              <CompactMetric
+                label="Выручка сегодня"
+                value={<Money amount={currentStats.revenueToday} />}
+              />
             ) : null}
-            {recentStudents.data?.items.map((student) => {
-              const name = `${student.lastName} ${student.firstName}`;
-              return (
-                <button
-                  className="flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition hover:bg-muted/70"
-                  key={student.id}
-                  onClick={() => navigate(`/students/${student.id}`)}
-                  type="button"
-                >
-                  <Avatar name={name} size="small" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{name}</span>
-                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                      {student.branchName}
-                    </span>
-                  </span>
-                  <Badge className={statusStyles[student.status]}>
-                    {t(`status.${student.status}`)}
-                  </Badge>
-                </button>
-              );
-            })}
           </CardContent>
         </Card>
-
-        <div className="space-y-5">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('dashboard.quickActions')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <QuickAction
-                icon={UsersRound}
-                label={t('dashboard.action.students')}
-                onClick={() => navigate('/students')}
-              />
-              <QuickAction
-                icon={UserRoundCheck}
-                label={t('dashboard.action.attendance')}
-                onClick={() => navigate('/schedule')}
-              />
-              <QuickAction
-                icon={CalendarDays}
-                label={t('nav.schedule')}
-                onClick={() => navigate('/schedule')}
-              />
-              {canManageBranches ? (
-                <QuickAction
-                  icon={Building2}
-                  label={t('dashboard.action.branches')}
-                  onClick={() => navigate('/branches')}
-                />
-              ) : null}
-              {canAccessFinance ? (
-                <>
-                  <QuickAction
-                    icon={CreditCard}
-                    label={t('nav.tariffs')}
-                    onClick={() => navigate('/tariffs')}
-                  />
-                  <QuickAction
-                    icon={Landmark}
-                    label={t('nav.finance')}
-                    onClick={() => navigate('/finance')}
-                  />
-                  <QuickAction
-                    icon={TrendingDown}
-                    label="Добавить расход"
-                    onClick={() => navigate('/expenses')}
-                  />
-                  <QuickAction
-                    icon={HandCoins}
-                    label="Рассчитать зарплату"
-                    onClick={() => navigate('/payroll')}
-                  />
-                </>
-              ) : null}
-            </CardContent>
-          </Card>
-        </div>
       </section>
     </main>
   );
 }
 
-function attentionCategoryLabel(category: string): string {
+function TodayCounter({
+  icon,
+  label,
+  loading,
+  onClick,
+  tone = 'neutral',
+  value,
+}: {
+  icon: typeof CalendarDays;
+  label: string;
+  loading: boolean;
+  onClick: () => void;
+  tone?: 'critical' | 'neutral' | 'warning';
+  value: number;
+}) {
+  const toneClass =
+    tone === 'critical'
+      ? 'border-red-200 bg-red-50/70 dark:border-red-500/20 dark:bg-red-500/5'
+      : tone === 'warning'
+        ? 'border-amber-200 bg-amber-50/70 dark:border-amber-500/20 dark:bg-amber-500/5'
+        : '';
   return (
-    {
-      ATTENDANCE: 'Посещаемость',
-      CARDS: 'Карты',
-      PAYMENTS: 'Оплаты',
-      PAYROLL: 'Зарплата',
-      ROOMS: 'Залы',
-      SCHEDULE: 'Расписание',
-      STUDENTS: 'Ученики',
-      SUBSCRIPTIONS: 'Абонементы',
-      SUBSTITUTIONS: 'Замены',
-      BACKUPS: 'Резервные копии',
-    }[category] ?? category
+    <button className="min-w-0 text-left" onClick={onClick} type="button">
+      <StatCard className={toneClass} icon={icon} label={label} loading={loading} value={value} />
+    </button>
   );
 }
 
-function QuickAction({
+function ActionQueue({
+  empty,
   icon: Icon,
-  label,
-  onClick,
+  items,
+  onNavigate,
+  title,
 }: {
-  icon: typeof UsersRound;
-  label: string;
-  onClick: () => void;
+  empty: string;
+  icon: typeof BellRing;
+  items: DashboardActionItem[];
+  onNavigate: (route: string) => void;
+  title: string;
 }) {
   return (
-    <button
-      className="flex w-full items-center gap-3 rounded-2xl border border-border bg-background px-4 py-3.5 text-left text-sm font-semibold transition hover:-translate-y-0.5 hover:border-neutral-400 hover:bg-surface"
-      onClick={onClick}
-      type="button"
-    >
-      <span className="flex size-9 items-center justify-center rounded-xl bg-accent-soft text-accent-foreground dark:bg-accent/10 dark:text-accent">
-        <Icon className="size-4" />
-      </span>
-      {label}
-      <ArrowRight className="ml-auto size-4 text-muted-foreground" />
-    </button>
+    <Card className="overflow-hidden">
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <div className="flex items-center gap-2">
+          <Icon className="size-5" />
+          <CardTitle>{title}</CardTitle>
+          {items.length ? <Badge>{items.length}</Badge> : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3 px-5 pb-5">
+        {!items.length ? (
+          <p className="rounded-2xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+            {empty}
+          </p>
+        ) : null}
+        {items.map((item) => (
+          <AttentionCard
+            action={
+              <Button onClick={() => onNavigate(item.actionRoute)} size="small" variant="ghost">
+                {item.actionLabel} <ArrowRight className="size-4" />
+              </Button>
+            }
+            description={item.description}
+            key={item.id}
+            meta={item.meta}
+            title={item.title}
+            tone={
+              item.priority === 'RED' ? 'critical' : item.priority === 'YELLOW' ? 'warning' : 'info'
+            }
+          />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CompactMetric({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="rounded-2xl bg-muted/60 p-4">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <div className="mt-2 text-2xl font-semibold tracking-tight">{value}</div>
+    </div>
   );
 }

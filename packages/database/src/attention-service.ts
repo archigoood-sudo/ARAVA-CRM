@@ -209,6 +209,19 @@ export class AttentionService {
           })
         : [];
     const backupSetting = new Map(backupSettings.map(({ key, value }) => [key, value]));
+    const failedPaymentOperations = await this.database.paymentOperation.findMany({
+      include: {
+        branch: { select: { name: true } },
+        student: { select: { firstName: true, lastName: true, middleName: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 25,
+      where: {
+        ...branchScope,
+        status: { in: ['FAILED', 'EXPIRED'] },
+        updatedAt: { gte: historyStart },
+      },
+    });
 
     const items: AttentionItem[] = [];
     const add = (item: AttentionItem) => items.push(item);
@@ -390,6 +403,26 @@ export class AttentionService {
         id: `student:archived-active:${student.id}`,
         severity: 'CRITICAL',
         title: 'Архивный ученик в активных данных',
+      });
+
+    for (const operation of failedPaymentOperations)
+      add({
+        actionLabel: 'Открыть оплату',
+        actionRoute: `/students/${operation.studentId}?section=finance`,
+        branchId: operation.branchId,
+        branchName: operation.branch.name,
+        category: 'PAYMENTS',
+        description:
+          operation.failureReason ??
+          (operation.status === 'EXPIRED'
+            ? 'Время ожидания оплаты истекло.'
+            : 'Операция оплаты завершилась ошибкой.'),
+        entityId: operation.id,
+        entityType: 'PaymentOperation',
+        id: `payment-operation:${operation.status.toLowerCase()}:${operation.id}`,
+        occurredAt: operation.updatedAt.toISOString(),
+        severity: 'CRITICAL',
+        title: `${fullName(operation.student)}: проблема оплаты`,
       });
 
     for (const lesson of lessons)

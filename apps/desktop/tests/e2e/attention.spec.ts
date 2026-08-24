@@ -145,7 +145,7 @@ test('центр внимания ведёт к действию, автораз
     });
 
     await page.reload();
-    await expect(page.getByText('Главные операционные задачи на сегодня.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Требует внимания' })).toBeVisible();
     await page.getByRole('link', { name: /Требует внимания/u }).click();
     await expect(page.getByRole('heading', { level: 2, name: 'Требует внимания' })).toBeVisible();
     await page.getByLabel('Категория').selectOption('PAYMENTS');

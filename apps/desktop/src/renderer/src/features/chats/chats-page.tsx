@@ -14,7 +14,7 @@ import {
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ImageOff, MessageCircle, RefreshCw, Search, Send, UsersRound } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
@@ -34,7 +34,8 @@ export function ChatsPage() {
   const client = useQueryClient();
   const [filter, setFilter] = useState<ChatFilter>('ALL');
   const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState('');
+  const [searchParameters] = useSearchParams();
+  const [selectedId, setSelectedId] = useState(searchParameters.get('conversationId') ?? '');
   const query = useMemo(() => ({ filter, search: search.trim() || undefined }), [filter, search]);
   const chats = useQuery({
     queryFn: () => getDesktopApi().chats.list(getSessionToken(), query),
