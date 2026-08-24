@@ -54,7 +54,7 @@ class ActionApi extends IntegrationApiClient {
   }
   override claimAction(_base: string, _device: string, _token: string, id: string) {
     this.calls.push(`claim:${id}`);
-    return Promise.resolve();
+    return Promise.resolve('CLAIMED' as const);
   }
   override completeAction(
     _base: string,
@@ -165,7 +165,7 @@ describe('WEB subscription freeze actions', () => {
       },
     ];
     await integration.processPending();
-    const action = (await integration.listWebActions(ownerToken))[0];
+    const action = (await integration.listWebActions(ownerToken)).actions[0];
     if (!action) throw new Error('Заявка не была сохранена.');
     return action;
   }
@@ -256,7 +256,10 @@ describe('WEB subscription freeze actions', () => {
     await database.userBranch.create({ data: { branchId: otherBranch.id, userId: adminUser.id } });
     const admin = await application.login({ email: 'admin-web-action@arava.local', password });
     const action = await receive('admin-denied');
-    expect(await integration.listWebActions(admin.token)).toEqual([]);
+    expect(await integration.listWebActions(admin.token)).toEqual({
+      actions: [],
+      hasAutomaticProcessingWarning: false,
+    });
     await expect(integration.approveWebAction(admin.token, action.id, { days: 1 })).rejects.toThrow(
       'Нет доступа к филиалу',
     );

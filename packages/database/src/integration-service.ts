@@ -36,6 +36,7 @@ import type {
   SbpProviderHealth,
   SubscriptionFreezeInput,
   WebActionSummary,
+  WebActionListResult,
 } from '@arava/shared';
 import type { Gender, SyncOperation } from '@prisma/client';
 import { Buffer } from 'node:buffer';
@@ -238,6 +239,7 @@ class IntegrationApiError extends Error {
     readonly errorCode: string,
     readonly retryable: boolean,
     message: string,
+    readonly httpStatus?: number,
   ) {
     super(message);
     this.name = 'IntegrationApiError';
@@ -874,6 +876,7 @@ export class IntegrationApiClient {
     method: 'DELETE' | 'GET' | 'PATCH' | 'POST' | 'PUT',
     body?: unknown,
     context?: CrmChatRequestContext,
+    allowEmptySuccess = false,
   ): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -900,6 +903,7 @@ export class IntegrationApiClient {
       try {
         payload = await response.json();
       } catch {
+        if (response.ok && allowEmptySuccess) return undefined;
         throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверный ответ.');
       }
       if (!response.ok) {
@@ -910,6 +914,7 @@ export class IntegrationApiClient {
           code,
           retryable,
           optionalString(bodyRecord.message) ?? 'Сервер отклонил запрос синхронизации.',
+          response.status,
         );
       }
       return payload;
@@ -2067,18 +2072,47 @@ export class IntegrationApiClient {
     });
   }
 
-  async claimAction(baseUrl: string, deviceId: string, token: string, id: string): Promise<void> {
-    await this.request(
-      baseUrl,
-      `actions/${encodeURIComponent(id)}/claim`,
-      deviceId,
-      token,
-      'POST',
-      {
-        apiVersion: INTEGRATION_API_VERSION,
+  async claimAction(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    id: string,
+  ): Promise<'ALREADY_COMPLETED' | 'CLAIMED' | undefined> {
+    try {
+      const payload = await this.request(
+        baseUrl,
+        `actions/${encodeURIComponent(id)}/claim`,
         deviceId,
-      },
-    );
+        token,
+        'POST',
+        {
+          apiVersion: INTEGRATION_API_VERSION,
+          deviceId,
+        },
+        undefined,
+        true,
+      );
+      const status = isRecord(payload) ? optionalString(payload.status) : undefined;
+      if (status && ['COMPLETED', 'SUCCEEDED', 'REJECTED', 'FAILED'].includes(status))
+        return 'ALREADY_COMPLETED';
+      return 'CLAIMED';
+    } catch (error) {
+      if (error instanceof IntegrationApiError) {
+        if (
+          ['ACTION_ALREADY_CLAIMED_BY_DEVICE', 'ALREADY_CLAIMED_BY_DEVICE'].includes(
+            error.errorCode,
+          )
+        )
+          return 'CLAIMED';
+        if (
+          ['ACTION_ALREADY_COMPLETED', 'ALREADY_COMPLETED', 'ACTION_COMPLETED'].includes(
+            error.errorCode,
+          )
+        )
+          return 'ALREADY_COMPLETED';
+      }
+      throw error;
+    }
   }
 
   async completeAction(
@@ -2100,6 +2134,8 @@ export class IntegrationApiClient {
         ...(detail ? { result: { message: detail.slice(0, 300) } } : {}),
         status,
       },
+      undefined,
+      true,
     );
   }
 }
@@ -2416,14 +2452,9 @@ export class IntegrationService {
     return actor;
   }
 
-  async listWebActions(token: string): Promise<WebActionSummary[]> {
+  async listWebActions(token: string): Promise<WebActionListResult> {
     const actor = await this.assertActionActor(token);
-    try {
-      const connection = await this.integrationConnection();
-      await this.pullWebActions(connection.baseUrl, connection.deviceId, connection.token);
-    } catch {
-      // Locally persisted actions remain available while the website is offline.
-    }
+    await this.processPending();
     const branchIds = accessibleBranchIds(actor);
     const accessibleStudentIds = branchIds
       ? (
@@ -2445,13 +2476,22 @@ export class IntegrationService {
       },
     });
     const summaries = await Promise.all(rows.map(({ id }) => this.actionSummary(id, actor)));
-    return summaries;
+    const failedAutomaticActions = await this.database.webAction.count({
+      where: {
+        actionType: { in: ['ADMIN_STUDENT_UPDATE_REQUEST', 'ADMIN_TRAINER_UPDATE_REQUEST'] },
+        status: 'PENDING',
+      },
+    });
+    return {
+      actions: summaries,
+      hasAutomaticProcessingWarning: failedAutomaticActions > 0,
+    };
   }
 
-  private async claimLocalAction(id: string): Promise<void> {
+  private async claimLocalAction(id: string): Promise<boolean> {
     const action = await this.database.webAction.findUnique({ where: { id } });
     if (!action) throw new DomainError('NOT_FOUND', 'Заявка с сайта не найдена.');
-    if (action.status === 'CLAIMED') return;
+    if (action.status === 'CLAIMED') return true;
     if (action.status !== 'PENDING') throw new DomainError('CONFLICT', 'Заявка уже обработана.');
     const claimed = await this.database.webAction.updateMany({
       data: { status: 'CLAIMING' },
@@ -2460,21 +2500,71 @@ export class IntegrationService {
     if (claimed.count !== 1) throw new DomainError('CONFLICT', 'Заявка уже обрабатывается.');
     try {
       const connection = await this.integrationConnection();
-      await this.api.claimAction(
+      const claimResult = await this.api.claimAction(
         connection.baseUrl,
         connection.deviceId,
         connection.token,
         action.externalActionId,
       );
+      if (claimResult === 'ALREADY_COMPLETED') {
+        await this.database.webAction.update({
+          data: {
+            processedAt: this.now(),
+            safeResultJson: JSON.stringify({ status: 'ALREADY_COMPLETED' }),
+            status: 'SUCCEEDED',
+          },
+          where: { id },
+        });
+        await this.log(
+          {
+            entityId: action.externalActionId,
+            entityType: action.actionType,
+            id: action.id,
+          },
+          'WEB_ACTION_CLAIM',
+          'IDEMPOTENT',
+          1,
+          'ACTION_ALREADY_COMPLETED',
+          'Сервер уже завершил обработку запроса.',
+        );
+        return false;
+      }
       await this.database.webAction.update({
         data: { claimedAt: this.now(), status: 'CLAIMED' },
         where: { id },
       });
+      return true;
     } catch (error) {
       await this.database.webAction.updateMany({
         data: { status: 'PENDING' },
         where: { id, status: 'CLAIMING' },
       });
+      const apiError =
+        error instanceof IntegrationApiError
+          ? error
+          : new IntegrationApiError(
+              'WEB_ACTION_CLAIM_FAILED',
+              true,
+              'Сервер не подтвердил получение запроса.',
+            );
+      const attemptCount =
+        (await this.database.syncLog.count({
+          where: { operation: 'WEB_ACTION_CLAIM', outboxId: action.id },
+        })) + 1;
+      await this.log(
+        {
+          entityId: action.externalActionId,
+          entityType: action.actionType,
+          id: action.id,
+        },
+        'WEB_ACTION_CLAIM',
+        'RETRY',
+        attemptCount,
+        apiError.errorCode,
+        apiError.httpStatus
+          ? `HTTP ${String(apiError.httpStatus)} · сервер не подтвердил получение запроса.`
+          : 'Сервер не подтвердил получение запроса.',
+      );
       throw error;
     }
   }
@@ -2537,7 +2627,7 @@ export class IntegrationService {
       await this.acknowledgeWebAction(id);
       return this.actionSummary(id, actor);
     }
-    await this.claimLocalAction(id);
+    if (!(await this.claimLocalAction(id))) return this.actionSummary(id, actor);
     await this.finance.freezeSubscription(token, summary.subscriptionId, input, {
       id,
       processedByUserId: actor.id,
@@ -2553,7 +2643,7 @@ export class IntegrationService {
       throw new DomainError('CONFLICT', 'Изменение данных клиента обрабатывается автоматически.');
     const current = await this.database.webAction.findUniqueOrThrow({ where: { id } });
     if (current.status !== 'REJECTED_ACK_PENDING') {
-      await this.claimLocalAction(id);
+      if (!(await this.claimLocalAction(id))) return this.actionSummary(id, actor);
       const rejectedReason = reason?.trim().slice(0, 300);
       await this.database.webAction.update({
         data: {
@@ -4213,7 +4303,7 @@ export class IntegrationService {
     });
     for (const action of actions) {
       try {
-        if (action.status === 'PENDING') await this.claimLocalAction(action.id);
+        if (action.status === 'PENDING' && !(await this.claimLocalAction(action.id))) continue;
         const payload = action.payloadJson
           ? (JSON.parse(action.payloadJson) as unknown)
           : undefined;
@@ -4278,7 +4368,7 @@ export class IntegrationService {
     });
     for (const action of actions) {
       try {
-        if (action.status === 'PENDING') await this.claimLocalAction(action.id);
+        if (action.status === 'PENDING' && !(await this.claimLocalAction(action.id))) continue;
         const payload = action.payloadJson
           ? (JSON.parse(action.payloadJson) as unknown)
           : undefined;
@@ -4342,7 +4432,7 @@ export class IntegrationService {
     });
     for (const action of actions) {
       try {
-        if (action.status === 'PENDING') await this.claimLocalAction(action.id);
+        if (action.status === 'PENDING' && !(await this.claimLocalAction(action.id))) continue;
         const changes = this.validatedAdminStudentChanges(action.payloadJson);
         if (!action.crmStudentId)
           throw new DomainError('VALIDATION', 'Идентификатор ученика не указан.');
@@ -4372,7 +4462,7 @@ export class IntegrationService {
     });
     for (const action of actions) {
       try {
-        if (action.status === 'PENDING') await this.claimLocalAction(action.id);
+        if (action.status === 'PENDING' && !(await this.claimLocalAction(action.id))) continue;
         const changes = this.validatedAdminTrainerChanges(action.payloadJson);
         if (!action.crmTrainerId)
           throw new DomainError('VALIDATION', 'Идентификатор тренера не указан.');

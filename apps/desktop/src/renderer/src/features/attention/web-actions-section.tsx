@@ -66,7 +66,7 @@ export function WebActionsSection() {
       await refresh();
     },
   });
-  const visibleActions = actions.data;
+  const visibleActions = actions.data?.actions;
 
   return (
     <Card className="mt-7" data-testid="web-actions-section">
@@ -86,6 +86,11 @@ export function WebActionsSection() {
           </Button>
         </div>
         {actions.isLoading ? <LoadingState label="Получаем заявки…" /> : null}
+        {actions.data?.hasAutomaticProcessingWarning ? (
+          <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Не удалось обработать часть запросов. Повторим автоматически.
+          </p>
+        ) : null}
         {!actions.isLoading && !visibleActions?.length ? (
           <EmptyState
             icon={Globe2}

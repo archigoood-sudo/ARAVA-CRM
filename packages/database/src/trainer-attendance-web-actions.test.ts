@@ -55,7 +55,9 @@ class ActionApi extends IntegrationApiClient {
 
   override claimAction(_base: string, _device: string, _token: string, id: string) {
     this.calls.push(`claim:${id}`);
-    return this.failClaim ? Promise.reject(new Error('claim failed')) : Promise.resolve();
+    return this.failClaim
+      ? Promise.reject(new Error('claim failed'))
+      : Promise.resolve('CLAIMED' as const);
   }
 
   override completeAction(

@@ -104,6 +104,7 @@ class ActionApi extends IntegrationApiClient {
     this.calls.push(`claim:${id}`);
     await this.onClaim?.();
     if (this.failClaim) throw new Error('claim failed');
+    return 'CLAIMED' as const;
   }
 
   override completeAction(
@@ -249,7 +250,7 @@ describe('CLIENT_PROFILE_UPDATE_REQUEST web actions', () => {
         expect.objectContaining({ entityId: studentId, entityType: 'STUDENT_IDENTITY' }),
       ]),
     );
-    const summary = (await integration.listWebActions(ownerToken)).find(
+    const summary = (await integration.listWebActions(ownerToken)).actions.find(
       ({ externalActionId }) => externalActionId === 'phone',
     );
     expect(summary).toMatchObject({

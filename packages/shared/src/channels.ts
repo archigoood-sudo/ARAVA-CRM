@@ -2044,6 +2044,11 @@ export interface ClientProfileWebActionSummary extends WebActionSummaryBase {
 
 export type WebActionSummary = SubscriptionFreezeWebActionSummary | ClientProfileWebActionSummary;
 
+export interface WebActionListResult {
+  actions: WebActionSummary[];
+  hasAutomaticProcessingWarning: boolean;
+}
+
 export interface IntegrationPairInput extends IntegrationSettingsInput {
   pairingCode: string;
 }
@@ -2444,7 +2449,7 @@ export interface AravaDesktopApi {
       id: string,
       input: SubscriptionFreezeInput,
     ) => Promise<WebActionSummary>;
-    list: (token: string) => Promise<WebActionSummary[]>;
+    list: (token: string) => Promise<WebActionListResult>;
     reject: (token: string, id: string, reason?: string) => Promise<WebActionSummary>;
   };
   leads: {

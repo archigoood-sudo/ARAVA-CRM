@@ -90,6 +90,35 @@ it('strictly allowlists WEB admin update payloads', async () => {
   );
 });
 
+it('accepts the WEB claim 204 response without treating it as a transport failure', async () => {
+  const api = new IntegrationApiClient(() =>
+    Promise.resolve({
+      json: () => Promise.reject(new Error('204 has no response body')),
+      ok: true,
+      status: 204,
+    }),
+  );
+
+  await expect(
+    api.claimAction('https://web.example', 'device', 'token', 'admin-action'),
+  ).resolves.toBe('CLAIMED');
+});
+
+it('preserves a safe HTTP status and code when WEB rejects claim', async () => {
+  const api = new IntegrationApiClient(() =>
+    Promise.resolve({
+      json: () =>
+        Promise.resolve({ code: 'ACTION_CLAIM_CONFLICT', message: 'private server detail' }),
+      ok: false,
+      status: 409,
+    }),
+  );
+
+  await expect(
+    api.claimAction('https://web.example', 'device', 'token', 'admin-action'),
+  ).rejects.toMatchObject({ errorCode: 'ACTION_CLAIM_CONFLICT', httpStatus: 409 });
+});
+
 class Credentials implements IntegrationCredentialStore {
   clearToken() {
     return Promise.resolve();
@@ -136,7 +165,9 @@ class ActionApi extends IntegrationApiClient {
 
   override claimAction(_base: string, _device: string, _token: string, id: string) {
     this.calls.push(`claim:${id}`);
-    return this.failClaim ? Promise.reject(new Error('claim failed')) : Promise.resolve();
+    return this.failClaim
+      ? Promise.reject(new Error('claim failed'))
+      : Promise.resolve('CLAIMED' as const);
   }
 
   override completeAction(
@@ -184,6 +215,7 @@ describe('WEB admin student and trainer update actions', () => {
   let database: DatabaseClient;
   let directory: string;
   let integration: IntegrationService;
+  let ownerToken: string;
   let studentId: string;
   let trainerId: string;
   let groupId: string;
@@ -195,7 +227,7 @@ describe('WEB admin student and trainer update actions', () => {
     database = createDatabaseClient(toSqliteUrl(join(directory, 'test.db')));
     await initializeDatabase(database);
     application = new ApplicationService(database);
-    const ownerToken = (
+    ownerToken = (
       await application.login({ email: INITIAL_OWNER_EMAIL, password: INITIAL_OWNER_PASSWORD })
     ).token;
     await application.changePassword(ownerToken, {
@@ -350,9 +382,60 @@ describe('WEB admin student and trainer update actions', () => {
     expect((await database.user.findUniqueOrThrow({ where: { id: trainerId } })).fullName).toBe(
       'Старое Имя',
     );
+    const failedAction = await database.webAction.findUniqueOrThrow({
+      where: { externalActionId: 'failed-claim' },
+    });
+    expect(failedAction).toMatchObject({ completionAttemptCount: 0, status: 'PENDING' });
     expect(
-      await database.webAction.findUniqueOrThrow({ where: { externalActionId: 'failed-claim' } }),
-    ).toMatchObject({ status: 'PENDING' });
+      await database.syncLog.findFirstOrThrow({
+        where: { operation: 'WEB_ACTION_CLAIM', outboxId: failedAction.id },
+      }),
+    ).toMatchObject({
+      entityId: 'failed-claim',
+      entityType: 'ADMIN_TRAINER_UPDATE_REQUEST',
+      errorCode: 'WEB_ACTION_CLAIM_FAILED',
+      result: 'RETRY',
+    });
+  });
+
+  it('refresh fetches and processes automatic actions, then retries a failed claim once', async () => {
+    api.actions = [
+      {
+        actionType: 'ADMIN_TRAINER_UPDATE_REQUEST',
+        adminTrainerChanges: { displayName: 'После повтора' },
+        adminTrainerPayloadValid: true,
+        crmTrainerId: trainerId,
+        externalActionId: 'refresh-retry',
+        receivedAt: '2030-08-22T09:59:00.000Z',
+      },
+    ];
+    api.failClaim = true;
+
+    await expect(integration.listWebActions(ownerToken)).resolves.toEqual({
+      actions: [],
+      hasAutomaticProcessingWarning: true,
+    });
+    expect((await database.user.findUniqueOrThrow({ where: { id: trainerId } })).fullName).toBe(
+      'Старое Имя',
+    );
+    expect(
+      await database.webAction.findUniqueOrThrow({ where: { externalActionId: 'refresh-retry' } }),
+    ).toMatchObject({ completionAttemptCount: 0, status: 'PENDING' });
+
+    api.failClaim = false;
+    await expect(integration.listWebActions(ownerToken)).resolves.toEqual({
+      actions: [],
+      hasAutomaticProcessingWarning: false,
+    });
+    expect((await database.user.findUniqueOrThrow({ where: { id: trainerId } })).fullName).toBe(
+      'После повтора',
+    );
+    expect(api.calls.filter((call) => call === 'claim:refresh-retry')).toHaveLength(2);
+    expect(
+      await database.auditLog.count({
+        where: { action: 'USER_UPDATED', detail: { contains: 'WEB_ADMIN_TRAINER_UPDATE' } },
+      }),
+    ).toBe(1);
   });
 
   it('applies a duplicate once and retries only the failed completion acknowledgement', async () => {
