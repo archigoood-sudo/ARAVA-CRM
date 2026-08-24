@@ -2085,10 +2085,7 @@ export class IntegrationApiClient {
         deviceId,
         token,
         'POST',
-        {
-          apiVersion: INTEGRATION_API_VERSION,
-          deviceId,
-        },
+        undefined,
         undefined,
         true,
       );

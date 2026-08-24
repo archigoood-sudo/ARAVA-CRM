@@ -90,18 +90,32 @@ it('strictly allowlists WEB admin update payloads', async () => {
   );
 });
 
-it('accepts the WEB claim 204 response without treating it as a transport failure', async () => {
-  const api = new IntegrationApiClient(() =>
-    Promise.resolve({
+it('sends the canonical empty WEB claim request and accepts a 204 response', async () => {
+  let requestUrl = '';
+  let requestInit: RequestInit | undefined;
+  const api = new IntegrationApiClient((url, init) => {
+    requestUrl = url;
+    requestInit = init;
+    return Promise.resolve({
       json: () => Promise.reject(new Error('204 has no response body')),
       ok: true,
       status: 204,
-    }),
-  );
+    });
+  });
 
   await expect(
     api.claimAction('https://web.example', 'device', 'token', 'admin-action'),
   ).resolves.toBe('CLAIMED');
+  expect(requestUrl).toBe('https://web.example/api/integration/v1/actions/admin-action/claim');
+  expect(requestInit).toMatchObject({ method: 'POST' });
+  expect(requestInit?.body).toBeUndefined();
+  expect(requestInit?.headers).toMatchObject({
+    Authorization: 'Bearer token',
+    'X-ARAVA-API-Version': 'v1',
+    'X-ARAVA-Device-ID': 'device',
+  });
+  expect(JSON.stringify(requestInit)).not.toContain('apiVersion');
+  expect(JSON.stringify(requestInit)).not.toContain('deviceId');
 });
 
 it('preserves a safe HTTP status and code when WEB rejects claim', async () => {
