@@ -12,9 +12,10 @@ import {
   assertDirectAttendancePayment,
   availableSubscriptionPaymentAmount,
   createCanonicalPayment,
+  createCanonicalSubscription,
 } from './finance-service';
 import type { DatabaseClient } from './index';
-import { assertBranchAccess, assertPermission } from './permissions';
+import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
 
@@ -46,6 +47,29 @@ function fullName(person: {
   return [person.lastName, person.firstName, person.middleName].filter(Boolean).join(' ');
 }
 
+function dateOnly(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year ?? 0, (month ?? 1) - 1, day ?? 1);
+}
+
+function endOfDate(value: string): Date {
+  const result = dateOnly(value);
+  result.setHours(23, 59, 59, 999);
+  return result;
+}
+
+function localDate(value: Date): string {
+  const year = String(value.getFullYear());
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function optionalText(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed?.length ? trimmed : null;
+}
+
 function summary(operation: OperationRecord): PaymentOperationSummary {
   return {
     amount: operation.amount,
@@ -62,6 +86,23 @@ function summary(operation: OperationRecord): PaymentOperationSummary {
     providerType: operation.providerType,
     ...(operation.providerOperationId
       ? { providerOperationId: operation.providerOperationId }
+      : {}),
+    ...(operation.saleFinalizationAttempts > 0
+      ? { saleFinalizationAttempts: operation.saleFinalizationAttempts }
+      : {}),
+    ...(operation.saleFinalizationError
+      ? { saleFinalizationError: operation.saleFinalizationError }
+      : {}),
+    ...(operation.saleTariffId && operation.saleStartsAt && operation.salePrice !== null
+      ? {
+          saleIntent: {
+            ...(operation.saleExpiresAt ? { expiresAt: localDate(operation.saleExpiresAt) } : {}),
+            ...(operation.saleNotes ? { notes: operation.saleNotes } : {}),
+            salePrice: operation.salePrice,
+            startsAt: localDate(operation.saleStartsAt),
+            tariffId: operation.saleTariffId,
+          },
+        }
       : {}),
     purpose: operation.purpose,
     status: operation.status,
@@ -83,7 +124,14 @@ function sameRequest(operation: OperationRecord, input: PaymentOperationCreateIn
     operation.studentId === input.studentId &&
     operation.subscriptionId === (input.subscriptionId ?? null) &&
     operation.attendanceLessonId === (input.attendanceLessonId ?? null) &&
-    operation.attendanceTariffId === (input.attendanceTariffId ?? null)
+    operation.attendanceTariffId === (input.attendanceTariffId ?? null) &&
+    operation.saleTariffId === (input.saleIntent?.tariffId ?? null) &&
+    operation.salePrice === (input.saleIntent?.salePrice ?? null) &&
+    (operation.saleStartsAt ? localDate(operation.saleStartsAt) : undefined) ===
+      input.saleIntent?.startsAt &&
+    (operation.saleExpiresAt ? localDate(operation.saleExpiresAt) : undefined) ===
+      input.saleIntent?.expiresAt &&
+    operation.saleNotes === optionalText(input.saleIntent?.notes)
   );
 }
 
@@ -135,6 +183,28 @@ export class PaymentOperationService {
         'VALIDATION',
         'Оплата посещения не может одновременно оплачивать абонемент.',
       );
+    if (input.saleIntent && (input.subscriptionId || input.attendanceLessonId))
+      throw new DomainError(
+        'VALIDATION',
+        'Продажа нового абонемента не может одновременно оплачивать существующий абонемент или посещение.',
+      );
+    if (input.saleIntent) {
+      const tariff = await this.database.tariff.findUnique({
+        where: { id: input.saleIntent.tariffId },
+      });
+      if (!tariff || !tariff.isActive || tariff.archivedAt)
+        throw new DomainError('VALIDATION', 'Выбранный тариф недоступен.');
+      const saleBranchId = tariff.branchId ?? student.branchId;
+      if (
+        saleBranchId !== input.branchId ||
+        (tariff.branchId && tariff.branchId !== student.branchId)
+      )
+        throw new DomainError('VALIDATION', 'Тариф относится к другому филиалу.');
+      if (input.saleIntent.salePrice !== tariff.price)
+        throw new DomainError('VALIDATION', 'Стоимость тарифа изменилась. Выберите тариф заново.');
+      if (input.amount > input.saleIntent.salePrice)
+        throw new DomainError('VALIDATION', 'Сумма оплаты превышает стоимость абонемента.');
+    }
     try {
       const created = await this.database.$transaction(async (transaction) => {
         if (input.subscriptionId) {
@@ -169,6 +239,13 @@ export class PaymentOperationService {
             subscriptionId: input.subscriptionId ?? null,
             attendanceLessonId: input.attendanceLessonId ?? null,
             attendanceTariffId: input.attendanceTariffId ?? null,
+            saleExpiresAt: input.saleIntent?.expiresAt
+              ? endOfDate(input.saleIntent.expiresAt)
+              : null,
+            saleNotes: optionalText(input.saleIntent?.notes),
+            salePrice: input.saleIntent?.salePrice ?? null,
+            saleStartsAt: input.saleIntent ? dateOnly(input.saleIntent.startsAt) : null,
+            saleTariffId: input.saleIntent?.tariffId ?? null,
           },
         });
         if (input.attendanceLessonId) {
@@ -247,6 +324,24 @@ export class PaymentOperationService {
     ).map(summary);
   }
 
+  async listRecoverableSales(token: string): Promise<PaymentOperationSummary[]> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'payments:manage');
+    const branchIds = accessibleBranchIds(actor);
+    return (
+      await this.database.paymentOperation.findMany({
+        include: operationInclude,
+        orderBy: { updatedAt: 'asc' },
+        take: 50,
+        where: {
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+          saleTariffId: { not: null },
+          status: { in: ['WAITING_FOR_PAYMENT', 'PROCESSING'] },
+        },
+      })
+    ).map(summary);
+  }
+
   async transition(
     token: string,
     id: string,
@@ -303,51 +398,92 @@ export class PaymentOperationService {
       permissions: permissionsForRole('ADMIN'),
       role: 'ADMIN',
     };
-    await this.database.$transaction(async (transaction) => {
-      const locked = await transaction.paymentOperation.findUniqueOrThrow({ where: { id } });
-      if (locked.status === 'SUCCEEDED') return;
-      if (!['WAITING_FOR_PAYMENT', 'PROCESSING'].includes(locked.status))
-        throw new DomainError('CONFLICT', 'Операция не может быть завершена в текущем состоянии.');
-      const payment = await createCanonicalPayment(transaction, actor, {
-        amount: locked.amount,
-        branchId: locked.branchId,
-        comment: locked.purpose,
-        externalReference:
-          completion.providerResultId ?? completion.providerOperationId ?? locked.id,
-        paidAt: new Date().toISOString(),
-        paymentMethod: completion.paymentMethod,
-        studentId: locked.studentId,
-        ...(locked.subscriptionId ? { subscriptionId: locked.subscriptionId } : {}),
-        ...(locked.subscriptionId ? { subscriptionPaymentOperationId: locked.id } : {}),
-        ...(locked.attendanceLessonId
-          ? {
-              attendanceLessonId: locked.attendanceLessonId,
-              attendancePaymentOperationId: locked.id,
-              attendanceTariffId: locked.attendanceTariffId ?? undefined,
-            }
-          : {}),
+    try {
+      await this.database.$transaction(async (transaction) => {
+        const locked = await transaction.paymentOperation.findUniqueOrThrow({ where: { id } });
+        if (locked.status === 'SUCCEEDED') return;
+        if (!['WAITING_FOR_PAYMENT', 'PROCESSING'].includes(locked.status))
+          throw new DomainError(
+            'CONFLICT',
+            'Операция не может быть завершена в текущем состоянии.',
+          );
+        let subscriptionId = locked.subscriptionId;
+        if (locked.saleTariffId && locked.saleStartsAt && locked.salePrice !== null) {
+          const subscription = await createCanonicalSubscription(transaction, actor, {
+            ...(locked.saleExpiresAt ? { expiresAt: localDate(locked.saleExpiresAt) } : {}),
+            idempotencyKey: locked.idempotencyKey,
+            ...(locked.saleNotes ? { notes: locked.saleNotes } : {}),
+            salePrice: locked.salePrice,
+            startsAt: localDate(locked.saleStartsAt),
+            studentId: locked.studentId,
+            tariffId: locked.saleTariffId,
+          });
+          subscriptionId = subscription.id;
+        }
+        const payment = await createCanonicalPayment(transaction, actor, {
+          amount: locked.amount,
+          branchId: locked.branchId,
+          comment: locked.purpose,
+          externalReference:
+            completion.providerResultId ?? completion.providerOperationId ?? locked.id,
+          paidAt: new Date().toISOString(),
+          paymentMethod: completion.paymentMethod,
+          studentId: locked.studentId,
+          ...(subscriptionId ? { subscriptionId } : {}),
+          ...(subscriptionId ? { subscriptionPaymentOperationId: locked.id } : {}),
+          ...(locked.attendanceLessonId
+            ? {
+                attendanceLessonId: locked.attendanceLessonId,
+                attendancePaymentOperationId: locked.id,
+                attendanceTariffId: locked.attendanceTariffId ?? undefined,
+              }
+            : {}),
+        });
+        const completedAt = new Date();
+        const updated = await transaction.paymentOperation.updateMany({
+          data: {
+            completedAt,
+            failureReason: null,
+            paymentId: payment.id,
+            providerOperationId: completion.providerOperationId ?? null,
+            saleFinalizationError: null,
+            saleFinalizedAt: locked.saleTariffId ? completedAt : null,
+            status: 'SUCCEEDED',
+            subscriptionId,
+          },
+          where: { id, status: locked.status },
+        });
+        if (updated.count !== 1)
+          throw new DomainError('CONFLICT', 'Операция уже завершается на другом устройстве.');
+        await transaction.auditLog.create({
+          data: {
+            action: 'PAYMENT_OPERATION_SUCCEEDED',
+            actorUserId: locked.createdByUserId,
+            detail: JSON.stringify({
+              amount: locked.amount,
+              paymentId: payment.id,
+              subscriptionId,
+            }),
+            entityId: id,
+            entityType: 'PaymentOperation',
+          },
+        });
       });
-      const completedAt = new Date();
-      await transaction.paymentOperation.update({
+    } catch (error) {
+      const safeMessage =
+        error instanceof DomainError
+          ? error.message.slice(0, 500)
+          : 'Оплата получена — не удалось завершить выдачу абонемента.';
+      await this.database.paymentOperation.updateMany({
         data: {
-          completedAt,
-          failureReason: null,
-          paymentId: payment.id,
-          providerOperationId: completion.providerOperationId ?? null,
-          status: 'SUCCEEDED',
+          providerOperationId: completion.providerOperationId ?? current.providerOperationId,
+          saleFinalizationAttempts: { increment: 1 },
+          saleFinalizationError: safeMessage,
         },
-        where: { id, status: locked.status },
+        where: { id, status: { in: ['WAITING_FOR_PAYMENT', 'PROCESSING'] } },
       });
-      await transaction.auditLog.create({
-        data: {
-          action: 'PAYMENT_OPERATION_SUCCEEDED',
-          actorUserId: locked.createdByUserId,
-          detail: JSON.stringify({ amount: locked.amount, paymentId: payment.id }),
-          entityId: id,
-          entityType: 'PaymentOperation',
-        },
-      });
-    });
+      throw error;
+    }
     return summary(await this.requireOperation(id));
   }
 

@@ -99,7 +99,7 @@ test('платёжная операция становится одним под
         studentId: student.id,
         subscriptionId: subscription.id,
       });
-      return { operationId: operation.id, studentId: student.id, token };
+      return { operationId: operation.id, studentId: student.id, tariffId: tariff.id, token };
     });
 
     await page.getByRole('button', { name: 'Поиск по приложению' }).click();
@@ -211,6 +211,36 @@ test('платёжная операция становится одним под
       expect.objectContaining({ amount: 10_000 }),
     ]);
 
+    const subscriptionsBeforeSale = await page.evaluate(async ({ studentId, token }) => {
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      return (await api.subscriptions.listStudent(token, studentId)).subscriptions.length;
+    }, context);
+    await page.getByRole('button', { name: 'Продать абонемент' }).click();
+    const saleDialog = page.getByRole('dialog');
+    await saleDialog.getByLabel('Тариф').selectOption(context.tariffId);
+    await saleDialog.getByRole('button', { name: 'Продолжить к оплате' }).click();
+    const unifiedPayment = page.getByRole('dialog');
+    await unifiedPayment.getByRole('button', { name: 'Оплата картой', exact: true }).click();
+    await unifiedPayment.getByRole('button', { name: 'Начать оплату картой' }).click();
+    await expect(page.getByText('Ожидаем оплату картой на кассе aQsi')).toBeVisible();
+    expect(
+      await page.evaluate(async ({ studentId, token }) => {
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        return (await api.subscriptions.listStudent(token, studentId)).subscriptions.length;
+      }, context),
+    ).toBe(subscriptionsBeforeSale);
+    await expect(page.getByText('Оплата подтверждена. Абонемент выдан')).toBeVisible({
+      timeout: 15_000,
+    });
+    await unifiedPayment.getByRole('button', { name: 'Готово' }).click();
+    await expect(page.getByText('Абонемент выдан', { exact: true })).toBeVisible();
+    const completedSale = await page.evaluate(async ({ studentId, token }) => {
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      return await api.subscriptions.listStudent(token, studentId);
+    }, context);
+    expect(completedSale.subscriptions).toHaveLength(subscriptionsBeforeSale + 1);
+    expect(completedSale.subscriptions[0]).toMatchObject({ debt: 0, paymentStatus: 'PAID' });
+
     await page.getByRole('link', { name: 'Главная', exact: true }).click();
     await page.getByRole('button', { name: 'Поиск по приложению' }).click();
     search = page.getByRole('region', { name: 'Глобальный поиск' });
@@ -218,7 +248,7 @@ test('платёжная операция становится одним под
     await search.getByRole('button', { name: /Оплатина E2E Анна/u }).click();
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Оплатина E2E Анна' })).toBeVisible();
-    await expect(page.getByText('Оплачено')).toHaveCount(3);
+    await expect(page.getByText('Оплачено')).toHaveCount(4);
   } finally {
     await application.close();
   }

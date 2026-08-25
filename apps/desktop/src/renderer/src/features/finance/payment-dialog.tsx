@@ -6,6 +6,7 @@ import {
   type BranchSummary,
   type PaymentInput,
   type StudentSummary,
+  type SubscriptionCreateInput,
   type SubscriptionSummary,
 } from '@arava/shared';
 import { Button, Dialog, Input, Label, Select, Textarea } from '@arava/ui';
@@ -49,6 +50,7 @@ export function PaymentDialog({
   students,
   subscriptions = [],
   subscriptionPayment,
+  subscriptionSale,
 }: {
   attendancePayment?:
     { amount: number; lessonId: string; tariffId: string; tariffName: string } | undefined;
@@ -63,6 +65,14 @@ export function PaymentDialog({
   subscriptions?: SubscriptionSummary[] | undefined;
   subscriptionPayment?:
     | { amount: number; fixedAmount?: boolean; subscriptionId: string; tariffName: string }
+    | undefined;
+  subscriptionSale?:
+    | {
+        amount: number;
+        fixedAmount?: boolean;
+        input: SubscriptionCreateInput;
+        tariffName: string;
+      }
     | undefined;
 }) {
   const {
@@ -95,7 +105,11 @@ export function PaymentDialog({
   useLayoutEffect(() => {
     if (!open) return;
     reset({
-      amount: (attendancePayment?.amount ?? subscriptionPayment?.amount ?? 0) / 100,
+      amount:
+        (attendancePayment?.amount ??
+          subscriptionPayment?.amount ??
+          subscriptionSale?.amount ??
+          0) / 100,
       attendanceLessonId: attendancePayment?.lessonId,
       attendanceTariffId: attendancePayment?.tariffId,
       branchId: fixedStudent?.branchId ?? branches[0]?.id ?? '',
@@ -121,7 +135,15 @@ export function PaymentDialog({
         );
       })
       .catch(() => setSbpAvailable(false));
-  }, [attendancePayment, branches, fixedStudent, open, reset, subscriptionPayment]);
+  }, [
+    attendancePayment,
+    branches,
+    fixedStudent,
+    open,
+    reset,
+    subscriptionPayment,
+    subscriptionSale,
+  ]);
 
   useEffect(() => {
     if (
@@ -174,6 +196,19 @@ export function PaymentDialog({
               : 'Оплата через СБП',
         studentId: values.studentId,
         ...(values.subscriptionId ? { subscriptionId: values.subscriptionId } : {}),
+        ...(subscriptionSale
+          ? {
+              saleIntent: {
+                ...(subscriptionSale.input.expiresAt
+                  ? { expiresAt: subscriptionSale.input.expiresAt }
+                  : {}),
+                ...(subscriptionSale.input.notes ? { notes: subscriptionSale.input.notes } : {}),
+                salePrice: subscriptionSale.input.salePrice,
+                startsAt: subscriptionSale.input.startsAt,
+                tariffId: subscriptionSale.input.tariffId,
+              },
+            }
+          : {}),
         ...(attendancePayment
           ? {
               attendanceLessonId: attendancePayment.lessonId,
@@ -357,11 +392,11 @@ export function PaymentDialog({
               <input type="hidden" {...register('attendanceLessonId')} />
               <input type="hidden" {...register('attendanceTariffId')} />
             </div>
-          ) : subscriptionPayment ? (
+          ) : subscriptionPayment || subscriptionSale ? (
             <div className="space-y-2">
               <Label>Абонемент</Label>
               <div className="rounded-xl border border-border px-3 py-2 text-sm">
-                {subscriptionPayment.tariffName}
+                {subscriptionPayment?.tariffName ?? subscriptionSale?.tariffName}
               </div>
               <input type="hidden" {...register('subscriptionId')} />
             </div>
@@ -387,8 +422,18 @@ export function PaymentDialog({
             <Input
               id="payment-amount"
               min="0.01"
-              max={subscriptionPayment ? subscriptionPayment.amount / 100 : undefined}
-              readOnly={Boolean(attendancePayment ?? subscriptionPayment?.fixedAmount)}
+              max={
+                subscriptionPayment
+                  ? subscriptionPayment.amount / 100
+                  : subscriptionSale
+                    ? subscriptionSale.amount / 100
+                    : undefined
+              }
+              readOnly={Boolean(
+                attendancePayment ??
+                subscriptionPayment?.fixedAmount ??
+                subscriptionSale?.fixedAmount,
+              )}
               step="0.01"
               type="number"
               {...register('amount', { valueAsNumber: true })}
@@ -452,7 +497,11 @@ export function PaymentDialog({
               </>
             ) : sbpPayment?.status === 'SUCCEEDED' ? (
               <div className="space-y-2">
-                <p className="font-semibold text-green-700">Оплата подтверждена</p>
+                <p className="font-semibold text-green-700">
+                  {subscriptionSale
+                    ? 'Оплата подтверждена. Абонемент выдан'
+                    : 'Оплата подтверждена'}
+                </p>
                 <p className="text-sm font-medium">
                   {sbpPayment.fiscalReceipt?.status === 'SUCCEEDED'
                     ? 'Чек сформирован'
@@ -487,7 +536,11 @@ export function PaymentDialog({
               </div>
             ) : sbpPayment && ['FAILED', 'CANCELLED', 'EXPIRED'].includes(sbpPayment.status) ? (
               <>
-                <p className="font-semibold text-red-700">Оплата не завершена</p>
+                <p className="font-semibold text-red-700">
+                  {subscriptionSale
+                    ? 'Оплата не прошла. Абонемент не выдан.'
+                    : 'Оплата не завершена'}
+                </p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {sbpPayment.error?.message ??
                     'Создайте новую попытку и попросите клиента повторить оплату.'}

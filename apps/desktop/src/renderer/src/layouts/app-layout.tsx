@@ -1,13 +1,15 @@
 import { Bell, ChevronsUpDown, LogOut, PanelLeftClose } from 'lucide-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
 import { Sidebar } from '../components/sidebar';
 import { GlobalCardScanner } from '../components/global-card-scanner';
 import { GlobalSearch } from '../components/global-search';
 import { IntegrationStatusIndicator } from '../components/integration-status-indicator';
 import { t } from '@arava/shared';
-import { useAuthStore } from '../stores/auth-store';
+import { getDesktopApi } from '../lib/desktop-api';
+import { getSessionToken, useAuthStore } from '../stores/auth-store';
 
 const pageTitles: Record<string, { eyebrow: string; title: string }> = {
   '/about': { eyebrow: t('page.about.eyebrow'), title: t('nav.about') },
@@ -35,6 +37,35 @@ export function AppLayout() {
       : location.pathname.startsWith('/trainers/')
         ? { eyebrow: 'Команда ARAVA', title: 'Профиль тренера' }
         : (pageTitles[location.pathname] ?? pageTitles['/dashboard']);
+
+  useEffect(() => {
+    if (!user || user.role === 'COACH') return;
+    let stopped = false;
+    const recover = async () => {
+      try {
+        const recovered =
+          await getDesktopApi().paymentOperations.recoverPendingSales(getSessionToken());
+        if (!stopped && recovered.length > 0) {
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['subscriptions'] }),
+            queryClient.invalidateQueries({ queryKey: ['payment-operations'] }),
+            queryClient.invalidateQueries({ queryKey: ['finance'] }),
+            queryClient.invalidateQueries({ queryKey: ['attention'] }),
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+          ]);
+        }
+      } catch {
+        // The operation stays retryable and is surfaced by the payment/attention UI.
+      }
+    };
+    const startup = window.setTimeout(() => void recover(), 5_000);
+    const interval = window.setInterval(() => void recover(), 60_000);
+    return () => {
+      stopped = true;
+      window.clearTimeout(startup);
+      window.clearInterval(interval);
+    };
+  }, [queryClient, user]);
 
   const handleLogout = async () => {
     await logout();

@@ -539,6 +539,7 @@ export const tariffListQuerySchema: z.ZodType<TariffListQuery> = z.object({
 export const initialPaymentInputSchema = z.object({
   amount: positiveMoneyAmount,
   comment: optionalText(1000),
+  externalReference: optionalText(200),
   paidAt: isoDateTime,
   paymentMethod: paymentMethodSchema,
 });
@@ -546,6 +547,7 @@ export const initialPaymentInputSchema = z.object({
 export const subscriptionCreateInputSchema: z.ZodType<SubscriptionCreateInput> = z
   .object({
     expiresAt: isoDate.optional(),
+    idempotencyKey: z.string().trim().min(8).max(200).optional(),
     initialPayment: initialPaymentInputSchema.optional(),
     notes: optionalText(2000),
     salePrice: moneyAmount,
@@ -556,6 +558,19 @@ export const subscriptionCreateInputSchema: z.ZodType<SubscriptionCreateInput> =
   .refine((input) => !input.initialPayment || input.initialPayment.amount <= input.salePrice, {
     message: t('validation.payment.exceedsSale'),
     path: ['initialPayment', 'amount'],
+  })
+  .refine((input) => !input.expiresAt || input.expiresAt >= input.startsAt, {
+    message: 'Дата окончания не может быть раньше даты начала.',
+    path: ['expiresAt'],
+  });
+
+const subscriptionSaleIntentSchema = z
+  .object({
+    expiresAt: isoDate.optional(),
+    notes: optionalText(2000),
+    salePrice: moneyAmount,
+    startsAt: isoDate,
+    tariffId: z.string().min(1).max(100),
   })
   .refine((input) => !input.expiresAt || input.expiresAt >= input.startsAt, {
     message: 'Дата окончания не может быть раньше даты начала.',
@@ -614,6 +629,7 @@ export const paymentOperationCreateSchema: z.ZodType<PaymentOperationCreateInput
   subscriptionId: optionalIdentifier,
   attendanceLessonId: optionalIdentifier,
   attendanceTariffId: optionalIdentifier,
+  saleIntent: subscriptionSaleIntentSchema.optional(),
 });
 
 export const paymentOperationReasonSchema: z.ZodType<PaymentOperationReasonInput> = z.object({

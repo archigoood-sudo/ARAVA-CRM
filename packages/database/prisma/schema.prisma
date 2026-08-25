@@ -767,6 +767,7 @@ model Subscription {
   freezeEndsAt    DateTime?
   frozenDaysUsed  Int                  @default(0)
   salePrice       Int
+  saleIdempotencyKey String?             @unique
   notes           String?
   createdByUserId String
   createdByUser   User                 @relation("SubscriptionCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
@@ -834,6 +835,14 @@ model PaymentOperation {
   payment             Payment?               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   attendanceLessonId  String?
   attendanceTariffId  String?
+  saleTariffId        String?
+  saleStartsAt        DateTime?
+  saleExpiresAt       DateTime?
+  salePrice           Int?
+  saleNotes           String?
+  saleFinalizationError String?
+  saleFinalizationAttempts Int            @default(0)
+  saleFinalizedAt     DateTime?
   completedAt         DateTime?
   failureReason       String?
   cancellationReason  String?

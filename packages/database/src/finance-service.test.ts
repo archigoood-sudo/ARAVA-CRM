@@ -247,6 +247,44 @@ describe('Sprint 3 finance service', () => {
     expect((await finance.getTariff(ownerToken, tariff.id)).price).toBe(82_000);
   });
 
+  it('creates a manual sale, payment and cash entry atomically and idempotently', async () => {
+    const { branch, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 8,
+      name: 'Единая продажа',
+      price: 33_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    });
+    const input = {
+      idempotencyKey: 'manual-unified-sale-1',
+      initialPayment: {
+        amount: 20_000,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH' as const,
+      },
+      salePrice: tariff.price,
+      startsAt: dateString(new Date()),
+      studentId: student.id,
+      tariffId: tariff.id,
+    };
+    const first = await finance.createSubscription(ownerToken, input);
+    const repeated = await finance.createSubscription(ownerToken, input);
+    expect(repeated.id).toBe(first.id);
+    expect(first).toMatchObject({
+      debt: 13_000,
+      paidAmount: 20_000,
+      paymentStatus: 'PARTIALLY_PAID',
+      salePrice: 33_000,
+    });
+    expect(await database.subscription.count({ where: { studentId: student.id } })).toBe(1);
+    expect(await database.payment.count({ where: { subscriptionId: first.id } })).toBe(1);
+    expect(await database.cashTransaction.count({ where: { sourceType: 'PAYMENT' } })).toBe(1);
+  });
+
   it('derives paid and refunded subscription payment states from canonical payments', async () => {
     const { branch, student } = await foundation();
     const tariff = await finance.createTariff(ownerToken, {

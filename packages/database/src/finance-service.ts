@@ -363,6 +363,132 @@ export async function createCanonicalPayment(
   return created;
 }
 
+export async function createCanonicalSubscription(
+  client: Prisma.TransactionClient,
+  actor: AuthenticatedUser,
+  input: SubscriptionCreateInput,
+): Promise<{ id: string }> {
+  assertPermission(actor, 'subscriptions:manage');
+  if (!Number.isInteger(input.salePrice) || input.salePrice < 0)
+    throw new DomainError('VALIDATION', t('validation.money'));
+  if (
+    input.initialPayment &&
+    (!Number.isInteger(input.initialPayment.amount) ||
+      input.initialPayment.amount <= 0 ||
+      input.initialPayment.amount > input.salePrice)
+  )
+    throw new DomainError('VALIDATION', t('validation.payment.exceedsSale'));
+  if (input.idempotencyKey) {
+    const existing = await client.subscription.findUnique({
+      where: { saleIdempotencyKey: input.idempotencyKey },
+    });
+    if (existing) {
+      assertBranchAccess(actor, existing.branchId);
+      const requestedExpiresAt = input.expiresAt ? endOfDate(input.expiresAt) : null;
+      if (
+        existing.studentId !== input.studentId ||
+        existing.tariffId !== input.tariffId ||
+        existing.salePrice !== input.salePrice ||
+        existing.startsAt.getTime() !== dateOnly(input.startsAt).getTime() ||
+        (input.expiresAt && existing.expiresAt?.getTime() !== requestedExpiresAt?.getTime())
+      )
+        throw new DomainError('CONFLICT', 'Ключ продажи уже использован для другого абонемента.');
+      return { id: existing.id };
+    }
+  }
+  const student = await client.student.findUnique({ where: { id: input.studentId } });
+  if (!student) throw new DomainError('NOT_FOUND', t('domain.notFound.student'));
+  if (student.archivedAt)
+    throw new DomainError('VALIDATION', t('domain.validation.studentArchived'));
+  const tariff = await client.tariff.findUnique({ where: { id: input.tariffId } });
+  if (!tariff) throw new DomainError('NOT_FOUND', t('domain.notFound.tariff'));
+  if (!tariff.isActive || tariff.archivedAt)
+    throw new DomainError('VALIDATION', t('domain.validation.tariffArchived'));
+  const branchId = tariff.branchId ?? student.branchId;
+  if (tariff.branchId && tariff.branchId !== student.branchId)
+    throw new DomainError('VALIDATION', t('domain.validation.tariffBranch'));
+  assertBranchAccess(actor, branchId);
+  const startsAt = dateOnly(input.startsAt);
+  const lessonLimit = tariff.type === 'UNLIMITED' ? null : tariff.lessonCount;
+  const expiresAt = input.expiresAt
+    ? endOfDate(input.expiresAt)
+    : tariff.validityDays
+      ? addDays(startsAt, tariff.validityDays)
+      : null;
+  if (expiresAt && expiresAt < startsAt)
+    throw new DomainError('VALIDATION', 'Дата окончания не может быть раньше даты начала.');
+  const subscription = await client.subscription.create({
+    data: {
+      branchId,
+      createdByUserId: actor.id,
+      expiresAt,
+      lessonLimit,
+      notes: optionalValue(input.notes),
+      purchasedAt: new Date(),
+      saleIdempotencyKey: input.idempotencyKey ?? null,
+      salePrice: input.salePrice,
+      startsAt,
+      status: startsAt > new Date() ? 'PENDING' : 'ACTIVE',
+      studentId: input.studentId,
+      tariffId: input.tariffId,
+    },
+  });
+  await client.subscriptionLedger.create({
+    data: {
+      amountDelta: input.salePrice,
+      comment: t('ledger.comment.purchase'),
+      createdByUserId: actor.id,
+      studentId: input.studentId,
+      subscriptionId: subscription.id,
+      type: 'PURCHASE',
+    },
+  });
+  if (input.initialPayment)
+    await createCanonicalPayment(client, actor, {
+      amount: input.initialPayment.amount,
+      branchId,
+      comment: input.initialPayment.comment,
+      externalReference: input.initialPayment.externalReference,
+      paidAt: input.initialPayment.paidAt,
+      paymentMethod: input.initialPayment.paymentMethod,
+      studentId: input.studentId,
+      subscriptionId: subscription.id,
+    });
+  await client.auditLog.create({
+    data: {
+      action: 'SUBSCRIPTION_CREATED',
+      actorUserId: actor.id,
+      detail: JSON.stringify({
+        salePrice: input.salePrice,
+        studentId: input.studentId,
+        tariffId: input.tariffId,
+      }),
+      entityId: subscription.id,
+      entityType: 'Subscription',
+    },
+  });
+  await client.auditLog.create({
+    data: {
+      action: 'SUBSCRIPTION_SALE_COMPLETED',
+      actorUserId: actor.id,
+      detail: JSON.stringify({
+        amount: input.initialPayment?.amount ?? 0,
+        paymentMethod: input.initialPayment?.paymentMethod ?? 'NONE',
+        salePrice: input.salePrice,
+        startsAt: input.startsAt,
+        tariffId: input.tariffId,
+      }),
+      entityId: subscription.id,
+      entityType: 'Subscription',
+    },
+  });
+  await reconcileStudentAttendanceCoverage(client, {
+    actorUserId: actor.id,
+    studentId: input.studentId,
+  });
+  return subscription;
+}
+
 export async function assertDirectAttendancePayment(
   client: FinanceClient,
   input: {
@@ -510,99 +636,10 @@ export class FinanceService {
     input: SubscriptionCreateInput,
   ): Promise<SubscriptionDetail> {
     const actor = await this.application.authenticate(token);
-    assertPermission(actor, 'subscriptions:manage');
-    if (!Number.isInteger(input.salePrice) || input.salePrice < 0)
-      throw new DomainError('VALIDATION', t('validation.money'));
-    if (
-      input.initialPayment &&
-      (!Number.isInteger(input.initialPayment.amount) ||
-        input.initialPayment.amount <= 0 ||
-        input.initialPayment.amount > input.salePrice)
-    )
-      throw new DomainError('VALIDATION', t('validation.payment.exceedsSale'));
-    const student = await this.database.student.findUnique({ where: { id: input.studentId } });
-    if (!student) throw new DomainError('NOT_FOUND', t('domain.notFound.student'));
-    if (student.archivedAt)
-      throw new DomainError('VALIDATION', t('domain.validation.studentArchived'));
-    const tariff = await this.requireTariff(input.tariffId);
-    if (!tariff.isActive || tariff.archivedAt)
-      throw new DomainError('VALIDATION', t('domain.validation.tariffArchived'));
-    const branchId = tariff.branchId ?? student.branchId;
-    if (tariff.branchId && tariff.branchId !== student.branchId)
-      throw new DomainError('VALIDATION', t('domain.validation.tariffBranch'));
-    assertBranchAccess(actor, branchId);
-    const startsAt = dateOnly(input.startsAt);
-    const lessonLimit = tariff.type === 'UNLIMITED' ? null : tariff.lessonCount;
-    const expiresAt = input.expiresAt
-      ? endOfDate(input.expiresAt)
-      : tariff.validityDays
-        ? addDays(startsAt, tariff.validityDays)
-        : null;
-    if (expiresAt && expiresAt < startsAt)
-      throw new DomainError('VALIDATION', 'Дата окончания не может быть раньше даты начала.');
-    const status = startsAt > new Date() ? 'PENDING' : 'ACTIVE';
-    const subscriptionId = await this.database.$transaction(async (transaction) => {
-      const subscription = await transaction.subscription.create({
-        data: {
-          branchId,
-          createdByUserId: actor.id,
-          expiresAt,
-          lessonLimit,
-          notes: optionalValue(input.notes),
-          purchasedAt: new Date(),
-          salePrice: input.salePrice,
-          startsAt,
-          status,
-          studentId: input.studentId,
-          tariffId: input.tariffId,
-        },
-      });
-      await transaction.subscriptionLedger.create({
-        data: {
-          amountDelta: input.salePrice,
-          comment: t('ledger.comment.purchase'),
-          createdByUserId: actor.id,
-          studentId: input.studentId,
-          subscriptionId: subscription.id,
-          type: 'PURCHASE',
-        },
-      });
-      if (input.initialPayment) {
-        const payment = await transaction.payment.create({
-          data: {
-            amount: input.initialPayment.amount,
-            branchId,
-            comment: optionalValue(input.initialPayment.comment),
-            createdByUserId: actor.id,
-            paidAt: new Date(input.initialPayment.paidAt),
-            paymentMethod: input.initialPayment.paymentMethod,
-            studentId: input.studentId,
-            subscriptionId: subscription.id,
-          },
-        });
-        await this.audit(transaction, actor.id, 'PAYMENT_CREATED', 'Payment', payment.id, {
-          amount: input.initialPayment.amount,
-          subscriptionId: subscription.id,
-        });
-      }
-      await this.audit(
-        transaction,
-        actor.id,
-        'SUBSCRIPTION_CREATED',
-        'Subscription',
-        subscription.id,
-        {
-          salePrice: input.salePrice,
-          studentId: input.studentId,
-          tariffId: input.tariffId,
-        },
-      );
-      await reconcileStudentAttendanceCoverage(transaction, {
-        actorUserId: actor.id,
-        studentId: input.studentId,
-      });
-      return subscription.id;
-    });
+    const subscription = await this.database.$transaction((transaction) =>
+      createCanonicalSubscription(transaction, actor, input),
+    );
+    const subscriptionId = subscription.id;
     return this.getSubscription(token, subscriptionId);
   }
 

@@ -28,6 +28,7 @@ describe('Sprint 4.6A payment foundation', () => {
   let ownerToken: string;
   let studentId: string;
   let subscriptionId: string;
+  let tariffId: string;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'arava-payment-foundation-'));
@@ -69,6 +70,7 @@ describe('Sprint 4.6A payment foundation', () => {
       type: 'LESSON_PACK',
       validityDays: 30,
     });
+    tariffId = tariff.id;
     const subscription = await finance.createSubscription(ownerToken, {
       salePrice: 100_000,
       startsAt: new Date().toISOString().slice(0, 10),
@@ -220,6 +222,181 @@ describe('Sprint 4.6A payment foundation', () => {
     expect(await database.payment.count()).toBe(1);
   });
 
+  it('persists a new subscription sale until trusted CARD success and finalizes it once', async () => {
+    const subscriptionsBefore = await database.subscription.count();
+    const operation = await operations.create(ownerToken, {
+      amount: 100_000,
+      branchId,
+      currency: 'RUB',
+      idempotencyKey: 'unified-card-sale-operation',
+      providerType: 'ACQUIRING',
+      purpose: 'Продажа абонемента',
+      saleIntent: {
+        expiresAt: '2026-09-24',
+        salePrice: 100_000,
+        startsAt: '2026-08-25',
+        tariffId,
+      },
+      studentId,
+    });
+    expect(operation.saleIntent).toMatchObject({ salePrice: 100_000, tariffId });
+    expect(await database.subscription.count()).toBe(subscriptionsBefore);
+    expect(await database.payment.count()).toBe(0);
+
+    await operations.transition(ownerToken, operation.id, 'WAITING_FOR_PAYMENT');
+    const completed = await operations.finalizeTrusted(operation.id, {
+      paymentMethod: 'ACQUIRING',
+      providerOperationId: 'card-sale-provider-1',
+      providerResultId: 'card-sale-result-1',
+    });
+    expect(completed.status).toBe('SUCCEEDED');
+    expect(completed.subscriptionId).toBeTruthy();
+    expect(await database.subscription.count()).toBe(subscriptionsBefore + 1);
+    expect(await database.payment.count()).toBe(1);
+    const sold = await finance.getSubscription(ownerToken, completed.subscriptionId ?? '');
+    expect(sold).toMatchObject({ debt: 0, paymentStatus: 'PAID', salePrice: 100_000 });
+
+    await operations.finalizeTrusted(operation.id, { paymentMethod: 'ACQUIRING' });
+    expect(await database.subscription.count()).toBe(subscriptionsBefore + 1);
+    expect(await database.payment.count()).toBe(1);
+  });
+
+  it('restores a pending sale after restart and completes the same Subscription once', async () => {
+    const subscriptionsBefore = await database.subscription.count();
+    const operation = await operations.create(ownerToken, {
+      amount: 100_000,
+      branchId,
+      currency: 'RUB',
+      idempotencyKey: 'unified-restart-sale-operation',
+      providerType: 'SBP',
+      purpose: 'Продажа после перезапуска',
+      saleIntent: {
+        salePrice: 100_000,
+        startsAt: '2026-08-25',
+        tariffId,
+      },
+      studentId,
+    });
+    await operations.transition(ownerToken, operation.id, 'WAITING_FOR_PAYMENT');
+    await closeDatabase(database);
+
+    database = createDatabaseClient(toSqliteUrl(databasePath));
+    await initializeDatabase(database);
+    application = new ApplicationService(database);
+    finance = new FinanceService(database, application);
+    operations = new PaymentOperationService(database, application);
+    const restored = await application.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: 'Owner!PaymentFoundation2026',
+    });
+    const recoverable = await operations.listRecoverableSales(restored.token);
+    expect(recoverable).toHaveLength(1);
+    expect(recoverable[0]).toMatchObject({ id: operation.id });
+    expect(recoverable[0]?.saleIntent).toMatchObject({ tariffId });
+    const completed = await operations.finalizeTrusted(operation.id, { paymentMethod: 'SBP' });
+    await operations.finalizeTrusted(operation.id, { paymentMethod: 'SBP' });
+    expect(await database.subscription.count()).toBe(subscriptionsBefore + 1);
+    expect(await database.payment.count()).toBe(1);
+    expect(
+      (await finance.getSubscription(restored.token, completed.subscriptionId ?? '')).debt,
+    ).toBe(0);
+  });
+
+  it('keeps failed sales without a subscription and preserves the tariff price snapshot', async () => {
+    const subscriptionsBefore = await database.subscription.count();
+    const failed = await operations.create(ownerToken, {
+      amount: 25_000,
+      branchId,
+      currency: 'RUB',
+      idempotencyKey: 'unified-failed-sale-operation',
+      providerType: 'SBP',
+      purpose: 'Частичная продажа абонемента',
+      saleIntent: {
+        salePrice: 100_000,
+        startsAt: '2026-08-25',
+        tariffId,
+      },
+      studentId,
+    });
+    await operations.transition(ownerToken, failed.id, 'WAITING_FOR_PAYMENT');
+    await operations.failTrusted(failed.id, 'Провайдер отклонил оплату');
+    expect(await database.subscription.count()).toBe(subscriptionsBefore);
+
+    const cancelled = await operations.create(ownerToken, {
+      ...createInput('unified-cancelled-sale-operation'),
+      subscriptionId: undefined,
+      saleIntent: {
+        salePrice: 100_000,
+        startsAt: '2026-08-25',
+        tariffId,
+      },
+    });
+    await operations.cancel(ownerToken, cancelled.id, 'Клиент отменил оплату');
+    expect(await database.subscription.count()).toBe(subscriptionsBefore);
+
+    const snapshot = await operations.create(ownerToken, {
+      amount: 25_000,
+      branchId,
+      currency: 'RUB',
+      idempotencyKey: 'unified-snapshot-sale-operation',
+      providerType: 'SBP',
+      purpose: 'Продажа по прежней цене',
+      saleIntent: {
+        salePrice: 100_000,
+        startsAt: '2026-08-25',
+        tariffId,
+      },
+      studentId,
+    });
+    await database.tariff.update({ data: { price: 120_000 }, where: { id: tariffId } });
+    await operations.transition(ownerToken, snapshot.id, 'WAITING_FOR_PAYMENT');
+    const completed = await operations.finalizeTrusted(snapshot.id, { paymentMethod: 'SBP' });
+    expect(await finance.getSubscription(ownerToken, completed.subscriptionId ?? '')).toMatchObject(
+      {
+        debt: 75_000,
+        paymentStatus: 'PARTIALLY_PAID',
+        salePrice: 100_000,
+      },
+    );
+  });
+
+  it('records a recoverable finalization error without a Payment or Subscription', async () => {
+    const subscriptionsBefore = await database.subscription.count();
+    const operation = await operations.create(ownerToken, {
+      amount: 100_000,
+      branchId,
+      currency: 'RUB',
+      idempotencyKey: 'unified-recoverable-sale-operation',
+      providerType: 'ACQUIRING',
+      purpose: 'Продажа с восстановлением',
+      saleIntent: {
+        salePrice: 100_000,
+        startsAt: '2026-08-25',
+        tariffId,
+      },
+      studentId,
+    });
+    await operations.transition(ownerToken, operation.id, 'WAITING_FOR_PAYMENT');
+    await database.$executeRawUnsafe(`
+      CREATE TRIGGER "test_subscription_sale_failure"
+      BEFORE INSERT ON "Subscription"
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated subscription failure');
+      END
+    `);
+    await expect(
+      operations.finalizeTrusted(operation.id, { paymentMethod: 'ACQUIRING' }),
+    ).rejects.toThrow();
+    const recoverable = await operations.get(ownerToken, operation.id);
+    expect(recoverable).toMatchObject({
+      saleFinalizationAttempts: 1,
+      status: 'WAITING_FOR_PAYMENT',
+    });
+    expect(recoverable.saleFinalizationError).toBeTruthy();
+    expect(await database.subscription.count()).toBe(subscriptionsBefore);
+    expect(await database.payment.count()).toBe(0);
+  });
+
   it('rolls back the Payment and cash entry when final operation commit fails', async () => {
     const operation = await operations.create(ownerToken, createInput('rollback-operation'));
     await operations.transition(ownerToken, operation.id, 'WAITING_FOR_PAYMENT');
@@ -269,6 +446,25 @@ describe('Sprint 4.6A payment foundation', () => {
       operations.create(coachSession.token, createInput('coach-operation')),
     ).rejects.toThrow();
     await expect(operations.listStudent(coachSession.token, studentId)).rejects.toThrow();
+    const recoverableSale = await operations.create(adminSession.token, {
+      amount: 100_000,
+      branchId,
+      currency: 'RUB',
+      idempotencyKey: 'admin-recoverable-sale-operation',
+      providerType: 'SBP',
+      purpose: 'Продажа администратора',
+      saleIntent: {
+        salePrice: 100_000,
+        startsAt: '2026-08-25',
+        tariffId,
+      },
+      studentId,
+    });
+    await operations.transition(adminSession.token, recoverableSale.id, 'WAITING_FOR_PAYMENT');
+    expect(await operations.listRecoverableSales(adminSession.token)).toEqual([
+      expect.objectContaining({ id: recoverableSale.id }),
+    ]);
+    await expect(operations.listRecoverableSales(coachSession.token)).rejects.toThrow();
     await expect(
       operations.create(ownerToken, { ...createInput('float-operation'), amount: 10.5 }),
     ).rejects.toThrow('корректную сумму');

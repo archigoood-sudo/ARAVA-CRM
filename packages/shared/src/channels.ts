@@ -342,6 +342,7 @@ export const IPC_CHANNELS = {
   paymentOperationCreate: 'payment-operation:create',
   paymentOperationGet: 'payment-operation:get',
   paymentOperationListStudent: 'payment-operation:list-student',
+  paymentOperationRecoverSales: 'payment-operation:recover-sales',
   paymentOperationRefreshAqsi: 'payment-operation:refresh-aqsi',
   paymentOperationRetryFiscalReceipt: 'payment-operation:retry-fiscal-receipt',
   paymentOperationRefreshSbp: 'payment-operation:refresh-sbp',
@@ -841,17 +842,27 @@ export interface TariffSummary extends TariffInput {
 export interface InitialPaymentInput {
   amount: number;
   comment?: string | undefined;
+  externalReference?: string | undefined;
   paidAt: string;
   paymentMethod: PaymentMethod;
 }
 
 export interface SubscriptionCreateInput {
   expiresAt?: string | undefined;
+  idempotencyKey?: string | undefined;
   initialPayment?: InitialPaymentInput | undefined;
   notes?: string | undefined;
   salePrice: number;
   startsAt: string;
   studentId: string;
+  tariffId: string;
+}
+
+export interface SubscriptionSaleIntentInput {
+  expiresAt?: string | undefined;
+  notes?: string | undefined;
+  salePrice: number;
+  startsAt: string;
   tariffId: string;
 }
 
@@ -958,6 +969,7 @@ export interface PaymentOperationCreateInput {
   subscriptionId?: string | undefined;
   attendanceLessonId?: string | undefined;
   attendanceTariffId?: string | undefined;
+  saleIntent?: SubscriptionSaleIntentInput | undefined;
 }
 
 export interface PaymentOperationSummary extends PaymentOperationCreateInput {
@@ -969,6 +981,8 @@ export interface PaymentOperationSummary extends PaymentOperationCreateInput {
   id: string;
   paymentId?: string | undefined;
   providerOperationId?: string | undefined;
+  saleFinalizationAttempts?: number | undefined;
+  saleFinalizationError?: string | undefined;
   status: PaymentOperationStatus;
   studentName: string;
   subscriptionName?: string | undefined;
@@ -2906,6 +2920,7 @@ export interface AravaDesktopApi {
     create: (token: string, input: PaymentOperationCreateInput) => Promise<PaymentOperationSummary>;
     get: (token: string, id: string) => Promise<PaymentOperationSummary>;
     listStudent: (token: string, studentId: string) => Promise<PaymentOperationSummary[]>;
+    recoverPendingSales: (token: string) => Promise<PaymentOperationSummary[]>;
     refreshSbp: (token: string, id: string) => Promise<SbpGatewayPayment>;
     refreshAqsi: (token: string, id: string) => Promise<AqsiGatewayPayment>;
     retryFiscalReceipt: (token: string, id: string) => Promise<AqsiGatewayPayment>;

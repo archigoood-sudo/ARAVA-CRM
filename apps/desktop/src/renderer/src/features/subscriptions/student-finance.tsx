@@ -83,6 +83,13 @@ export function StudentFinance({
     subscriptionId: string;
     tariffName: string;
   }>();
+  const [subscriptionSale, setSubscriptionSale] = useState<{
+    amount: number;
+    fixedAmount?: boolean;
+    input: SubscriptionCreateInput;
+    tariffName: string;
+  }>();
+  const [saleSuccess, setSaleSuccess] = useState(false);
   const [attendanceTariffs, setAttendanceTariffs] = useState<Record<string, string>>({});
   const [freezeId, setFreezeId] = useState<string>();
   const [detailId, setDetailId] = useState<string>();
@@ -141,21 +148,26 @@ export function StudentFinance({
     paymentPlan: SubscriptionSalePaymentPlan,
   ) => {
     setError(undefined);
+    setSaleSuccess(false);
     try {
-      const created = await issue.mutateAsync(input);
-      await refresh();
       setIssueOpen(false);
-      if (paymentPlan.mode !== 'NONE') {
-        setSubscriptionPayment({
+      if (paymentPlan.mode === 'NONE') {
+        const created = await issue.mutateAsync(input);
+        await refresh();
+        setSaleSuccess(true);
+        setDetailId(created.id);
+      } else {
+        const tariffName =
+          tariffs.data?.find(({ id }) => id === input.tariffId)?.name ?? 'Абонемент';
+        setSubscriptionSale({
           amount: paymentPlan.amount,
           fixedAmount: paymentPlan.mode === 'FULL',
-          subscriptionId: created.id,
-          tariffName: created.tariffName,
+          input,
+          tariffName,
         });
+        setSubscriptionPayment(undefined);
         setAttendancePayment(undefined);
         setPaymentOpen(true);
-      } else {
-        setDetailId(created.id);
       }
     } catch (caught) {
       setError(getErrorMessage(caught, t('subscription.errorSave')));
@@ -267,6 +279,11 @@ export function StudentFinance({
     );
   return (
     <section className="mt-5 space-y-5">
+      {saleSuccess ? (
+        <div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm font-medium text-green-800">
+          Абонемент выдан
+        </div>
+      ) : null}
       <div className="grid grid-cols-3 gap-4">
         <Card>
           <CardContent className="p-5">
@@ -397,7 +414,9 @@ export function StudentFinance({
                 onClick={() => {
                   setAttendancePayment(undefined);
                   setSubscriptionPayment(undefined);
+                  setSubscriptionSale(undefined);
                   setError(undefined);
+                  setSaleSuccess(false);
                   setPaymentOpen(true);
                 }}
                 size="small"
@@ -539,23 +558,39 @@ export function StudentFinance({
           setPaymentOpen(false);
           setAttendancePayment(undefined);
           setSubscriptionPayment(undefined);
+          setSubscriptionSale(undefined);
         }}
-        onSbpCompleted={refresh}
-        onSubmit={(input) =>
-          perform(
-            () => payment.mutateAsync(input),
-            t('payment.errorSave'),
-            () => {
-              setPaymentOpen(false);
-              setAttendancePayment(undefined);
-              setSubscriptionPayment(undefined);
-            },
-          )
-        }
+        onSbpCompleted={async () => {
+          await refresh();
+          if (subscriptionSale) setSaleSuccess(true);
+        }}
+        onSubmit={(input) => {
+          const operation = subscriptionSale
+            ? () =>
+                issue.mutateAsync({
+                  ...subscriptionSale.input,
+                  initialPayment: {
+                    amount: input.amount,
+                    comment: input.comment,
+                    externalReference: input.externalReference,
+                    paidAt: input.paidAt,
+                    paymentMethod: input.paymentMethod,
+                  },
+                })
+            : () => payment.mutateAsync(input);
+          return perform(operation, t('payment.errorSave'), () => {
+            if (subscriptionSale) setSaleSuccess(true);
+            setPaymentOpen(false);
+            setAttendancePayment(undefined);
+            setSubscriptionPayment(undefined);
+            setSubscriptionSale(undefined);
+          });
+        }}
         open={paymentOpen}
         students={[]}
         subscriptions={finance.data?.subscriptions}
         subscriptionPayment={subscriptionPayment}
+        subscriptionSale={subscriptionSale}
       />
       <PaymentOperationDetailsDialog
         busy={refreshAqsi.isPending || retryFiscalReceipt.isPending}

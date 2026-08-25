@@ -218,7 +218,7 @@ export class AttentionService {
       take: 25,
       where: {
         ...branchScope,
-        status: { in: ['FAILED', 'EXPIRED'] },
+        OR: [{ status: { in: ['FAILED', 'EXPIRED'] } }, { saleFinalizationError: { not: null } }],
         updatedAt: { gte: historyStart },
       },
     });
@@ -448,17 +448,20 @@ export class AttentionService {
         branchId: operation.branchId,
         branchName: operation.branch.name,
         category: 'PAYMENTS',
-        description:
-          operation.failureReason ??
-          (operation.status === 'EXPIRED'
-            ? 'Время ожидания оплаты истекло.'
-            : 'Операция оплаты завершилась ошибкой.'),
+        description: operation.saleFinalizationError
+          ? 'Оплата подтверждена, но выдача абонемента ещё не завершена. Безопасно проверьте оплату повторно.'
+          : (operation.failureReason ??
+            (operation.status === 'EXPIRED'
+              ? 'Время ожидания оплаты истекло.'
+              : 'Операция оплаты завершилась ошибкой.')),
         entityId: operation.id,
         entityType: 'PaymentOperation',
-        id: `payment-operation:${operation.status.toLowerCase()}:${operation.id}`,
+        id: `payment-operation:${operation.saleFinalizationError ? 'sale-finalization' : operation.status.toLowerCase()}:${operation.id}`,
         occurredAt: operation.updatedAt.toISOString(),
         severity: 'CRITICAL',
-        title: `${fullName(operation.student)}: проблема оплаты`,
+        title: operation.saleFinalizationError
+          ? `${fullName(operation.student)}: оплата получена, абонемент не выдан`
+          : `${fullName(operation.student)}: проблема оплаты`,
       });
 
     for (const attendance of uncoveredAttendanceCandidates) {

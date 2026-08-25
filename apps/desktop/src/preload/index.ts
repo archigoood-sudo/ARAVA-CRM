@@ -283,6 +283,7 @@ const desktopApi: AravaDesktopApi = {
     get: (token, id) => invoke(IPC_CHANNELS.paymentOperationGet, token, id),
     listStudent: (token, studentId) =>
       invoke(IPC_CHANNELS.paymentOperationListStudent, token, studentId),
+    recoverPendingSales: (token) => invoke(IPC_CHANNELS.paymentOperationRecoverSales, token),
     refreshSbp: (token, id) => invoke(IPC_CHANNELS.paymentOperationRefreshSbp, token, id),
     refreshAqsi: (token, id) => invoke(IPC_CHANNELS.paymentOperationRefreshAqsi, token, id),
     retryFiscalReceipt: (token, id) =>

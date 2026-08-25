@@ -230,6 +230,44 @@ export function createIpcHandlers(
     assertPermission(await service.authenticate(token), 'payments:manage');
     return token;
   };
+  const refreshAqsiOperation = async (token: string, id: string) => {
+    if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
+      return requireAqsiPayments().refresh(token, id);
+    const operation = await paymentOperations.get(token, id);
+    const isCard = operation.providerType === 'ACQUIRING';
+    const fiscalCompleted = operation.status === 'SUCCEEDED';
+    const fiscalError = fiscalCompleted && operation.purpose === 'Исторический чек с ошибкой';
+    if (!fiscalCompleted)
+      await paymentOperations.finalizeTrusted(id, {
+        paymentMethod: isCard ? 'ACQUIRING' : 'SBP',
+        providerOperationId: operation.providerOperationId,
+        providerResultId: `slip-${id}`,
+      });
+    return {
+      amountKopecks: operation.amount,
+      aravaOperationId: id,
+      currency: 'RUB' as const,
+      deviceId: 101,
+      fiscalReceipt: {
+        canRetry: fiscalError,
+        ...(fiscalCompleted && !fiscalError
+          ? { fiscalDocumentNumber: 42, fiscalSign: '987654321' }
+          : {}),
+        ...(fiscalError ? { message: 'Тестовая временная ошибка фискализации.' } : {}),
+        status: fiscalError
+          ? ('ERROR' as const)
+          : fiscalCompleted
+            ? ('SUCCEEDED' as const)
+            : ('PROCESSING' as const),
+        updatedAt: new Date().toISOString(),
+      },
+      provider: isCard ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
+      providerOperationId: operation.providerOperationId,
+      providerResultId: `slip-${id}`,
+      status: 'SUCCEEDED' as const,
+      updatedAt: new Date().toISOString(),
+    };
+  };
   const publicationMediaDirectory = join(dirname(databasePath), 'media', 'publications');
   const publicationMedia = (mediaId?: string) => {
     if (!mediaId) return undefined;
@@ -977,6 +1015,20 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeStudentId),
       ),
+    [IPC_CHANNELS.paymentOperationRecoverSales]: async (unsafeToken) => {
+      const token = await paymentManagerToken(unsafeToken);
+      const recoverable = await paymentOperations.listRecoverableSales(token);
+      const results = [];
+      for (const operation of recoverable) {
+        try {
+          await refreshAqsiOperation(token, operation.id);
+        } catch {
+          // The operation stays recoverable and the next cycle retries safely.
+        }
+        results.push(await paymentOperations.get(token, operation.id));
+      }
+      return results;
+    },
     [IPC_CHANNELS.paymentOperationCancel]: (unsafeToken, unsafeId, unsafeInput) =>
       paymentOperations.cancel(
         sessionTokenSchema.parse(unsafeToken),
@@ -1131,42 +1183,7 @@ export function createIpcHandlers(
     [IPC_CHANNELS.paymentOperationRefreshAqsi]: async (unsafeToken, unsafeId) => {
       const token = await paymentManagerToken(unsafeToken);
       const id = identifierSchema.parse(unsafeId);
-      if (process.env.ARAVA_E2E_PAYMENT_PROVIDER !== 'memory')
-        return requireAqsiPayments().refresh(token, id);
-      const operation = await paymentOperations.get(token, id);
-      const isCard = operation.providerType === 'ACQUIRING';
-      const fiscalCompleted = operation.status === 'SUCCEEDED';
-      const fiscalError = fiscalCompleted && operation.purpose === 'Исторический чек с ошибкой';
-      if (!fiscalCompleted)
-        await paymentOperations.finalizeTrusted(id, {
-          paymentMethod: isCard ? 'ACQUIRING' : 'SBP',
-          providerOperationId: operation.providerOperationId,
-          providerResultId: `slip-${id}`,
-        });
-      return {
-        amountKopecks: operation.amount,
-        aravaOperationId: id,
-        currency: 'RUB' as const,
-        deviceId: 101,
-        fiscalReceipt: {
-          canRetry: fiscalError,
-          ...(fiscalCompleted && !fiscalError
-            ? { fiscalDocumentNumber: 42, fiscalSign: '987654321' }
-            : {}),
-          ...(fiscalError ? { message: 'Тестовая временная ошибка фискализации.' } : {}),
-          status: fiscalError
-            ? ('ERROR' as const)
-            : fiscalCompleted
-              ? ('SUCCEEDED' as const)
-              : ('PROCESSING' as const),
-          updatedAt: new Date().toISOString(),
-        },
-        provider: isCard ? ('AQSI_CARD' as const) : ('AQSI_SBP' as const),
-        providerOperationId: operation.providerOperationId,
-        providerResultId: `slip-${id}`,
-        status: 'SUCCEEDED' as const,
-        updatedAt: new Date().toISOString(),
-      };
+      return refreshAqsiOperation(token, id);
     },
     [IPC_CHANNELS.paymentOperationRetryFiscalReceipt]: async (unsafeToken, unsafeId) => {
       const token = await paymentManagerToken(unsafeToken);

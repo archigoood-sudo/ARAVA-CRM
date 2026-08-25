@@ -6,7 +6,7 @@ import {
   type TariffSummary,
 } from '@arava/shared';
 import { Button, Dialog, Input, Label, Select, Textarea, formatMoney } from '@arava/ui';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 function today(): string {
   const date = new Date();
@@ -53,6 +53,7 @@ export function SubscriptionDialog({
   const [paymentAmount, setPaymentAmount] = useState('0');
   const [validationError, setValidationError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const saleKey = useRef(crypto.randomUUID());
   const selected = useMemo(
     () => tariffs.find((tariff) => tariff.id === tariffId),
     [tariffId, tariffs],
@@ -68,6 +69,7 @@ export function SubscriptionDialog({
     setNotes('');
     setPaymentMode(first?.price === 0 ? 'NONE' : 'FULL');
     setValidationError(undefined);
+    saleKey.current = crypto.randomUUID();
   }, [open, tariffs]);
   const chooseTariff = (id: string) => {
     setTariffId(id);
@@ -81,6 +83,7 @@ export function SubscriptionDialog({
   const submit = async () => {
     const input: SubscriptionCreateInput = {
       expiresAt: expiresAt || undefined,
+      idempotencyKey: saleKey.current,
       notes,
       salePrice: selected?.price ?? 0,
       startsAt,
@@ -105,6 +108,17 @@ export function SubscriptionDialog({
       );
       return;
     }
+    if (
+      effectivePaymentMode === 'NONE' &&
+      (selected?.price ?? 0) > 0 &&
+      !window.confirm(
+        `Абонемент будет выдан с задолженностью ${new Intl.NumberFormat('ru-RU', {
+          currency: 'RUB',
+          style: 'currency',
+        }).format((selected?.price ?? 0) / 100)}. Продолжить?`,
+      )
+    )
+      return;
     setSubmitting(true);
     try {
       await onSubmit(result.data, { amount, mode: effectivePaymentMode });
@@ -205,7 +219,7 @@ export function SubscriptionDialog({
           >
             <option value="FULL">Полная оплата</option>
             <option value="PARTIAL">Частичная оплата</option>
-            <option value="NONE">Без оплаты</option>
+            <option value="NONE">Выдать без оплаты</option>
           </Select>
         </div>
         {paymentMode !== 'NONE' ? (
@@ -238,7 +252,7 @@ export function SubscriptionDialog({
             {submitting
               ? t('common.saving')
               : paymentMode === 'NONE'
-                ? 'Продать без оплаты'
+                ? 'Выдать без оплаты'
                 : 'Продолжить к оплате'}
           </Button>
         </div>
