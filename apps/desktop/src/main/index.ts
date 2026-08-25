@@ -19,7 +19,7 @@ import { registerIpcHandlers, removeIpcHandlers } from './ipc';
 import { CustomerDisplayManager } from './customer-display-manager';
 import { createMainWindow, getMainWindow } from './window';
 import { createIntegrationCredentialStore, IntegrationManager } from './integration-manager';
-import { UpdateManager } from './update-manager';
+import { isDesktopUpdateSupported, UpdateManager } from './update-manager';
 
 const { autoUpdater } = electronUpdater;
 
@@ -82,7 +82,11 @@ async function bootstrap(): Promise<void> {
       await shutdown();
       shutdownComplete = true;
     },
-    supported: app.isPackaged && process.platform === 'win32',
+    supported: isDesktopUpdateSupported(
+      app.isPackaged,
+      process.platform,
+      process.env.ARAVA_E2E_DISABLE_UPDATES === '1',
+    ),
   });
   autoUpdater.logger = log;
   registerIpcHandlers(database, databasePath, {

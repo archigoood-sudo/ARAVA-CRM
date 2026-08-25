@@ -27,6 +27,14 @@ publish:
   repo: ARAVA-CRM
   channel: latest
   releaseType: release
+mac:
+  category: public.app-category.business
+  hardenedRuntime: true
+  notarize: true
+  target:
+    - dmg
+    - zip
+  artifactName: ARAVA-CRM-${version}-${arch}.${ext}
 win:
   executableName: ARAVA CRM
   icon: build/icon.ico

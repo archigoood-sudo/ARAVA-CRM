@@ -28,6 +28,14 @@ interface UpdateManagerOptions {
   supported: boolean;
 }
 
+export function isDesktopUpdateSupported(
+  isPackaged: boolean,
+  platform: NodeJS.Platform,
+  disabled = false,
+): boolean {
+  return isPackaged && !disabled && (platform === 'win32' || platform === 'darwin');
+}
+
 export class UpdateManager implements UpdateController {
   private checkPromise: Promise<DesktopUpdateState> | undefined;
   private downloadPromise: Promise<DesktopUpdateState> | undefined;
@@ -50,7 +58,7 @@ export class UpdateManager implements UpdateController {
         }
       : {
           currentVersion: options.currentVersion,
-          message: 'Автоматическое обновление доступно в установленной версии для Windows',
+          message: 'Автоматическое обновление доступно в установленной версии для Windows и macOS',
           status: 'UNSUPPORTED',
         };
   }
@@ -178,7 +186,7 @@ export class UpdateManager implements UpdateController {
       });
     });
     this.updater.on('error', (error) => {
-      if (/404|latest\.yml|no published versions?/iu.test(error.message)) {
+      if (/404|latest(?:-mac)?\.yml|no published versions?/iu.test(error.message)) {
         this.setState({
           checkedAt: this.nowIso(),
           currentVersion: this.options.currentVersion,

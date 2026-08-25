@@ -18,7 +18,9 @@ const nativeEngineNames = {
 const targetEngine =
   requestedTarget === 'windows'
     ? 'query_engine-windows.dll.node'
-    : nativeEngineNames[process.platform];
+    : requestedTarget === 'mac-universal'
+      ? ['libquery_engine-darwin.dylib.node', 'libquery_engine-darwin-arm64.dylib.node']
+      : nativeEngineNames[process.platform];
 
 if (!targetEngine) {
   throw new Error(`Packaging Prisma is not configured for ${process.platform}.`);
@@ -32,14 +34,16 @@ const files = await readdir(destinationDirectory);
 for (const file of files) {
   const isNativeEngine =
     file.startsWith('libquery_engine-') || file === 'query_engine-windows.dll.node';
-  if (isNativeEngine && !file.startsWith(targetEngine)) {
+  const requiredEngines = Array.isArray(targetEngine) ? targetEngine : [targetEngine];
+  if (isNativeEngine && !requiredEngines.some((engine) => file.startsWith(engine))) {
     await rm(resolve(destinationDirectory, file));
   }
 }
 
-if (!files.some((file) => file.startsWith(targetEngine))) {
+const requiredEngines = Array.isArray(targetEngine) ? targetEngine : [targetEngine];
+if (!requiredEngines.every((engine) => files.some((file) => file.startsWith(engine)))) {
   throw new Error(
-    `Prisma engine ${targetEngine} was not generated. Check schema.prisma binaryTargets.`,
+    `Prisma engine ${requiredEngines.join(', ')} was not generated. Check schema.prisma binaryTargets.`,
   );
 }
 

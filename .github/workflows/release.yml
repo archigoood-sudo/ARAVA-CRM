@@ -52,3 +52,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run release:win
+
+  publish-macos:
+    if: ${{ vars.MACOS_RELEASE_ENABLED == 'true' }}
+    needs:
+      - verify
+      - publish-windows
+    runs-on: macos-13
+    env:
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
+      CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: 22
+      - run: npm ci
+      - name: Verify tag matches application version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/verify-release-tag.mjs
+      - name: Build, sign, notarize and publish universal macOS release
+        run: npm run release:mac

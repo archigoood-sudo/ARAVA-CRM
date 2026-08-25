@@ -19,7 +19,11 @@ const playwright = resolve(root, 'node_modules/@playwright/test/cli.js');
 for (const shard of ['1/2', '2/2']) {
   const result = spawnSync(process.execPath, [playwright, 'test', `--shard=${shard}`], {
     cwd: resolve(root, 'apps/desktop'),
-    env: { ...process.env, ARAVA_E2E_EXECUTABLE: executablePath },
+    env: {
+      ...process.env,
+      ARAVA_E2E_DISABLE_UPDATES: '1',
+      ARAVA_E2E_EXECUTABLE: executablePath,
+    },
     stdio: 'inherit',
   });
   if (result.status !== 0) {

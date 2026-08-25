@@ -3,7 +3,7 @@ import type { AppUpdater } from 'electron-updater';
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { UpdateManager } from './update-manager';
+import { isDesktopUpdateSupported, UpdateManager } from './update-manager';
 
 class MockUpdater extends EventEmitter {
   public allowDowngrade = true;
@@ -17,18 +17,23 @@ class MockUpdater extends EventEmitter {
 
 function createManager(
   role: UserRole = 'OWNER',
-  overrides: { prepareForInstall?: () => Promise<void>; supported?: boolean } = {},
+  overrides: {
+    platform?: NodeJS.Platform;
+    prepareForInstall?: () => Promise<void>;
+    supported?: boolean;
+  } = {},
 ) {
   const updater = new MockUpdater();
   const authorization = {
     authenticate: vi.fn(() => Promise.resolve({ role })),
   };
   const manager = new UpdateManager(authorization, updater as unknown as AppUpdater, {
-    currentVersion: '0.4.5',
+    currentVersion: '0.4.6',
     now: () => new Date('2026-08-25T10:00:00.000Z'),
     prepareForInstall: overrides.prepareForInstall ?? vi.fn(() => Promise.resolve()),
     startupDelayMs: 10,
-    supported: overrides.supported ?? true,
+    supported:
+      overrides.supported ?? isDesktopUpdateSupported(true, overrides.platform ?? 'darwin'),
   });
   manager.initialize();
   return { authorization, manager, updater };
@@ -39,15 +44,52 @@ afterEach(() => {
 });
 
 describe('UpdateManager', () => {
+  it.each(['win32', 'darwin'] satisfies NodeJS.Platform[])(
+    'supports installed %s applications and keeps development builds disabled',
+    (platform) => {
+      expect(isDesktopUpdateSupported(true, platform)).toBe(true);
+      expect(isDesktopUpdateSupported(false, platform)).toBe(false);
+      expect(isDesktopUpdateSupported(true, platform, true)).toBe(false);
+    },
+  );
+
+  it('runs the explicit macOS check, download and install lifecycle', async () => {
+    const prepareForInstall = vi.fn(() => Promise.resolve());
+    const { manager, updater } = createManager('OWNER', {
+      platform: 'darwin',
+      prepareForInstall,
+    });
+    updater.checkForUpdates.mockImplementationOnce(() => {
+      updater.emit('update-available', { version: '0.4.7' });
+      return Promise.resolve(null);
+    });
+    updater.downloadUpdate.mockImplementationOnce(() => {
+      updater.emit('download-progress', { percent: 72 });
+      updater.emit('update-downloaded', { version: '0.4.7' });
+      return Promise.resolve([]);
+    });
+
+    await expect(manager.check('owner-token')).resolves.toMatchObject({ status: 'AVAILABLE' });
+    await expect(manager.download('owner-token')).resolves.toMatchObject({
+      progress: 100,
+      status: 'DOWNLOADED',
+    });
+    await manager.install('owner-token');
+
+    expect(prepareForInstall).toHaveBeenCalledOnce();
+    expect(updater.quitAndInstall).toHaveBeenCalledOnce();
+    manager.shutdown();
+  });
+
   it('reports that the installed version is current', async () => {
     const { manager, updater } = createManager();
     updater.checkForUpdates.mockImplementationOnce(() => {
-      updater.emit('update-not-available', { version: '0.4.5' });
+      updater.emit('update-not-available', { version: '0.4.6' });
       return Promise.resolve(null);
     });
 
     await expect(manager.check('owner-token')).resolves.toMatchObject({
-      currentVersion: '0.4.5',
+      currentVersion: '0.4.6',
       status: 'CURRENT',
     });
     manager.shutdown();
@@ -56,12 +98,12 @@ describe('UpdateManager', () => {
   it('reports an available update without downloading it automatically', async () => {
     const { manager, updater } = createManager();
     updater.checkForUpdates.mockImplementationOnce(() => {
-      updater.emit('update-available', { version: '0.4.6' });
+      updater.emit('update-available', { version: '0.4.7' });
       return Promise.resolve(null);
     });
 
     await expect(manager.check('owner-token')).resolves.toMatchObject({
-      availableVersion: '0.4.6',
+      availableVersion: '0.4.7',
       status: 'AVAILABLE',
     });
     expect(updater.downloadUpdate).not.toHaveBeenCalled();
@@ -70,10 +112,10 @@ describe('UpdateManager', () => {
 
   it('publishes download progress and the downloaded state', async () => {
     const { manager, updater } = createManager();
-    updater.emit('update-available', { version: '0.4.6' });
+    updater.emit('update-available', { version: '0.4.7' });
     updater.downloadUpdate.mockImplementationOnce(() => {
       updater.emit('download-progress', { percent: 53.7 });
-      updater.emit('update-downloaded', { version: '0.4.6' });
+      updater.emit('update-downloaded', { version: '0.4.7' });
       return Promise.resolve([]);
     });
 
@@ -87,8 +129,8 @@ describe('UpdateManager', () => {
   it('closes application services before an explicitly requested installation', async () => {
     const prepareForInstall = vi.fn(() => Promise.resolve());
     const { manager, updater } = createManager('OWNER', { prepareForInstall });
-    updater.emit('update-available', { version: '0.4.6' });
-    updater.emit('update-downloaded', { version: '0.4.6' });
+    updater.emit('update-available', { version: '0.4.7' });
+    updater.emit('update-downloaded', { version: '0.4.7' });
 
     await manager.install('owner-token');
 
@@ -113,6 +155,18 @@ describe('UpdateManager', () => {
     expect(state.status).toBe('ERROR');
     expect(JSON.stringify(state)).not.toContain('super-secret');
     expect(JSON.stringify(state)).not.toContain('/Users/admin');
+    manager.shutdown();
+  });
+
+  it('treats a missing macOS release channel as no available update', async () => {
+    const { manager, updater } = createManager();
+    updater.checkForUpdates.mockImplementationOnce(() => {
+      const error = new Error('Cannot find latest-mac.yml in the latest release artifacts');
+      updater.emit('error', error);
+      return Promise.reject(error);
+    });
+
+    await expect(manager.check('owner-token')).resolves.toMatchObject({ status: 'CURRENT' });
     manager.shutdown();
   });
 
@@ -163,14 +217,14 @@ describe('UpdateManager', () => {
     const { manager } = createManager('COACH');
 
     await expect(manager.getState('coach-token')).resolves.toEqual({
-      currentVersion: '0.4.5',
+      currentVersion: '0.4.6',
       message: 'Обновления проверяются автоматически',
       status: 'IDLE',
     });
     manager.shutdown();
   });
 
-  it('does not initialize the provider in unsupported local or macOS builds', async () => {
+  it('does not initialize the provider in unsupported local or Linux builds', async () => {
     const { manager, updater } = createManager('OWNER', { supported: false });
 
     await expect(manager.check('owner-token')).resolves.toMatchObject({ status: 'UNSUPPORTED' });
