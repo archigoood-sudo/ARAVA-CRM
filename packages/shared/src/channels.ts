@@ -388,6 +388,14 @@ export const IPC_CHANNELS = {
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
   studentArchive: 'student:archive',
+  studentBulkAddExecute: 'student-bulk:add-execute',
+  studentBulkAddPreview: 'student-bulk:add-preview',
+  studentBulkMoveExecute: 'student-bulk:move-execute',
+  studentBulkMovePreview: 'student-bulk:move-preview',
+  studentBulkRemoveExecute: 'student-bulk:remove-execute',
+  studentBulkRemovePreview: 'student-bulk:remove-preview',
+  studentBulkStatusExecute: 'student-bulk:status-execute',
+  studentBulkStatusPreview: 'student-bulk:status-preview',
   studentCreate: 'student:create',
   studentGet: 'student:get',
   studentProfileGet: 'student-profile:get',
@@ -552,6 +560,76 @@ export interface StudentListResult {
   pageSize: number;
   total: number;
   totalPages: number;
+}
+
+export type StudentBulkAction =
+  'ADD_TO_GROUP' | 'MOVE_TO_GROUP' | 'REMOVE_FROM_GROUP' | 'CHANGE_STATUS';
+
+export type StudentBulkItemOutcome = 'ELIGIBLE' | 'SKIPPED' | 'INVALID';
+
+export interface StudentBulkItemPreview {
+  outcome: StudentBulkItemOutcome;
+  reason?: string | undefined;
+  studentId: string;
+  studentName: string;
+}
+
+export interface StudentBulkCapacityPreview {
+  addedCount: number;
+  capacity: number;
+  currentCount: number;
+  exceedsCapacity: boolean;
+  resultingCount: number;
+}
+
+export interface StudentBulkPreview {
+  action: StudentBulkAction;
+  blockingReason?: string | undefined;
+  canExecute: boolean;
+  capacity?: StudentBulkCapacityPreview | undefined;
+  effectiveDate?: string | undefined;
+  eligibleCount: number;
+  invalidCount: number;
+  items: StudentBulkItemPreview[];
+  previewKey: string;
+  skippedCount: number;
+  sourceGroup?: { id: string; name: string } | undefined;
+  targetGroup?: { id: string; name: string } | undefined;
+  targetStatus?: StudentStatus | undefined;
+}
+
+export interface StudentBulkExecutionResult {
+  action: StudentBulkAction;
+  changedCount: number;
+  correlationId: string;
+  invalidCount: number;
+  skippedCount: number;
+}
+
+export interface StudentBulkAddToGroupInput {
+  effectiveDate: string;
+  groupId: string;
+  overrideCapacity: boolean;
+  studentIds: string[];
+}
+
+export interface StudentBulkMoveToGroupInput {
+  effectiveDate: string;
+  overrideCapacity: boolean;
+  sourceGroupId: string;
+  studentIds: string[];
+  targetGroupId: string;
+}
+
+export interface StudentBulkRemoveFromGroupInput {
+  effectiveDate: string;
+  groupId: string;
+  studentIds: string[];
+}
+
+export interface StudentBulkChangeStatusInput {
+  status: StudentStatus;
+  studentIds: string[];
 }
 
 export interface StudentContactInput {
@@ -3012,6 +3090,26 @@ export interface AravaDesktopApi {
   };
   students: {
     archive: (token: string, id: string) => Promise<StudentSummary>;
+    bulkAddToGroup: (
+      token: string,
+      input: StudentBulkAddToGroupInput,
+      previewKey: string,
+    ) => Promise<StudentBulkExecutionResult>;
+    bulkChangeStatus: (
+      token: string,
+      input: StudentBulkChangeStatusInput,
+      previewKey: string,
+    ) => Promise<StudentBulkExecutionResult>;
+    bulkMoveToGroup: (
+      token: string,
+      input: StudentBulkMoveToGroupInput,
+      previewKey: string,
+    ) => Promise<StudentBulkExecutionResult>;
+    bulkRemoveFromGroup: (
+      token: string,
+      input: StudentBulkRemoveFromGroupInput,
+      previewKey: string,
+    ) => Promise<StudentBulkExecutionResult>;
     archiveNote: (token: string, noteId: string) => Promise<void>;
     create: (token: string, input: StudentInput) => Promise<StudentSummary>;
     createNote: (
@@ -3023,6 +3121,22 @@ export interface AravaDesktopApi {
     getProfile: (token: string, id: string) => Promise<StudentProfileOverview>;
     list: (token: string, query: StudentListQuery) => Promise<StudentListResult>;
     options: (token: string, branchId?: string) => Promise<StudentSummary[]>;
+    previewBulkAddToGroup: (
+      token: string,
+      input: StudentBulkAddToGroupInput,
+    ) => Promise<StudentBulkPreview>;
+    previewBulkChangeStatus: (
+      token: string,
+      input: StudentBulkChangeStatusInput,
+    ) => Promise<StudentBulkPreview>;
+    previewBulkMoveToGroup: (
+      token: string,
+      input: StudentBulkMoveToGroupInput,
+    ) => Promise<StudentBulkPreview>;
+    previewBulkRemoveFromGroup: (
+      token: string,
+      input: StudentBulkRemoveFromGroupInput,
+    ) => Promise<StudentBulkPreview>;
     update: (token: string, id: string, input: StudentInput) => Promise<StudentSummary>;
     updateNote: (
       token: string,

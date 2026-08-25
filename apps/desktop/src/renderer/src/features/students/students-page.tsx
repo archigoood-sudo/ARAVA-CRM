@@ -3,6 +3,8 @@ import {
   formatDate,
   t,
   type StudentInput,
+  type StudentBulkAction,
+  type StudentBulkExecutionResult,
   type StudentListQuery,
   type StudentStatus,
 } from '@arava/shared';
@@ -11,6 +13,7 @@ import {
   Avatar,
   Button,
   Card,
+  Checkbox,
   EmptyState,
   ErrorState,
   Input,
@@ -27,12 +30,17 @@ import {
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Archive,
+  ArrowRightLeft,
   ArrowDownUp,
+  CheckSquare,
   ChevronLeft,
   ChevronRight,
   Plus,
   Search,
+  UserMinus,
+  UserPlus,
   UsersRound,
+  X,
 } from 'lucide-react';
 import { useDeferredValue, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -43,6 +51,7 @@ import { invalidateStudentIdentityCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { StudentDialog } from './student-dialog';
+import { StudentBulkDialog } from './student-bulk-dialog';
 
 const statusLabels: Record<StudentStatus, string> = {
   ACTIVE: t('status.ACTIVE'),
@@ -71,6 +80,10 @@ export function StudentsPage() {
   const [sortDirection, setSortDirection] = useState<StudentListQuery['sortDirection']>('asc');
   const [page, setPage] = useState(1);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkAction, setBulkAction] = useState<StudentBulkAction>();
+  const [bulkResult, setBulkResult] = useState<string>();
   const [error, setError] = useState<string>();
   const listQuery: StudentListQuery = {
     branchId: branchId || undefined,
@@ -89,6 +102,11 @@ export function StudentsPage() {
     placeholderData: keepPreviousData,
     queryFn: () => getDesktopApi().students.list(getSessionToken(), listQuery),
     queryKey: queryKeys.students(listQuery),
+  });
+  const groups = useQuery({
+    enabled: canManage,
+    queryFn: () => getDesktopApi().groups.list(getSessionToken(), {}),
+    queryKey: queryKeys.groups({}),
   });
   const create = useMutation({
     mutationFn: (input: StudentInput) => getDesktopApi().students.create(getSessionToken(), input),
@@ -111,27 +129,153 @@ export function StudentsPage() {
     callback();
     setPage(1);
   };
+  const visibleIds = students.data?.items.map(({ id }) => id) ?? [];
+  const visibleSelectedCount = visibleIds.filter((id) => selectedIds.has(id)).length;
+  const allVisibleSelected = visibleIds.length > 0 && visibleSelectedCount === visibleIds.length;
+  const hiddenSelectedCount = selectedIds.size - visibleSelectedCount;
+  const toggleStudent = (id: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+  const closeSelection = () => {
+    clearSelection();
+    setSelectionMode(false);
+    setBulkAction(undefined);
+  };
+  const handleBulkSuccess = async (result: StudentBulkExecutionResult) => {
+    const labels: Record<StudentBulkAction, string> = {
+      ADD_TO_GROUP: 'В группу добавлено',
+      CHANGE_STATUS: 'Статус изменён у',
+      MOVE_TO_GROUP: 'В другую группу переведено',
+      REMOVE_FROM_GROUP: 'Из группы убрано',
+    };
+    setBulkResult(`${labels[result.action]} ${String(result.changedCount)} учеников.`);
+    setBulkAction(undefined);
+    closeSelection();
+    await Promise.all([
+      invalidateStudentIdentityCaches(queryClient),
+      queryClient.invalidateQueries({ queryKey: ['groups'] }),
+      queryClient.invalidateQueries({ queryKey: ['attendance'] }),
+    ]);
+  };
 
   return (
     <main className="mx-auto w-full max-w-[1500px] p-9 pb-14">
       <PageHeader
         action={
           canManage ? (
-            <Button
-              disabled={(branches.data?.length ?? 0) === 0}
-              onClick={() => {
-                setError(undefined);
-                setDialogOpen(true);
-              }}
-            >
-              <Plus className="size-4" />
-              {t('student.action.add')}
-            </Button>
+            <div className="flex gap-2">
+              {!selectionMode ? (
+                <Button
+                  onClick={() => {
+                    setBulkResult(undefined);
+                    setSelectionMode(true);
+                  }}
+                  variant="outline"
+                >
+                  <CheckSquare className="size-4" />
+                  Выбрать
+                </Button>
+              ) : null}
+              <Button
+                disabled={(branches.data?.length ?? 0) === 0}
+                onClick={() => {
+                  setError(undefined);
+                  setDialogOpen(true);
+                }}
+              >
+                <Plus className="size-4" />
+                {t('student.action.add')}
+              </Button>
+            </div>
           ) : undefined
         }
         description={t('student.pageDescription')}
         title={t('student.pageTitle')}
       />
+      {bulkResult ? (
+        <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+          {bulkResult}
+        </div>
+      ) : null}
+      {selectionMode ? (
+        <Card className="mb-4 flex flex-wrap items-center gap-2 p-3">
+          <p className="mr-2 text-sm font-semibold">Выбрано: {selectedIds.size}</p>
+          {hiddenSelectedCount > 0 ? (
+            <p className="mr-auto text-xs text-muted-foreground">
+              Скрыто текущими фильтрами: {hiddenSelectedCount}
+            </p>
+          ) : (
+            <span className="mr-auto" />
+          )}
+          <Button
+            disabled={visibleIds.length === 0}
+            onClick={() =>
+              setSelectedIds((current) => {
+                const next = new Set(current);
+                for (const id of visibleIds) next.add(id);
+                return next;
+              })
+            }
+            size="small"
+            variant="outline"
+          >
+            Выбрать на этой странице
+          </Button>
+          <Button
+            disabled={selectedIds.size === 0}
+            onClick={clearSelection}
+            size="small"
+            variant="ghost"
+          >
+            Снять выбор
+          </Button>
+          <Button
+            disabled={selectedIds.size === 0}
+            onClick={() => setBulkAction('ADD_TO_GROUP')}
+            size="small"
+          >
+            <UserPlus className="size-4" /> Добавить в группу
+          </Button>
+          <Button
+            disabled={selectedIds.size === 0}
+            onClick={() => setBulkAction('MOVE_TO_GROUP')}
+            size="small"
+            variant="outline"
+          >
+            <ArrowRightLeft className="size-4" /> Перевести
+          </Button>
+          <Button
+            disabled={selectedIds.size === 0}
+            onClick={() => setBulkAction('REMOVE_FROM_GROUP')}
+            size="small"
+            variant="outline"
+          >
+            <UserMinus className="size-4" /> Убрать из группы
+          </Button>
+          <Button
+            disabled={selectedIds.size === 0}
+            onClick={() => setBulkAction('CHANGE_STATUS')}
+            size="small"
+            variant="outline"
+          >
+            Изменить статус
+          </Button>
+          <Button
+            aria-label="Отменить массовый выбор"
+            onClick={closeSelection}
+            size="icon"
+            variant="ghost"
+          >
+            <X className="size-4" />
+          </Button>
+        </Card>
+      ) : null}
       <Card className="overflow-hidden">
         <div className="grid grid-cols-[minmax(260px,1fr)_220px_180px_180px_44px] gap-3 border-b border-border p-4">
           <div className="relative">
@@ -222,6 +366,24 @@ export function StudentsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {selectionMode ? (
+                    <TableHead className="w-12">
+                      <Checkbox
+                        aria-label="Выбрать всех учеников на этой странице"
+                        checked={allVisibleSelected}
+                        onChange={(event) => {
+                          setSelectedIds((current) => {
+                            const next = new Set(current);
+                            for (const id of visibleIds) {
+                              if (event.target.checked) next.add(id);
+                              else next.delete(id);
+                            }
+                            return next;
+                          });
+                        }}
+                      />
+                    </TableHead>
+                  ) : null}
                   <TableHead>{t('student.pageTitle')}</TableHead>
                   <TableHead>{t('student.branch')}</TableHead>
                   <TableHead>{t('student.phone')}</TableHead>
@@ -235,6 +397,15 @@ export function StudentsPage() {
               <TableBody>
                 {students.data.items.map((student) => (
                   <TableRow key={student.id}>
+                    {selectionMode ? (
+                      <TableCell>
+                        <Checkbox
+                          aria-label={`Выбрать ${student.lastName} ${student.firstName}`}
+                          checked={selectedIds.has(student.id)}
+                          onChange={() => toggleStudent(student.id)}
+                        />
+                      </TableCell>
+                    ) : null}
                     <TableCell className="py-4">
                       <div className="flex items-center gap-3">
                         <Avatar name={`${student.lastName} ${student.firstName}`} />
@@ -265,7 +436,7 @@ export function StudentsPage() {
                         year: 'numeric',
                       })}
                     </TableCell>
-                    {canManage ? (
+                    {canManage && !selectionMode ? (
                       <TableCell className="text-right">
                         <Button
                           aria-label={t('student.action.archiveLabel', {
@@ -323,6 +494,14 @@ export function StudentsPage() {
         onSubmit={save}
         open={dialogOpen}
         student={null}
+      />
+      <StudentBulkDialog
+        action={bulkAction}
+        groups={groups.data ?? []}
+        onClose={() => setBulkAction(undefined)}
+        onSuccess={(result) => void handleBulkSuccess(result)}
+        open={Boolean(bulkAction)}
+        studentIds={[...selectedIds]}
       />
     </main>
   );

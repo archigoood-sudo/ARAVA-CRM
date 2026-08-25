@@ -712,6 +712,58 @@ describe('Electron IPC boundary', () => {
     ).resolves.toEqual([expect.objectContaining({ id: student.id })]);
   });
 
+  it('validates and executes specialized student bulk IPC without exposing a generic patch', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!BulkIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Массовый IPC' });
+    const studio = new StudioService(database, service);
+    const group = await studio.createGroup(owner.token, {
+      branchId: branch.id,
+      capacity: 10,
+      direction: 'Хип-хоп',
+      name: 'Массовая группа',
+      status: 'ACTIVE',
+    });
+    const students = await Promise.all(
+      ['Анна', 'Вера'].map((firstName) =>
+        service.createStudent(owner.token, {
+          branchId: branch.id,
+          firstName,
+          lastName: 'IPC',
+          status: 'ACTIVE',
+        }),
+      ),
+    );
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    const input = {
+      effectiveDate: '2026-08-25',
+      groupId: group.id,
+      overrideCapacity: false,
+      studentIds: students.map(({ id }) => id),
+    };
+    const firstStudent = students[0];
+    if (!firstStudent) throw new Error('Не создан тестовый ученик.');
+    expect(() =>
+      handlers[IPC_CHANNELS.studentBulkAddPreview]?.(owner.token, {
+        ...input,
+        studentIds: [firstStudent.id, firstStudent.id],
+      }),
+    ).toThrow('содержит повторы');
+    const preview = (await handlers[IPC_CHANNELS.studentBulkAddPreview]?.(owner.token, input)) as {
+      eligibleCount: number;
+      previewKey: string;
+    };
+    expect(preview.eligibleCount).toBe(2);
+    await handlers[IPC_CHANNELS.studentBulkAddExecute]?.(owner.token, input, preview.previewKey);
+    expect(await database.enrollment.count({ where: { groupId: group.id } })).toBe(2);
+  });
+
   it('validates trainer profile IPC and returns the permission-aware projection', async () => {
     const owner = await service.login({
       email: INITIAL_OWNER_EMAIL,

@@ -122,6 +122,7 @@ export { CalendarService } from './calendar-service';
 export { CardService } from './card-service';
 export { GlobalSearchService } from './global-search-service';
 export { StudentProfileService } from './student-profile-service';
+export { StudentBulkService } from './student-bulk-service';
 export { TrainerProfileService } from './trainer-profile-service';
 export { ChatService } from './chat-service';
 export { LeadService } from './lead-service';

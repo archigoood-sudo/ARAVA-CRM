@@ -14,6 +14,7 @@ import {
   PublicationService,
   StudioService,
   StudentProfileService,
+  StudentBulkService,
   TrainerProfileService,
   AttentionService,
   BackupService,
@@ -89,6 +90,10 @@ import {
   settingKeySchema,
   settingUpdateSchema,
   studentContactInputSchema,
+  studentBulkAddToGroupSchema,
+  studentBulkChangeStatusSchema,
+  studentBulkMoveToGroupSchema,
+  studentBulkRemoveFromGroupSchema,
   studentInputSchema,
   studentListQuerySchema,
   studentNoteInputSchema,
@@ -189,6 +194,7 @@ export function createIpcHandlers(
   const cards = new CardService(database, service);
   const search = new GlobalSearchService(database, service);
   const studentProfiles = new StudentProfileService(database, service);
+  const studentBulk = new StudentBulkService(database, service);
   const trainerProfiles = new TrainerProfileService(database, service);
   const attention = new AttentionService(database, service);
   const publications = new PublicationService(database, service);
@@ -1496,6 +1502,50 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
       ),
+    [IPC_CHANNELS.studentBulkAddPreview]: (unsafeToken, unsafeInput) =>
+      studentBulk.previewAddToGroup(
+        sessionTokenSchema.parse(unsafeToken),
+        studentBulkAddToGroupSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.studentBulkAddExecute]: (unsafeToken, unsafeInput, unsafePreviewKey) =>
+      studentBulk.addToGroup(
+        sessionTokenSchema.parse(unsafeToken),
+        studentBulkAddToGroupSchema.parse(unsafeInput),
+        identifierSchema.parse(unsafePreviewKey),
+      ),
+    [IPC_CHANNELS.studentBulkMovePreview]: (unsafeToken, unsafeInput) =>
+      studentBulk.previewMoveToGroup(
+        sessionTokenSchema.parse(unsafeToken),
+        studentBulkMoveToGroupSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.studentBulkMoveExecute]: (unsafeToken, unsafeInput, unsafePreviewKey) =>
+      studentBulk.moveToGroup(
+        sessionTokenSchema.parse(unsafeToken),
+        studentBulkMoveToGroupSchema.parse(unsafeInput),
+        identifierSchema.parse(unsafePreviewKey),
+      ),
+    [IPC_CHANNELS.studentBulkRemovePreview]: (unsafeToken, unsafeInput) =>
+      studentBulk.previewRemoveFromGroup(
+        sessionTokenSchema.parse(unsafeToken),
+        studentBulkRemoveFromGroupSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.studentBulkRemoveExecute]: (unsafeToken, unsafeInput, unsafePreviewKey) =>
+      studentBulk.removeFromGroup(
+        sessionTokenSchema.parse(unsafeToken),
+        studentBulkRemoveFromGroupSchema.parse(unsafeInput),
+        identifierSchema.parse(unsafePreviewKey),
+      ),
+    [IPC_CHANNELS.studentBulkStatusPreview]: (unsafeToken, unsafeInput) =>
+      studentBulk.previewChangeStatus(
+        sessionTokenSchema.parse(unsafeToken),
+        studentBulkChangeStatusSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.studentBulkStatusExecute]: (unsafeToken, unsafeInput, unsafePreviewKey) =>
+      studentBulk.changeStatus(
+        sessionTokenSchema.parse(unsafeToken),
+        studentBulkChangeStatusSchema.parse(unsafeInput),
+        identifierSchema.parse(unsafePreviewKey),
+      ),
 
     [IPC_CHANNELS.contactCreate]: (unsafeToken, unsafeStudentId, unsafeInput) =>
       service.createContact(
@@ -1922,6 +1972,10 @@ const SYNC_RELEVANT_MUTATIONS = new Set<string>([
   IPC_CHANNELS.scheduleDeactivate,
   IPC_CHANNELS.scheduleUpdate,
   IPC_CHANNELS.studentArchive,
+  IPC_CHANNELS.studentBulkAddExecute,
+  IPC_CHANNELS.studentBulkMoveExecute,
+  IPC_CHANNELS.studentBulkRemoveExecute,
+  IPC_CHANNELS.studentBulkStatusExecute,
   IPC_CHANNELS.studentCreate,
   IPC_CHANNELS.studentUpdate,
   IPC_CHANNELS.studentNoteArchive,

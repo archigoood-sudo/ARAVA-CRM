@@ -357,6 +357,14 @@ const desktopApi: AravaDesktopApi = {
   },
   students: {
     archive: (token, id) => invoke(IPC_CHANNELS.studentArchive, token, id),
+    bulkAddToGroup: (token, input, previewKey) =>
+      invoke(IPC_CHANNELS.studentBulkAddExecute, token, input, previewKey),
+    bulkChangeStatus: (token, input, previewKey) =>
+      invoke(IPC_CHANNELS.studentBulkStatusExecute, token, input, previewKey),
+    bulkMoveToGroup: (token, input, previewKey) =>
+      invoke(IPC_CHANNELS.studentBulkMoveExecute, token, input, previewKey),
+    bulkRemoveFromGroup: (token, input, previewKey) =>
+      invoke(IPC_CHANNELS.studentBulkRemoveExecute, token, input, previewKey),
     archiveNote: async (token, noteId) => {
       await invoke(IPC_CHANNELS.studentNoteArchive, token, noteId);
     },
@@ -367,6 +375,14 @@ const desktopApi: AravaDesktopApi = {
     getProfile: (token, id) => invoke(IPC_CHANNELS.studentProfileGet, token, id),
     list: (token, query) => invoke(IPC_CHANNELS.studentList, token, query),
     options: (token, branchId) => invoke(IPC_CHANNELS.studentOptions, token, branchId),
+    previewBulkAddToGroup: (token, input) =>
+      invoke(IPC_CHANNELS.studentBulkAddPreview, token, input),
+    previewBulkChangeStatus: (token, input) =>
+      invoke(IPC_CHANNELS.studentBulkStatusPreview, token, input),
+    previewBulkMoveToGroup: (token, input) =>
+      invoke(IPC_CHANNELS.studentBulkMovePreview, token, input),
+    previewBulkRemoveFromGroup: (token, input) =>
+      invoke(IPC_CHANNELS.studentBulkRemovePreview, token, input),
     update: (token, id, input) => invoke(IPC_CHANNELS.studentUpdate, token, id, input),
     updateNote: (token, noteId, input) =>
       invoke(IPC_CHANNELS.studentNoteUpdate, token, noteId, input),

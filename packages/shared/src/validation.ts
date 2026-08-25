@@ -74,6 +74,10 @@ import {
   type PayrollRuleInput,
   type ReportQuery,
   type StudentContactInput,
+  type StudentBulkAddToGroupInput,
+  type StudentBulkChangeStatusInput,
+  type StudentBulkMoveToGroupInput,
+  type StudentBulkRemoveFromGroupInput,
   type StudentInput,
   type StudentNoteInput,
   type StudentListQuery,
@@ -835,6 +839,44 @@ export const reportQuerySchema: z.ZodType<ReportQuery> = z
 
 export const identifierSchema = z.string().min(1).max(100);
 export const sessionTokenSchema = z.string().min(32).max(256);
+
+const bulkStudentIdsSchema = z
+  .array(identifierSchema)
+  .min(1, 'Выберите хотя бы одного ученика.')
+  .max(200, 'За одну операцию можно выбрать не более 200 учеников.')
+  .refine((ids) => new Set(ids).size === ids.length, 'Список учеников содержит повторы.');
+
+export const studentBulkAddToGroupSchema: z.ZodType<StudentBulkAddToGroupInput> = z.object({
+  effectiveDate: isoDate,
+  groupId: identifierSchema,
+  overrideCapacity: z.boolean(),
+  studentIds: bulkStudentIdsSchema,
+});
+
+export const studentBulkMoveToGroupSchema: z.ZodType<StudentBulkMoveToGroupInput> = z
+  .object({
+    effectiveDate: isoDate,
+    overrideCapacity: z.boolean(),
+    sourceGroupId: identifierSchema,
+    studentIds: bulkStudentIdsSchema,
+    targetGroupId: identifierSchema,
+  })
+  .refine((input) => input.sourceGroupId !== input.targetGroupId, {
+    message: 'Исходная и целевая группы должны отличаться.',
+    path: ['targetGroupId'],
+  });
+
+export const studentBulkRemoveFromGroupSchema: z.ZodType<StudentBulkRemoveFromGroupInput> =
+  z.object({
+    effectiveDate: isoDate,
+    groupId: identifierSchema,
+    studentIds: bulkStudentIdsSchema,
+  });
+
+export const studentBulkChangeStatusSchema: z.ZodType<StudentBulkChangeStatusInput> = z.object({
+  status: studentStatusSchema,
+  studentIds: bulkStudentIdsSchema,
+});
 
 export const chatListQuerySchema = z.object({
   filter: z.enum(['ALL', 'PRIVATE_ADMIN', 'GROUP', 'UNREAD']).optional(),
