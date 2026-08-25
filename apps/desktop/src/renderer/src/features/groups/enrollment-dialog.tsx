@@ -9,6 +9,8 @@ import { Button, Checkbox, Dialog, Label, Select, Textarea } from '@arava/ui';
 import { useLayoutEffect } from 'react';
 import { useForm } from 'react-hook-form';
 
+import { localDateInputValue } from '../../lib/local-date';
+
 export function EnrollmentDialog({
   error,
   isFull,
@@ -31,7 +33,7 @@ export function EnrollmentDialog({
     reset,
   } = useForm<EnrollmentInput>({
     defaultValues: {
-      joinedAt: new Date().toISOString().slice(0, 10),
+      joinedAt: localDateInputValue(),
       notes: '',
       overrideCapacity: false,
       status: 'ACTIVE',
@@ -42,7 +44,7 @@ export function EnrollmentDialog({
   useLayoutEffect(() => {
     if (open)
       reset({
-        joinedAt: new Date().toISOString().slice(0, 10),
+        joinedAt: localDateInputValue(),
         notes: '',
         overrideCapacity: false,
         status: 'ACTIVE',

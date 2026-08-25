@@ -16,6 +16,7 @@ import { useForm } from 'react-hook-form';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { getSessionToken } from '../../stores/auth-store';
+import { paymentSubmitLabel } from './payment-dialog-model';
 
 function localDateTimeValue(value = new Date()): string {
   const offset = value.getTimezoneOffset() * 60_000;
@@ -102,6 +103,13 @@ export function PaymentDialog({
   const aqsiModeLocked = Boolean(
     sbpPayment && !['SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED'].includes(sbpPayment.status),
   );
+  const manualActionLabel = paymentSubmitLabel({
+    amount: Math.round((Number.isFinite(values.amount) ? values.amount : 0) * 100),
+    attendancePayment: Boolean(attendancePayment),
+    subscriptionPayment: Boolean(subscriptionPayment),
+    subscriptionSale: Boolean(subscriptionSale),
+    subscriptionSalePrice: subscriptionSale?.input.salePrice,
+  });
   useLayoutEffect(() => {
     if (!open) return;
     reset({
@@ -494,6 +502,10 @@ export function PaymentDialog({
                 <p className="mt-3 text-sm text-muted-foreground">
                   {aqsiStatusText[sbpPayment.status]}
                 </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Окно можно закрыть — CRM продолжит проверять оплату и завершит операцию после
+                  подтверждения.
+                </p>
               </>
             ) : sbpPayment?.status === 'SUCCEEDED' ? (
               <div className="space-y-2">
@@ -542,8 +554,7 @@ export function PaymentDialog({
                     : 'Оплата не завершена'}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {sbpPayment.error?.message ??
-                    'Создайте новую попытку и попросите клиента повторить оплату.'}
+                  Создайте новую попытку и попросите клиента повторить оплату.
                 </p>
               </>
             ) : (
@@ -571,11 +582,11 @@ export function PaymentDialog({
         ) : null}
         <div className="flex justify-end gap-3 pt-2">
           <Button onClick={onClose} variant="outline">
-            {t('common.cancel')}
+            {aqsiModeLocked ? 'Закрыть окно' : t('common.cancel')}
           </Button>
           {mode === 'MANUAL' ? (
             <Button disabled={isSubmitting} type="submit">
-              {isSubmitting ? t('common.saving') : t('payment.save')}
+              {isSubmitting ? t('common.saving') : manualActionLabel}
             </Button>
           ) : sbpPayment?.status === 'SUCCEEDED' ? (
             <div className="flex gap-2">

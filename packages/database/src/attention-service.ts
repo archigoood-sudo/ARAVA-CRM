@@ -28,7 +28,11 @@ function fullName(person: {
 }
 
 function dateRoute(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return [
+    String(date.getFullYear()).padStart(4, '0'),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
 }
 
 function paymentNet(payment: {
@@ -444,16 +448,15 @@ export class AttentionService {
     for (const operation of failedPaymentOperations)
       add({
         actionLabel: 'Открыть оплату',
-        actionRoute: `/students/${operation.studentId}?section=finance`,
+        actionRoute: `/students/${operation.studentId}?paymentOperationId=${operation.id}`,
         branchId: operation.branchId,
         branchName: operation.branch.name,
         category: 'PAYMENTS',
         description: operation.saleFinalizationError
           ? 'Оплата подтверждена, но выдача абонемента ещё не завершена. Безопасно проверьте оплату повторно.'
-          : (operation.failureReason ??
-            (operation.status === 'EXPIRED'
-              ? 'Время ожидания оплаты истекло.'
-              : 'Операция оплаты завершилась ошибкой.')),
+          : operation.status === 'EXPIRED'
+            ? 'Время ожидания оплаты истекло. Откройте операцию, чтобы проверить состояние.'
+            : 'Оплата не завершена. Откройте операцию, чтобы проверить состояние или повторить попытку.',
         entityId: operation.id,
         entityType: 'PaymentOperation',
         id: `payment-operation:${operation.saleFinalizationError ? 'sale-finalization' : operation.status.toLowerCase()}:${operation.id}`,
@@ -469,7 +472,7 @@ export class AttentionService {
       if (subscriptionCoveredAttendanceIds.has(attendanceId)) continue;
       add({
         actionLabel: 'Оплатить посещение',
-        actionRoute: `/students/${attendance.studentId}?section=finance`,
+        actionRoute: `/students/${attendance.studentId}?action=attendance-payment&lessonId=${attendance.lessonId}`,
         branchId: attendance.lesson.branchId,
         branchName: attendance.lesson.branch.name,
         category: 'SUBSCRIPTIONS',

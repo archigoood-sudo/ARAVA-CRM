@@ -27,6 +27,7 @@ import {
   LoadingState,
   Money,
   Select,
+  cn,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -57,12 +58,16 @@ const currentStatuses: SubscriptionStatus[] = ['ACTIVE', 'FROZEN'];
 export function StudentFinance({
   branches,
   onRequestedActionHandled,
+  requestedAttendanceLessonId,
   requestedAction,
+  requestedPaymentOperationId,
   student,
 }: {
   branches: BranchSummary[];
   onRequestedActionHandled?: (() => void) | undefined;
+  requestedAttendanceLessonId?: string | undefined;
   requestedAction?: 'payment' | 'subscription' | undefined;
+  requestedPaymentOperationId?: string | undefined;
   student: StudentSummary;
 }) {
   const user = useAuthStore((state) => state.user);
@@ -89,7 +94,8 @@ export function StudentFinance({
     input: SubscriptionCreateInput;
     tariffName: string;
   }>();
-  const [saleSuccess, setSaleSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string>();
+  const [focusedAttendanceLessonId, setFocusedAttendanceLessonId] = useState<string>();
   const [attendanceTariffs, setAttendanceTariffs] = useState<Record<string, string>>({});
   const [freezeId, setFreezeId] = useState<string>();
   const [detailId, setDetailId] = useState<string>();
@@ -106,6 +112,11 @@ export function StudentFinance({
     if (requestedAction === 'subscription') setIssueOpen(true);
     if (requestedAction) onRequestedActionHandled?.();
   }, [onRequestedActionHandled, requestedAction]);
+  useEffect(() => {
+    if (!requestedPaymentOperationId) return;
+    setPaymentOperationId(requestedPaymentOperationId);
+    onRequestedActionHandled?.();
+  }, [onRequestedActionHandled, requestedPaymentOperationId]);
   const finance = useQuery({
     queryFn: () => getDesktopApi().subscriptions.listStudent(getSessionToken(), student.id),
     queryKey: queryKeys.studentFinance(student.id),
@@ -148,13 +159,13 @@ export function StudentFinance({
     paymentPlan: SubscriptionSalePaymentPlan,
   ) => {
     setError(undefined);
-    setSaleSuccess(false);
+    setSuccessMessage(undefined);
     try {
       setIssueOpen(false);
       if (paymentPlan.mode === 'NONE') {
         const created = await issue.mutateAsync(input);
         await refresh();
-        setSaleSuccess(true);
+        setSuccessMessage('Абонемент выдан с задолженностью');
         setDetailId(created.id);
       } else {
         const tariffName =
@@ -202,6 +213,30 @@ export function StudentFinance({
     mutationFn: (id: string) =>
       getDesktopApi().paymentOperations.retryFiscalReceipt(getSessionToken(), id),
   });
+  useEffect(() => {
+    if (!requestedAttendanceLessonId || !finance.data) return;
+    const attendance = finance.data.uncoveredAttendances.find(
+      ({ lessonId }) => lessonId === requestedAttendanceLessonId,
+    );
+    onRequestedActionHandled?.();
+    if (!attendance) return;
+    setFocusedAttendanceLessonId(attendance.lessonId);
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`attendance-payment-${attendance.lessonId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    if (attendance.paymentStatus === 'PENDING' || attendance.tariffs.length !== 1) return;
+    const tariff = attendance.tariffs[0];
+    if (!tariff) return;
+    setAttendancePayment({
+      amount: tariff.price,
+      lessonId: attendance.lessonId,
+      tariffId: tariff.id,
+      tariffName: tariff.name,
+    });
+    setPaymentOpen(true);
+  }, [finance.data, onRequestedActionHandled, requestedAttendanceLessonId]);
   useEffect(() => {
     const operation = selectedPaymentOperation.data;
     if (
@@ -279,9 +314,9 @@ export function StudentFinance({
     );
   return (
     <section className="mt-5 space-y-5">
-      {saleSuccess ? (
+      {successMessage ? (
         <div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm font-medium text-green-800">
-          Абонемент выдан
+          {successMessage}
         </div>
       ) : null}
       <div className="grid grid-cols-3 gap-4">
@@ -320,7 +355,12 @@ export function StudentFinance({
           <CardContent className="space-y-2">
             {finance.data.uncoveredAttendances.map((attendance) => (
               <div
-                className="grid gap-3 rounded-2xl border border-border p-4 text-sm md:grid-cols-[1fr_auto] md:items-center"
+                className={cn(
+                  'grid gap-3 rounded-2xl border border-border p-4 text-sm md:grid-cols-[1fr_auto] md:items-center',
+                  focusedAttendanceLessonId === attendance.lessonId &&
+                    'border-sky-300 bg-sky-50/70 ring-2 ring-sky-100',
+                )}
+                id={`attendance-payment-${attendance.lessonId}`}
                 key={`${attendance.lessonId}:${attendance.startsAt}`}
               >
                 <div>
@@ -416,7 +456,7 @@ export function StudentFinance({
                   setSubscriptionPayment(undefined);
                   setSubscriptionSale(undefined);
                   setError(undefined);
-                  setSaleSuccess(false);
+                  setSuccessMessage(undefined);
                   setPaymentOpen(true);
                 }}
                 size="small"
@@ -562,7 +602,13 @@ export function StudentFinance({
         }}
         onSbpCompleted={async () => {
           await refresh();
-          if (subscriptionSale) setSaleSuccess(true);
+          setSuccessMessage(
+            subscriptionSale
+              ? 'Абонемент выдан'
+              : attendancePayment
+                ? 'Посещение оплачено'
+                : 'Оплата принята',
+          );
         }}
         onSubmit={(input) => {
           const operation = subscriptionSale
@@ -579,7 +625,13 @@ export function StudentFinance({
                 })
             : () => payment.mutateAsync(input);
           return perform(operation, t('payment.errorSave'), () => {
-            if (subscriptionSale) setSaleSuccess(true);
+            setSuccessMessage(
+              subscriptionSale
+                ? 'Абонемент выдан'
+                : attendancePayment
+                  ? 'Посещение оплачено'
+                  : 'Оплата принята',
+            );
             setPaymentOpen(false);
             setAttendancePayment(undefined);
             setSubscriptionPayment(undefined);

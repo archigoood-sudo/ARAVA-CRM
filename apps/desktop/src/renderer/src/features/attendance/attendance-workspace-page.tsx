@@ -9,7 +9,7 @@ import {
   Clock3,
   UsersRound,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -104,6 +104,8 @@ export function AttendanceWorkspacePage() {
   const role = useAuthStore(({ user }) => user?.role);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialDate = searchParams.get('date');
+  const requestedOccurrenceId = searchParams.get('occurrence');
+  const openedOccurrenceId = useRef<string>();
   const [date, setDate] = useState(() =>
     initialDate && /^\d{4}-\d{2}-\d{2}$/u.test(initialDate) ? initialDate : localDateKey(),
   );
@@ -129,6 +131,13 @@ export function AttendanceWorkspacePage() {
       void navigate(`/attendance/${id}?from=workspace&date=${date}`);
     },
   });
+  useEffect(() => {
+    if (!requestedOccurrenceId || openedOccurrenceId.current === requestedOccurrenceId) return;
+    const occurrence = attendance.data?.lessons.find(({ id }) => id === requestedOccurrenceId);
+    if (!occurrence || occurrence.status === 'CANCELLED') return;
+    openedOccurrenceId.current = requestedOccurrenceId;
+    openOccurrence.mutate(occurrence);
+  }, [attendance.data?.lessons, openOccurrence, requestedOccurrenceId]);
   const selectDate = (nextDate: string) => {
     setDate(nextDate);
     setSearchParams(nextDate === today ? {} : { date: nextDate }, { replace: true });

@@ -17,6 +17,7 @@ import {
   ArrowLeft,
   CheckCheck,
   CircleCheck,
+  Clock3,
   Plus,
   Search,
   UserRoundCheck,
@@ -35,13 +36,19 @@ const operationalStatuses: {
   active: string;
   icon: typeof UserRoundCheck;
   label: string;
-  status: Extract<AttendanceStatus, 'PRESENT' | 'ABSENT' | 'EXCUSED'>;
+  status: Extract<AttendanceStatus, 'PRESENT' | 'LATE' | 'ABSENT' | 'EXCUSED'>;
 }[] = [
   {
     active: 'border-emerald-600 bg-emerald-600 text-white',
     icon: UserRoundCheck,
     label: 'Присутствовал',
     status: 'PRESENT',
+  },
+  {
+    active: 'border-sky-500 bg-sky-500 text-white',
+    icon: Clock3,
+    label: 'Опоздал',
+    status: 'LATE',
   },
   {
     active: 'border-red-500 bg-red-500 text-white',
@@ -71,7 +78,7 @@ export function AttendancePage() {
   const [search, setSearch] = useState('');
   const [manualOpen, setManualOpen] = useState(false);
   const [manualStatus, setManualStatus] =
-    useState<Extract<AttendanceStatus, 'PRESENT' | 'ABSENT' | 'EXCUSED'>>('PRESENT');
+    useState<Extract<AttendanceStatus, 'PRESENT' | 'LATE' | 'ABSENT' | 'EXCUSED'>>('PRESENT');
   const [manualStudentId, setManualStudentId] = useState('');
   const user = useAuthStore((state) => state.user);
   const client = useQueryClient();
@@ -137,6 +144,7 @@ export function AttendancePage() {
   const counts = {
     ABSENT: participants.filter(({ status }) => status === 'ABSENT').length,
     EXCUSED: participants.filter(({ status }) => status === 'EXCUSED').length,
+    LATE: participants.filter(({ status }) => status === 'LATE').length,
     PRESENT: participants.filter(({ status }) => status === 'PRESENT').length,
     UNMARKED: participants.filter(({ status }) => !status).length,
   };
@@ -175,9 +183,10 @@ export function AttendancePage() {
         </div>
       </header>
 
-      <section className="sticky top-0 z-20 -mx-2 mb-5 grid grid-cols-2 gap-2 bg-background/95 px-2 py-3 backdrop-blur md:grid-cols-4">
+      <section className="sticky top-0 z-20 -mx-2 mb-5 grid grid-cols-2 gap-2 bg-background/95 px-2 py-3 backdrop-blur md:grid-cols-5">
         {[
           ['Присутствуют', counts.PRESENT, 'text-emerald-700'],
+          ['Опоздали', counts.LATE, 'text-sky-700'],
           ['Отсутствуют', counts.ABSENT, 'text-red-600'],
           ['Болеют', counts.EXCUSED, 'text-amber-700'],
           ['Не отмечены', counts.UNMARKED, 'text-muted-foreground'],
@@ -260,7 +269,7 @@ export function AttendancePage() {
                     <Badge className="mt-2 bg-sky-50 text-sky-700">Добавлен в группу позже</Badge>
                   ) : null}
                 </div>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-2">
                   {operationalStatuses.map(({ active, icon: Icon, label, status }) => (
                     <button
                       aria-label={`${participant.studentName}: ${label}`}
@@ -324,12 +333,16 @@ export function AttendancePage() {
               id="manual-attendance-status"
               onChange={(event) =>
                 setManualStatus(
-                  event.target.value as Extract<AttendanceStatus, 'PRESENT' | 'ABSENT' | 'EXCUSED'>,
+                  event.target.value as Extract<
+                    AttendanceStatus,
+                    'PRESENT' | 'LATE' | 'ABSENT' | 'EXCUSED'
+                  >,
                 )
               }
               value={manualStatus}
             >
               <option value="PRESENT">Присутствовал</option>
+              <option value="LATE">Опоздал</option>
               <option value="ABSENT">Отсутствовал</option>
               <option value="EXCUSED">Болел</option>
             </Select>

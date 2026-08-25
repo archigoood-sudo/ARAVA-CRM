@@ -162,6 +162,9 @@ test('рабочее место отмечает вручную, через по
     await expect(page.getByText('Иванова Алиса', { exact: true })).toBeHidden();
     await page.getByRole('button', { name: 'Петров Борис: Присутствовал' }).click();
     await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('2');
+    await page.getByRole('button', { name: 'Петров Борис: Опоздал' }).click();
+    await expect(page.getByText('Опоздали', { exact: true }).locator('..')).toContainText('1');
+    await page.getByRole('button', { name: 'Петров Борис: Присутствовал' }).click();
     await search.fill('');
 
     await scan(page, '0000098701');

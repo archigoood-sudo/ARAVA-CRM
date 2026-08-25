@@ -33,7 +33,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { buildDashboardWorkspace, type DashboardActionItem } from './dashboard-workspace';
-import { classifyTodayLessons } from './dashboard-today';
+import { classifyTodayLessons, todayAttendanceRoute } from './dashboard-today';
 
 function greetingKey(hour: number) {
   if (hour < 5) return 'dashboard.greeting.night' as const;
@@ -257,7 +257,7 @@ export function DashboardPage() {
         <LessonTimeline
           lessons={currentStats.todayLessons}
           now={now}
-          onOpenAttendance={() => navigate('/attendance')}
+          onOpenAttendance={(lesson) => navigate(todayAttendanceRoute(lesson))}
         />
       ) : null}
 
@@ -343,7 +343,7 @@ function LessonTimeline({
 }: {
   lessons: DashboardStats['todayLessons'];
   now: Date;
-  onOpenAttendance: () => void;
+  onOpenAttendance: (lesson: DashboardStats['todayLessons'][number]) => void;
 }) {
   const { current, upcoming } = classifyTodayLessons(lessons, now);
   return (
@@ -394,12 +394,12 @@ function TodayLesson({
   onOpen,
 }: {
   lesson: DashboardStats['todayLessons'][number];
-  onOpen: () => void;
+  onOpen: (lesson: DashboardStats['todayLessons'][number]) => void;
 }) {
   return (
     <button
       className="flex w-full items-center justify-between gap-4 rounded-2xl border border-border p-4 text-left transition hover:bg-muted/50"
-      onClick={onOpen}
+      onClick={() => onOpen(lesson)}
       type="button"
     >
       <span className="min-w-0">

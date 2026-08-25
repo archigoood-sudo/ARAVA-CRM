@@ -1,5 +1,12 @@
 import type { DashboardTodayLesson } from '@arava/shared';
 
+import { localDateInputValue } from '../../lib/local-date';
+
+export function todayAttendanceRoute(lesson: DashboardTodayLesson): string {
+  const date = localDateInputValue(new Date(lesson.startsAt));
+  return `/attendance?date=${date}&occurrence=${encodeURIComponent(lesson.id)}`;
+}
+
 export function classifyTodayLessons(
   lessons: DashboardTodayLesson[],
   now: Date,

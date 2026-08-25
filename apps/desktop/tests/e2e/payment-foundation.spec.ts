@@ -73,6 +73,15 @@ test('платёжная операция становится одним под
         price: 1_500,
         type: 'SINGLE_LESSON',
       });
+      await api.tariffs.create(token, {
+        branchId: branch.id,
+        currency: 'RUB',
+        isActive: true,
+        lessonCount: 1,
+        name: 'Бесплатный пробный E2E',
+        price: 0,
+        type: 'TRIAL',
+      });
       const tariff = await api.tariffs.create(token, {
         branchId: branch.id,
         currency: 'RUB',
@@ -102,19 +111,25 @@ test('платёжная операция становится одним под
       return { operationId: operation.id, studentId: student.id, tariffId: tariff.id, token };
     });
 
-    await page.getByRole('button', { name: 'Поиск по приложению' }).click();
-    let search = page.getByRole('region', { name: 'Глобальный поиск' });
-    await search.getByLabel('Поиск по приложению').fill('Оплатина E2E Анна');
-    await search.getByRole('button', { name: /Оплатина E2E Анна/u }).click();
+    await page.getByRole('link', { name: 'Главная', exact: true }).click();
+    await page.getByRole('button', { name: 'Обновить рабочий день' }).click();
+    const uncoveredTask = page
+      .locator('article')
+      .filter({ hasText: 'Оплатина E2E Анна: посещение без покрытия' });
+    await expect(uncoveredTask).toBeVisible();
+    await uncoveredTask.getByRole('button', { name: 'Оплатить посещение' }).click();
+    await expect(page).toHaveURL(
+      new RegExp(`/students/${context.studentId}[?]action=attendance-payment&lessonId=`, 'u'),
+    );
     await expect(page.getByText('Операции оплаты')).toBeVisible();
     await expect(page.getByText('Создана')).toBeVisible();
     await expect(page.getByText('Исторический чек с ошибкой')).toBeVisible();
     await expect(page.getByText('Посещения без покрытия')).toBeVisible();
     await expect(page.getByText(/Разовая группа E2E ·/u)).toBeVisible();
-    await page.getByRole('button', { name: 'Оплатить разовое посещение' }).click();
     await expect(page.getByText('Разовый E2E')).toBeVisible();
     await expect(page.getByLabel('Сумма')).toHaveValue('15');
-    await page.getByRole('button', { name: 'Сохранить платёж' }).click();
+    await page.getByRole('button', { name: 'Оплатить посещение' }).click();
+    await expect(page.getByText('Посещение оплачено')).toBeVisible();
     await expect(
       page.getByRole('button', { name: 'Оплатить разовое посещение' }),
     ).not.toBeVisible();
@@ -140,7 +155,7 @@ test('платёжная операция становится одним под
 
     await page.getByRole('link', { name: 'Главная', exact: true }).click();
     await page.getByRole('button', { name: 'Поиск по приложению' }).click();
-    search = page.getByRole('region', { name: 'Глобальный поиск' });
+    let search = page.getByRole('region', { name: 'Глобальный поиск' });
     await search.getByLabel('Поиск по приложению').fill('Оплатина E2E Анна');
     await search.getByRole('button', { name: /Оплатина E2E Анна/u }).click();
     await expect(page.getByRole('heading', { name: 'Оплатина E2E Анна' })).toBeVisible();
@@ -217,7 +232,10 @@ test('платёжная операция становится одним под
     }, context);
     await page.getByRole('button', { name: 'Продать абонемент' }).click();
     const saleDialog = page.getByRole('dialog');
-    await saleDialog.getByLabel('Тариф').selectOption(context.tariffId);
+    const saleTariff = saleDialog.getByLabel('Тариф');
+    await expect(saleTariff).toBeEnabled();
+    await expect(saleTariff).toHaveValue(/.+/u);
+    await saleTariff.selectOption(context.tariffId);
     await saleDialog.getByRole('button', { name: 'Продолжить к оплате' }).click();
     const unifiedPayment = page.getByRole('dialog');
     await unifiedPayment.getByRole('button', { name: 'Оплата картой', exact: true }).click();

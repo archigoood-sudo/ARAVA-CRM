@@ -24,6 +24,14 @@ import type { ApplicationService } from './services';
 import type { StudioService } from './studio-service';
 import { LessonOccurrenceService } from './lesson-occurrence-service';
 
+function localDateKey(value = new Date()): string {
+  return [
+    String(value.getFullYear()).padStart(4, '0'),
+    String(value.getMonth() + 1).padStart(2, '0'),
+    String(value.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
 export class LeadService {
   private readonly lessonOccurrences: LessonOccurrenceService;
 
@@ -151,7 +159,7 @@ export class LeadService {
       });
       if (!active) {
         await this.studio.addEnrollment(token, input.groupId, {
-          joinedAt: new Date().toISOString().slice(0, 10),
+          joinedAt: localDateKey(),
           overrideCapacity: false,
           status: 'TRIAL',
           studentId: created.student.id,

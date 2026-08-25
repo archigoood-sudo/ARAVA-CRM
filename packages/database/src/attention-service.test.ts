@@ -188,7 +188,9 @@ describe('Sprint 4.2B attention center', () => {
     let items = await attention.listItems(ownerToken, { category: 'PAYMENTS' });
     expect(items).toContainEqual(
       expect.objectContaining({
-        actionRoute: `/students/${student.id}?section=finance`,
+        actionRoute: `/students/${student.id}?paymentOperationId=${operation.id}`,
+        description:
+          'Оплата не завершена. Откройте операцию, чтобы проверить состояние или повторить попытку.',
         entityId: operation.id,
         id: `payment-operation:failed:${operation.id}`,
         severity: 'CRITICAL',
@@ -201,6 +203,46 @@ describe('Sprint 4.2B attention center', () => {
     });
     items = await attention.listItems(ownerToken, { category: 'PAYMENTS' });
     expect(items.some(({ entityId }) => entityId === operation.id)).toBe(false);
+  });
+
+  it('opens uncovered attendance in its canonical direct-payment context', async () => {
+    const { branch, coach, student } = await branchFoundation('Разовое');
+    const group = await database.danceGroup.create({
+      data: {
+        branchId: branch.id,
+        capacity: 20,
+        coachId: coach.id,
+        direction: 'Хип-хоп',
+        name: 'Разовая группа',
+        status: 'ACTIVE',
+      },
+    });
+    const lesson = await database.lesson.create({
+      data: {
+        branchId: branch.id,
+        endsAt: at(-1, 1),
+        groupId: group.id,
+        startsAt: at(-1),
+        status: 'COMPLETED',
+      },
+    });
+    await database.attendance.create({
+      data: {
+        lessonId: lesson.id,
+        markedAt: NOW,
+        markedByUserId: coach.id,
+        status: 'PRESENT',
+        studentId: student.id,
+      },
+    });
+
+    const items = await attention.listItems(ownerToken, { category: 'SUBSCRIPTIONS' });
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        actionRoute: `/students/${student.id}?action=attendance-payment&lessonId=${lesson.id}`,
+        id: `attendance:uncovered:${lesson.id}:${student.id}`,
+      }),
+    );
   });
 
   it('shows serious integration failures only to OWNER', async () => {

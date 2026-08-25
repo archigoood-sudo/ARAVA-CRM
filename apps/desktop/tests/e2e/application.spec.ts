@@ -126,7 +126,7 @@ test('вход, создание филиала, ученика и контак�
     const firstPaymentDialog = window.getByRole('dialog');
     await expect(firstPaymentDialog.getByText('Абонемент E2E')).toBeVisible();
     await expect(firstPaymentDialog.getByLabel('Сумма, ₽')).toHaveValue('1000');
-    await firstPaymentDialog.getByRole('button', { name: 'Сохранить платёж' }).click();
+    await firstPaymentDialog.getByRole('button', { name: /Принять .* и выдать/u }).click();
     await expect(window.getByRole('button', { name: /Абонемент E2E/u })).toBeVisible();
 
     await window.getByRole('button', { name: 'Принять оплату' }).first().click();

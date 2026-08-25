@@ -49,6 +49,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
+import { localDateInputValue } from '../../lib/local-date';
 import { invalidateStudentIdentityCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
@@ -91,6 +92,14 @@ export function StudentProfilePage() {
     const action = searchParameters.get('action');
     return action === 'payment' || action === 'subscription' ? action : undefined;
   });
+  const [requestedAttendanceLessonId, setRequestedAttendanceLessonId] = useState(() =>
+    searchParameters.get('action') === 'attendance-payment'
+      ? (searchParameters.get('lessonId') ?? undefined)
+      : undefined,
+  );
+  const [requestedPaymentOperationId, setRequestedPaymentOperationId] = useState(
+    () => searchParameters.get('paymentOperationId') ?? undefined,
+  );
   const [cardAction, setCardAction] = useState(searchParameters.get('action') === 'card');
   const [error, setError] = useState<string>();
   const student = useQuery({
@@ -135,7 +144,7 @@ export function StudentProfilePage() {
   const addEnrollment = useMutation({
     mutationFn: (groupId: string) =>
       getDesktopApi().groups.addEnrollment(getSessionToken(), groupId, {
-        joinedAt: new Date().toISOString().slice(0, 10),
+        joinedAt: localDateInputValue(),
         overrideCapacity: false,
         status: 'ACTIVE',
         studentId,
@@ -642,8 +651,14 @@ export function StudentProfilePage() {
           <ClientWebAccessCard student={detail} />
           <StudentFinance
             branches={branches.data ?? []}
-            onRequestedActionHandled={() => setFinanceAction(undefined)}
+            onRequestedActionHandled={() => {
+              setFinanceAction(undefined);
+              setRequestedAttendanceLessonId(undefined);
+              setRequestedPaymentOperationId(undefined);
+            }}
+            requestedAttendanceLessonId={requestedAttendanceLessonId}
             requestedAction={financeAction}
+            requestedPaymentOperationId={requestedPaymentOperationId}
             student={detail}
           />
           <Card className="mt-5">

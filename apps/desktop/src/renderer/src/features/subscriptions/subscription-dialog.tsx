@@ -77,7 +77,7 @@ export function SubscriptionDialog({
     if (tariff) {
       setExpiresAt(calculatedExpiryDate(startsAt, tariff.validityDays));
       setPaymentAmount(String(tariff.price / 100));
-      if (tariff.price === 0) setPaymentMode('NONE');
+      setPaymentMode(tariff.price === 0 ? 'NONE' : 'FULL');
     }
   };
   const submit = async () => {
@@ -143,7 +143,7 @@ export function SubscriptionDialog({
         <div className="space-y-2">
           <Label htmlFor="subscription-tariff">{t('subscription.tariff')}</Label>
           <Select
-            disabled={(selected?.price ?? 0) === 0}
+            disabled={tariffs.length === 0}
             id="subscription-tariff"
             onChange={(event) => chooseTariff(event.target.value)}
             value={tariffId}
@@ -219,7 +219,7 @@ export function SubscriptionDialog({
           >
             <option value="FULL">Полная оплата</option>
             <option value="PARTIAL">Частичная оплата</option>
-            <option value="NONE">Выдать без оплаты</option>
+            <option value="NONE">Без оплаты — с задолженностью</option>
           </Select>
         </div>
         {paymentMode !== 'NONE' ? (
@@ -252,7 +252,7 @@ export function SubscriptionDialog({
             {submitting
               ? t('common.saving')
               : paymentMode === 'NONE'
-                ? 'Выдать без оплаты'
+                ? 'Выдать с задолженностью'
                 : 'Продолжить к оплате'}
           </Button>
         </div>

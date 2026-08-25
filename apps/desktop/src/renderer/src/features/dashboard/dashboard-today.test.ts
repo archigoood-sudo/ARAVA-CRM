@@ -1,7 +1,7 @@
 import type { DashboardTodayLesson } from '@arava/shared';
 import { describe, expect, it } from 'vitest';
 
-import { classifyTodayLessons } from './dashboard-today';
+import { classifyTodayLessons, todayAttendanceRoute } from './dashboard-today';
 
 function lesson(id: string, startsAt: string, endsAt: string): DashboardTodayLesson {
   return {
@@ -45,5 +45,19 @@ describe('рабочий день администратора', () => {
 
   it('возвращает корректное пустое состояние', () => {
     expect(classifyTodayLessons([], now)).toEqual({ current: [], upcoming: [] });
+  });
+
+  it('открывает из Today конкретное занятие с локальной датой', () => {
+    expect(
+      todayAttendanceRoute(
+        lesson(
+          'weekly:group-1:2026-08-25T18:30:00+03:00',
+          '2026-08-25T18:30:00+03:00',
+          '2026-08-25T19:30:00+03:00',
+        ),
+      ),
+    ).toBe(
+      '/attendance?date=2026-08-25&occurrence=weekly%3Agroup-1%3A2026-08-25T18%3A30%3A00%2B03%3A00',
+    );
   });
 });
