@@ -45,6 +45,7 @@ export const queryKeys = {
   studentFinance: (id: string) => ['students', 'finance', id] as const,
   students: (query: StudentListQuery) => ['students', 'list', query] as const,
   system: ['system', 'information'] as const,
+  updates: (userId?: string) => ['system', 'updates', userId] as const,
   tariff: (id: string) => ['tariffs', 'detail', id] as const,
   tariffs: (query: TariffListQuery) => ['tariffs', 'list', query] as const,
   staffOptions: ['users', 'staff-options'] as const,

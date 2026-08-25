@@ -396,6 +396,11 @@ export const IPC_CHANNELS = {
   studentOptions: 'student:options',
   studentUpdate: 'student:update',
   systemInformation: 'system:information',
+  updateCheck: 'update:check',
+  updateDownload: 'update:download',
+  updateGetState: 'update:get-state',
+  updateInstall: 'update:install',
+  updateStateChanged: 'update:state-changed',
   userCreate: 'user:create',
   userList: 'user:list',
   userRecoveryCodeCreate: 'user:recovery-code-create',
@@ -1924,6 +1929,25 @@ export interface SystemInformation {
   platform: NodeJS.Platform;
 }
 
+export type DesktopUpdateStatus =
+  | 'IDLE'
+  | 'CHECKING'
+  | 'CURRENT'
+  | 'AVAILABLE'
+  | 'DOWNLOADING'
+  | 'DOWNLOADED'
+  | 'ERROR'
+  | 'UNSUPPORTED';
+
+export interface DesktopUpdateState {
+  availableVersion?: string | undefined;
+  checkedAt?: string | undefined;
+  currentVersion: string;
+  message: string;
+  progress?: number | undefined;
+  status: DesktopUpdateStatus;
+}
+
 export type BackupType = 'AUTOMATIC' | 'MANUAL' | 'RESTORE_SAFETY';
 export type BackupIntegrityStatus = 'VALID' | 'INVALID' | 'UNCHECKED';
 
@@ -2932,6 +2956,13 @@ export interface AravaDesktopApi {
   };
   system: {
     information: (token: string) => Promise<SystemInformation>;
+  };
+  updates: {
+    check: (token: string) => Promise<DesktopUpdateState>;
+    download: (token: string) => Promise<DesktopUpdateState>;
+    getState: (token: string) => Promise<DesktopUpdateState>;
+    install: (token: string) => Promise<void>;
+    onStateChanged: (listener: (state: DesktopUpdateState) => void) => () => void;
   };
   users: {
     create: (token: string, input: UserCreateInput) => Promise<TemporaryPasswordResult>;

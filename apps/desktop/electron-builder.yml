@@ -21,6 +21,12 @@ extraResources:
     to: app-metadata.json
   - from: build/icon.png
     to: icon.png
+publish:
+  provider: github
+  owner: archigoood-sudo
+  repo: ARAVA-CRM
+  channel: latest
+  releaseType: release
 win:
   executableName: ARAVA CRM
   icon: build/icon.ico
@@ -28,7 +34,6 @@ win:
     - target: nsis
       arch:
         - x64
-  verifyUpdateCodeSignature: false
 linux:
   executableName: arava-crm
 nsis:

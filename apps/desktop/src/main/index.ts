@@ -1,4 +1,5 @@
 import { APP_ID, createApplicationConfig } from '@arava/config';
+import { IPC_CHANNELS } from '@arava/shared';
 import {
   ApplicationService,
   BackupService,
@@ -11,12 +12,16 @@ import {
 } from '@arava/database';
 import { app } from 'electron';
 import log from 'electron-log/main';
+import electronUpdater from 'electron-updater';
 import { join } from 'node:path';
 
 import { registerIpcHandlers, removeIpcHandlers } from './ipc';
 import { CustomerDisplayManager } from './customer-display-manager';
 import { createMainWindow, getMainWindow } from './window';
 import { createIntegrationCredentialStore, IntegrationManager } from './integration-manager';
+import { UpdateManager } from './update-manager';
+
+const { autoUpdater } = electronUpdater;
 
 const config = createApplicationConfig({
   environment: app.isPackaged ? 'production' : 'development',
@@ -26,6 +31,9 @@ const config = createApplicationConfig({
 let database: DatabaseClient | undefined;
 let customerDisplay: CustomerDisplayManager | undefined;
 let integration: IntegrationManager | undefined;
+let updates: UpdateManager | undefined;
+let shutdownPromise: Promise<void> | undefined;
+let shutdownComplete = false;
 
 function configureLogging(): void {
   log.initialize();
@@ -68,14 +76,28 @@ async function bootstrap(): Promise<void> {
   if (automaticBackup) log.info('Automatic backup created', { file: automaticBackup.fileName });
   customerDisplay = new CustomerDisplayManager(database, service);
   await customerDisplay.initialize();
+  updates = new UpdateManager(service, autoUpdater, {
+    currentVersion: app.getVersion(),
+    prepareForInstall: async () => {
+      await shutdown();
+      shutdownComplete = true;
+    },
+    supported: app.isPackaged && process.platform === 'win32',
+  });
+  autoUpdater.logger = log;
   registerIpcHandlers(database, databasePath, {
     backup: backups,
     customerDisplay,
     integration,
     service,
+    updates,
   });
   await customerDisplay.reopenIfEnabled();
   const mainWindow = createMainWindow();
+  updates.subscribe((state) => {
+    getMainWindow()?.webContents.send(IPC_CHANNELS.updateStateChanged, state);
+  });
+  updates.initialize();
   mainWindow.on('closed', () => customerDisplay?.closeForMainWindow());
   mainWindow.on('focus', () => integration?.schedule());
 
@@ -90,10 +112,16 @@ async function bootstrap(): Promise<void> {
 }
 
 async function shutdown(): Promise<void> {
-  removeIpcHandlers();
-  customerDisplay?.shutdown();
-  integration?.shutdown();
-  if (database) await closeDatabase(database);
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    removeIpcHandlers();
+    updates?.shutdown();
+    customerDisplay?.shutdown();
+    integration?.shutdown();
+    if (database) await closeDatabase(database);
+    database = undefined;
+  })();
+  return shutdownPromise;
 }
 
 app.setAppUserModelId(APP_ID);
@@ -113,11 +141,22 @@ if (!hasSingleInstanceLock) {
     if (process.platform !== 'darwin') app.quit();
   });
 
+  app.on('before-quit', (event) => {
+    if (shutdownComplete) return;
+    event.preventDefault();
+    void shutdown()
+      .catch((error: unknown) => {
+        log.error('Failed to close application services', error);
+      })
+      .finally(() => {
+        shutdownComplete = true;
+        app.releaseSingleInstanceLock();
+        app.exit(0);
+      });
+  });
+
   app.on('will-quit', () => {
     app.releaseSingleInstanceLock();
-    void shutdown().catch((error: unknown) => {
-      log.error('Failed to close application services', error);
-    });
   });
 
   void bootstrap().catch((error: unknown) => {

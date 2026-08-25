@@ -468,6 +468,33 @@ describe('Electron IPC boundary', () => {
     }
   });
 
+  it('bridges updater commands without returning secrets or downloaded paths', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    const safeState = {
+      availableVersion: '0.4.6',
+      currentVersion: '0.4.5',
+      message: 'Доступна версия 0.4.6',
+      status: 'AVAILABLE' as const,
+    };
+    const updates = {
+      check: vi.fn().mockResolvedValue(safeState),
+      download: vi.fn().mockResolvedValue({ ...safeState, status: 'DOWNLOADING' as const }),
+      getState: vi.fn().mockResolvedValue(safeState),
+      install: vi.fn().mockResolvedValue(undefined),
+    };
+    const handlers = createIpcHandlers(database, service, '/test/arava.db', { updates });
+
+    const result = await handlers[IPC_CHANNELS.updateCheck]?.(owner.token);
+
+    expect(updates.check).toHaveBeenCalledWith(owner.token);
+    expect(result).toEqual(safeState);
+    expect(JSON.stringify(result)).not.toContain('token');
+    expect(JSON.stringify(result)).not.toContain('.exe');
+  });
+
   it('exposes chats only through validated, session-aware IPC', async () => {
     const owner = await service.login({
       email: INITIAL_OWNER_EMAIL,

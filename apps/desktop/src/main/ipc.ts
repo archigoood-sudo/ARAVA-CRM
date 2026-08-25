@@ -119,6 +119,7 @@ import { z } from 'zod';
 import { getBuildMetadata } from './build-metadata';
 import type { CustomerDisplayManager } from './customer-display-manager';
 import type { IntegrationManager } from './integration-manager';
+import type { UpdateController } from './update-manager';
 
 type IpcHandler = (...arguments_: unknown[]) => unknown;
 const coachEnrollmentStatuses = ['ACTIVE', 'TRIAL', 'FROZEN'] satisfies EnrollmentStatus[];
@@ -167,6 +168,7 @@ export interface BackupIpcDependencies {
   relaunch?: () => void;
   customerDisplay?: CustomerDisplayManager;
   integration?: IntegrationManager;
+  updates?: UpdateController;
 }
 
 export function createIpcHandlers(
@@ -196,6 +198,10 @@ export function createIpcHandlers(
       externalLogPath: join(dirname(databasePath), 'backup-restore.log'),
     });
   const integration = backupDependencies.integration?.service;
+  const updateController = (): UpdateController => {
+    if (!backupDependencies.updates) throw new Error('Служба обновлений недоступна.');
+    return backupDependencies.updates;
+  };
   const aqsiPayments = integration
     ? new AqsiPaymentService(paymentOperations, integration)
     : undefined;
@@ -1789,6 +1795,15 @@ export function createIpcHandlers(
     [IPC_CHANNELS.systemInformation]: async (unsafeToken): Promise<SystemInformation> => {
       await service.authenticate(sessionTokenSchema.parse(unsafeToken));
       return { ...getBuildMetadata(), databasePath, platform: process.platform };
+    },
+    [IPC_CHANNELS.updateGetState]: (unsafeToken) =>
+      updateController().getState(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.updateCheck]: (unsafeToken) =>
+      updateController().check(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.updateDownload]: (unsafeToken) =>
+      updateController().download(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.updateInstall]: async (unsafeToken): Promise<void> => {
+      await updateController().install(sessionTokenSchema.parse(unsafeToken));
     },
   };
 }

@@ -12,6 +12,7 @@
     "dev": "electron-vite dev",
     "package": "electron-builder --dir",
     "package:win": "electron-builder --win nsis --x64",
+    "release:win": "npm run prepackage:win && electron-builder --win nsis --x64 --publish always",
     "prepackage": "node ../../scripts/prepare-prisma-package.mjs native",
     "prepackage:win": "node ../../scripts/prepare-prisma-package.mjs windows",
     "preview": "electron-vite preview",
@@ -20,6 +21,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.3.1",
+    "electron-updater": "^6.8.9",
     "tar": "^6.2.1"
   },
   "devDependencies": {

@@ -20,6 +20,7 @@
     "build:packages": "npm run build -w @arava/config && npm run build -w @arava/shared && npm run build -w @arava/ui && npm run build -w @arava/database",
     "write-build-metadata": "node scripts/write-build-metadata.mjs",
     "build:win": "npm run build && npm run package:win -w @arava/desktop",
+    "release:win": "npm run build && npm run release:win -w @arava/desktop",
     "clean": "node scripts/clean.mjs",
     "db:generate": "npm run db:generate -w @arava/database",
     "db:migrate": "npm run db:migrate -w @arava/database",

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 import {
   IPC_CHANNELS,
@@ -368,6 +368,21 @@ const desktopApi: AravaDesktopApi = {
       invoke(IPC_CHANNELS.studentNoteUpdate, token, noteId, input),
   },
   system: { information: (token) => invoke(IPC_CHANNELS.systemInformation, token) },
+  updates: {
+    check: (token) => invoke(IPC_CHANNELS.updateCheck, token),
+    download: (token) => invoke(IPC_CHANNELS.updateDownload, token),
+    getState: (token) => invoke(IPC_CHANNELS.updateGetState, token),
+    install: async (token) => {
+      await invoke(IPC_CHANNELS.updateInstall, token);
+    },
+    onStateChanged: (listener) => {
+      const handler = (_event: IpcRendererEvent, state: unknown) => {
+        listener(state as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IPC_CHANNELS.updateStateChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.updateStateChanged, handler);
+    },
+  },
   users: {
     create: (token, input) => invoke(IPC_CHANNELS.userCreate, token, input),
     list: (token) => invoke(IPC_CHANNELS.userList, token),
