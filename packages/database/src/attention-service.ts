@@ -222,6 +222,42 @@ export class AttentionService {
         updatedAt: { gte: historyStart },
       },
     });
+    const uncoveredAttendanceCandidates = await this.database.attendance.findMany({
+      include: {
+        lesson: {
+          include: {
+            branch: { select: { name: true } },
+            group: { select: { name: true } },
+          },
+        },
+        student: { select: { firstName: true, lastName: true, middleName: true } },
+      },
+      orderBy: { markedAt: 'desc' },
+      take: 100,
+      where: {
+        directPaymentId: null,
+        directPaymentOperationId: null,
+        lesson: {
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+          status: { not: 'CANCELLED' },
+        },
+        status: { in: ['PRESENT', 'LATE'] },
+      },
+    });
+    const uncoveredAttendanceIds = uncoveredAttendanceCandidates.map(
+      ({ lessonId, studentId }) => `${lessonId}:${studentId}`,
+    );
+    const attendanceWriteOffs = uncoveredAttendanceIds.length
+      ? await this.database.subscriptionLedger.findMany({
+          include: { reversals: { select: { id: true } } },
+          where: { attendanceId: { in: uncoveredAttendanceIds }, type: 'LESSON_WRITE_OFF' },
+        })
+      : [];
+    const subscriptionCoveredAttendanceIds = new Set(
+      attendanceWriteOffs.flatMap(({ attendanceId, reversals }) =>
+        attendanceId && reversals.length === 0 ? [attendanceId] : [],
+      ),
+    );
 
     const items: AttentionItem[] = [];
     const add = (item: AttentionItem) => items.push(item);
@@ -424,6 +460,25 @@ export class AttentionService {
         severity: 'CRITICAL',
         title: `${fullName(operation.student)}: проблема оплаты`,
       });
+
+    for (const attendance of uncoveredAttendanceCandidates) {
+      const attendanceId = `${attendance.lessonId}:${attendance.studentId}`;
+      if (subscriptionCoveredAttendanceIds.has(attendanceId)) continue;
+      add({
+        actionLabel: 'Оплатить посещение',
+        actionRoute: `/students/${attendance.studentId}?section=finance`,
+        branchId: attendance.lesson.branchId,
+        branchName: attendance.lesson.branch.name,
+        category: 'SUBSCRIPTIONS',
+        description: `${attendance.lesson.group.name} · ${attendance.lesson.startsAt.toLocaleString('ru-RU')}.`,
+        entityId: attendanceId,
+        entityType: 'Attendance',
+        id: `attendance:uncovered:${attendanceId}`,
+        occurredAt: attendance.markedAt.toISOString(),
+        severity: 'WARNING',
+        title: `${fullName(attendance.student)}: посещение без покрытия`,
+      });
+    }
 
     for (const lesson of lessons)
       add({

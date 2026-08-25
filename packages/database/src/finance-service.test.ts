@@ -14,6 +14,7 @@ import {
   type DatabaseClient,
 } from './index';
 import { FinanceService } from './finance-service';
+import { PaymentOperationService } from './payment-operation-service';
 import { ApplicationService } from './services';
 import { StudioService } from './studio-service';
 
@@ -26,6 +27,7 @@ describe('Sprint 3 finance service', () => {
   let directory: string;
   let finance: FinanceService;
   let ownerToken: string;
+  let paymentOperations: PaymentOperationService;
   let studio: StudioService;
 
   beforeEach(async () => {
@@ -34,6 +36,7 @@ describe('Sprint 3 finance service', () => {
     await initializeDatabase(database);
     application = new ApplicationService(database);
     finance = new FinanceService(database, application);
+    paymentOperations = new PaymentOperationService(database, application);
     studio = new StudioService(database, application);
     const owner = await application.login({
       email: INITIAL_OWNER_EMAIL,
@@ -355,6 +358,117 @@ describe('Sprint 3 finance service', () => {
         where: { attendanceId: `${lesson.id}:${student.id}`, type: 'LESSON_WRITE_OFF' },
       }),
     ).toBe(1);
+  });
+
+  it('pays one uncovered attendance directly, prevents duplicates, and uncovers it after refund', async () => {
+    const { branch, group, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 1,
+      name: 'Разовое посещение',
+      price: 1_500,
+      type: 'SINGLE_LESSON',
+    });
+    await finance.createTariff(ownerToken, {
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 1,
+      name: 'Глобальное разовое посещение',
+      price: 1_800,
+      type: 'SINGLE_LESSON',
+    });
+    const startsAt = new Date(Date.now() - DAY_MS);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(startsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    const choice = (await finance.listStudentSubscriptions(ownerToken, student.id))
+      .uncoveredAttendances[0];
+    expect(choice).toMatchObject({ amount: undefined, paymentStatus: 'UNPAID' });
+    expect(choice?.tariffs).toHaveLength(2);
+
+    const payment = await finance.createPayment(ownerToken, {
+      amount: tariff.price,
+      attendanceLessonId: lesson.id,
+      attendanceTariffId: tariff.id,
+      branchId: branch.id,
+      paidAt: new Date().toISOString(),
+      paymentMethod: 'CASH',
+      studentId: student.id,
+    });
+    expect(
+      (await finance.listStudentSubscriptions(ownerToken, student.id)).uncoveredAttendances,
+    ).toHaveLength(0);
+    await expect(
+      finance.createPayment(ownerToken, {
+        amount: tariff.price,
+        attendanceLessonId: lesson.id,
+        attendanceTariffId: tariff.id,
+        branchId: branch.id,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CARD',
+        studentId: student.id,
+      }),
+    ).rejects.toThrow('уже оплачено');
+    await expect(
+      studio.saveAttendance(ownerToken, lesson.id, [{ status: 'ABSENT', studentId: student.id }]),
+    ).rejects.toThrow('Сначала отмените');
+    const pack = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 4,
+      name: 'Абонемент после разовой оплаты',
+      price: 5_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    });
+    const subscription = await finance.createSubscription(ownerToken, {
+      salePrice: 5_000,
+      startsAt: dateString(new Date(startsAt.getTime() - DAY_MS)),
+      studentId: student.id,
+      tariffId: pack.id,
+    });
+    expect(subscription.lessonsUsed).toBe(0);
+    await finance.createRefund(ownerToken, payment.id, {
+      amount: tariff.price,
+      reason: 'Возврат разовой оплаты',
+      refundedAt: new Date().toISOString(),
+    });
+    expect(
+      (await finance.listStudentSubscriptions(ownerToken, student.id)).uncoveredAttendances,
+    ).toHaveLength(1);
+    const operation = await paymentOperations.create(ownerToken, {
+      amount: tariff.price,
+      attendanceLessonId: lesson.id,
+      attendanceTariffId: tariff.id,
+      branchId: branch.id,
+      currency: 'RUB',
+      idempotencyKey: 'direct-attendance-aqsi',
+      providerType: 'ACQUIRING',
+      purpose: 'Разовое посещение',
+      studentId: student.id,
+    });
+    expect(
+      (await finance.listStudentSubscriptions(ownerToken, student.id)).uncoveredAttendances[0],
+    ).toMatchObject({ paymentStatus: 'PENDING' });
+    await paymentOperations.transition(ownerToken, operation.id, 'WAITING_FOR_PAYMENT');
+    await paymentOperations.finalizeTrusted(operation.id, { paymentMethod: 'ACQUIRING' });
+    expect(
+      (await finance.listStudentSubscriptions(ownerToken, student.id)).uncoveredAttendances,
+    ).toHaveLength(0);
+    expect(await database.payment.count({ where: { attendanceLessonId: lesson.id } })).toBe(2);
+    expect(
+      await database.auditLog.count({
+        where: { action: 'ATTENDANCE_DIRECT_PAYMENT_COMPLETED' },
+      }),
+    ).toBe(2);
   });
 
   it('reverses coverage after moving startsAt forward without changing attendance or payments', async () => {

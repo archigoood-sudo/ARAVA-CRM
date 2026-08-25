@@ -594,6 +594,8 @@ export const paymentInputSchema: z.ZodType<PaymentInput> = z.object({
   paymentMethod: paymentMethodSchema,
   studentId: z.string().min(1).max(100),
   subscriptionId: optionalIdentifier,
+  attendanceLessonId: optionalIdentifier,
+  attendanceTariffId: optionalIdentifier,
 });
 
 export const paymentOperationCreateSchema: z.ZodType<PaymentOperationCreateInput> = z.object({
@@ -605,6 +607,8 @@ export const paymentOperationCreateSchema: z.ZodType<PaymentOperationCreateInput
   purpose: z.string().trim().min(3, t('validation.required')).max(500),
   studentId: z.string().min(1).max(100),
   subscriptionId: optionalIdentifier,
+  attendanceLessonId: optionalIdentifier,
+  attendanceTariffId: optionalIdentifier,
 });
 
 export const paymentOperationReasonSchema: z.ZodType<PaymentOperationReasonInput> = z.object({

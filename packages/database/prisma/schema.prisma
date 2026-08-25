@@ -700,6 +700,9 @@ model Attendance {
   markedByUser   User             @relation(fields: [markedByUserId], references: [id], onDelete: Restrict)
   markedAt       DateTime
   comment        String?
+  directPaymentId          String?           @unique
+  directPaymentOperationId String?           @unique
+  directPaymentTariffId    String?
 
   @@id([lessonId, studentId])
   @@index([studentId, markedAt])
@@ -798,6 +801,8 @@ model Payment {
   createdByUser     User          @relation("PaymentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   refunds           Refund[]
   operation         PaymentOperation?
+  attendanceLessonId String?
+  attendanceTariffId String?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
@@ -827,6 +832,8 @@ model PaymentOperation {
   providerOperationId String?
   paymentId           String?                @unique
   payment             Payment?               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  attendanceLessonId  String?
+  attendanceTariffId  String?
   completedAt         DateTime?
   failureReason       String?
   cancellationReason  String?

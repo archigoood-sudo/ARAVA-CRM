@@ -716,6 +716,17 @@ export class StudioService {
     const current = await this.requireLesson(id);
     assertBranchAccess(actor, current.branchId);
     const lesson = await this.database.$transaction(async (transaction) => {
+      const directPayments = await transaction.attendance.count({
+        where: {
+          lessonId: id,
+          OR: [{ directPaymentId: { not: null } }, { directPaymentOperationId: { not: null } }],
+        },
+      });
+      if (directPayments > 0)
+        throw new DomainError(
+          'CONFLICT',
+          'Сначала отмените или завершите разовые оплаты посещений этого занятия.',
+        );
       const reversedWriteOffs = await reverseLessonWriteOffs(transaction, id, actor.id);
       const cancelled = await transaction.lesson.update({
         data: { cancellationReason: input.cancellationReason.trim(), status: 'CANCELLED' },
@@ -1052,6 +1063,15 @@ export class StudioService {
           !allowCoachCorrection
         )
           throw new DomainError('AUTHORIZATION', t('domain.authorization.attendanceCorrection'));
+        if (
+          previous &&
+          previous.status !== entry.status &&
+          (previous.directPaymentId || previous.directPaymentOperationId)
+        )
+          throw new DomainError(
+            'CONFLICT',
+            'Сначала отмените или завершите оплату этого посещения.',
+          );
         if (previous && previous.status !== entry.status)
           await reverseAttendanceWriteOffs(
             transaction,

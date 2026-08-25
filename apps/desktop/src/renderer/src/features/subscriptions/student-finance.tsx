@@ -26,6 +26,7 @@ import {
   LedgerList,
   LoadingState,
   Money,
+  Select,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -70,6 +71,13 @@ export function StudentFinance({
   const queryClient = useQueryClient();
   const [issueOpen, setIssueOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [attendancePayment, setAttendancePayment] = useState<{
+    amount: number;
+    lessonId: string;
+    tariffId: string;
+    tariffName: string;
+  }>();
+  const [attendanceTariffs, setAttendanceTariffs] = useState<Record<string, string>>({});
   const [freezeId, setFreezeId] = useState<string>();
   const [detailId, setDetailId] = useState<string>();
   const [editId, setEditId] = useState<string>();
@@ -78,7 +86,10 @@ export function StudentFinance({
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => {
-    if (requestedAction === 'payment') setPaymentOpen(true);
+    if (requestedAction === 'payment') {
+      setAttendancePayment(undefined);
+      setPaymentOpen(true);
+    }
     if (requestedAction === 'subscription') setIssueOpen(true);
     if (requestedAction) onRequestedActionHandled?.();
   }, [onRequestedActionHandled, requestedAction]);
@@ -261,17 +272,81 @@ export function StudentFinance({
           <CardContent className="space-y-2">
             {finance.data.uncoveredAttendances.map((attendance) => (
               <div
-                className="flex items-center justify-between rounded-2xl border border-border p-3 text-sm"
+                className="grid gap-3 rounded-2xl border border-border p-4 text-sm md:grid-cols-[1fr_auto] md:items-center"
                 key={`${attendance.lessonId}:${attendance.startsAt}`}
               >
-                <span>
-                  {attendance.groupName} · {formatDate(attendance.startsAt)}
-                </span>
-                {attendance.amount === undefined ? (
-                  <Badge>Нужно выбрать стоимость</Badge>
-                ) : (
-                  <Money amount={attendance.amount} className="font-semibold text-destructive" />
-                )}
+                <div>
+                  <p className="font-medium">
+                    {attendance.groupName} ·{' '}
+                    {formatDate(attendance.startsAt, {
+                      dateStyle: 'medium',
+                      timeStyle: 'short',
+                    })}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {attendance.branchName}
+                    {attendance.trainerName ? ` · ${attendance.trainerName}` : ''} ·{' '}
+                    {attendance.status === 'LATE' ? 'Опоздание' : 'Присутствовал'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {attendance.paymentStatus === 'PENDING' ? (
+                    <Badge>Оплата обрабатывается</Badge>
+                  ) : attendance.tariffs.length === 0 ? (
+                    <Badge>Нет разового тарифа</Badge>
+                  ) : (
+                    <>
+                      {attendance.tariffs.length > 1 ? (
+                        <Select
+                          aria-label={`Тариф для ${attendance.groupName}`}
+                          className="min-w-48"
+                          onChange={(event) =>
+                            setAttendanceTariffs((current) => ({
+                              ...current,
+                              [attendance.lessonId]: event.target.value,
+                            }))
+                          }
+                          value={attendanceTariffs[attendance.lessonId] ?? ''}
+                        >
+                          <option value="">Выберите тариф</option>
+                          {attendance.tariffs.map((tariff) => (
+                            <option key={tariff.id} value={tariff.id}>
+                              {tariff.name} · {formatMoneyForIndicator(tariff.price)}
+                            </option>
+                          ))}
+                        </Select>
+                      ) : (
+                        <Money
+                          amount={attendance.tariffs[0]?.price ?? 0}
+                          className="font-semibold text-destructive"
+                        />
+                      )}
+                      <Button
+                        disabled={
+                          !canManage ||
+                          (attendance.tariffs.length > 1 && !attendanceTariffs[attendance.lessonId])
+                        }
+                        onClick={() => {
+                          const tariffId =
+                            attendanceTariffs[attendance.lessonId] ?? attendance.tariffId;
+                          const tariff = attendance.tariffs.find(({ id }) => id === tariffId);
+                          if (!tariff) return;
+                          setAttendancePayment({
+                            amount: tariff.price,
+                            lessonId: attendance.lessonId,
+                            tariffId: tariff.id,
+                            tariffName: tariff.name,
+                          });
+                          setError(undefined);
+                          setPaymentOpen(true);
+                        }}
+                        size="small"
+                      >
+                        Оплатить разовое посещение
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
             ))}
           </CardContent>
@@ -289,6 +364,7 @@ export function StudentFinance({
             <div className="flex gap-2">
               <Button
                 onClick={() => {
+                  setAttendancePayment(undefined);
                   setError(undefined);
                   setPaymentOpen(true);
                 }}
@@ -428,16 +504,23 @@ export function StudentFinance({
         tariffs={tariffs.data ?? []}
       />
       <PaymentDialog
+        attendancePayment={attendancePayment}
         branches={branches}
         error={error}
         fixedStudent={student}
-        onClose={() => setPaymentOpen(false)}
+        onClose={() => {
+          setPaymentOpen(false);
+          setAttendancePayment(undefined);
+        }}
         onSbpCompleted={refresh}
         onSubmit={(input) =>
           perform(
             () => payment.mutateAsync(input),
             t('payment.errorSave'),
-            () => setPaymentOpen(false),
+            () => {
+              setPaymentOpen(false);
+              setAttendancePayment(undefined);
+            },
           )
         }
         open={paymentOpen}

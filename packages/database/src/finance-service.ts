@@ -213,7 +213,7 @@ function paymentSummary(payment: PaymentRecord): PaymentSummary {
 export async function createCanonicalPayment(
   client: Prisma.TransactionClient,
   actor: AuthenticatedUser,
-  input: PaymentInput,
+  input: PaymentInput & { attendancePaymentOperationId?: string | undefined },
 ): Promise<{ id: string }> {
   assertPermission(actor, 'payments:manage');
   if (!Number.isInteger(input.amount) || input.amount <= 0)
@@ -234,6 +234,23 @@ export async function createCanonicalPayment(
     if (input.amount > subscriptionSummary(subscription).debt)
       throw new DomainError('VALIDATION', t('domain.validation.paymentExceedsDebt'));
   }
+  if (Boolean(input.attendanceLessonId) !== Boolean(input.attendanceTariffId))
+    throw new DomainError('VALIDATION', 'Для оплаты посещения выберите занятие и тариф.');
+  if (input.attendanceLessonId) {
+    if (input.subscriptionId)
+      throw new DomainError(
+        'VALIDATION',
+        'Оплата посещения не может одновременно оплачивать абонемент.',
+      );
+    await assertDirectAttendancePayment(client, {
+      amount: input.amount,
+      branchId: input.branchId,
+      lessonId: input.attendanceLessonId,
+      studentId: input.studentId,
+      tariffId: input.attendanceTariffId ?? '',
+      operationId: input.attendancePaymentOperationId,
+    });
+  }
   const created = await client.payment.create({
     data: {
       amount: input.amount,
@@ -245,8 +262,27 @@ export async function createCanonicalPayment(
       paymentMethod: input.paymentMethod,
       studentId: input.studentId,
       subscriptionId: input.subscriptionId ?? null,
+      attendanceLessonId: input.attendanceLessonId ?? null,
+      attendanceTariffId: input.attendanceTariffId ?? null,
     },
   });
+  if (input.attendanceLessonId) {
+    const claimed = await client.attendance.updateMany({
+      data: {
+        directPaymentId: created.id,
+        directPaymentOperationId: null,
+        directPaymentTariffId: input.attendanceTariffId ?? null,
+      },
+      where: {
+        directPaymentId: null,
+        directPaymentOperationId: input.attendancePaymentOperationId ?? null,
+        lessonId: input.attendanceLessonId,
+        studentId: input.studentId,
+      },
+    });
+    if (claimed.count !== 1)
+      throw new DomainError('CONFLICT', 'Это посещение уже оплачено или находится в оплате.');
+  }
   const register = await ensurePaymentRegister(client, input.branchId, input.paymentMethod);
   await client.cashTransaction.create({
     data: {
@@ -270,7 +306,70 @@ export async function createCanonicalPayment(
       entityType: 'Payment',
     },
   });
+  if (input.attendanceLessonId)
+    await client.auditLog.create({
+      data: {
+        action: 'ATTENDANCE_DIRECT_PAYMENT_COMPLETED',
+        actorUserId: actor.id,
+        detail: JSON.stringify({
+          amount: input.amount,
+          lessonId: input.attendanceLessonId,
+          tariffId: input.attendanceTariffId,
+        }),
+        entityId: `${input.attendanceLessonId}:${input.studentId}`,
+        entityType: 'Attendance',
+      },
+    });
   return created;
+}
+
+export async function assertDirectAttendancePayment(
+  client: FinanceClient,
+  input: {
+    amount: number;
+    branchId: string;
+    lessonId: string;
+    operationId?: string | undefined;
+    studentId: string;
+    tariffId: string;
+  },
+): Promise<void> {
+  const [attendance, tariff, writeOffs] = await Promise.all([
+    client.attendance.findUnique({
+      include: { lesson: { select: { branchId: true, status: true } } },
+      where: { lessonId_studentId: { lessonId: input.lessonId, studentId: input.studentId } },
+    }),
+    client.tariff.findUnique({ where: { id: input.tariffId } }),
+    client.subscriptionLedger.findMany({
+      include: { reversals: { select: { id: true } } },
+      where: {
+        attendanceId: `${input.lessonId}:${input.studentId}`,
+        type: 'LESSON_WRITE_OFF',
+      },
+    }),
+  ]);
+  if (!attendance) throw new DomainError('NOT_FOUND', 'Посещение не найдено.');
+  if (!['PRESENT', 'LATE'].includes(attendance.status) || attendance.lesson.status === 'CANCELLED')
+    throw new DomainError('VALIDATION', 'Оплатить можно только состоявшееся посещение.');
+  if (attendance.lesson.branchId !== input.branchId)
+    throw new DomainError('VALIDATION', 'Посещение относится к другому филиалу.');
+  if (
+    attendance.directPaymentId ||
+    (attendance.directPaymentOperationId &&
+      attendance.directPaymentOperationId !== input.operationId)
+  )
+    throw new DomainError('CONFLICT', 'Это посещение уже оплачено или находится в оплате.');
+  if (writeOffs.some(({ reversals }) => reversals.length === 0))
+    throw new DomainError('CONFLICT', 'Посещение уже списано с абонемента.');
+  if (
+    tariff?.type !== 'SINGLE_LESSON' ||
+    !tariff.isActive ||
+    tariff.archivedAt ||
+    (tariff.branchId !== null && tariff.branchId !== input.branchId)
+  )
+    throw new DomainError('VALIDATION', 'Выбранный разовый тариф недоступен для этого филиала.');
+  if (tariff.price !== input.amount)
+    throw new DomainError('VALIDATION', 'Стоимость должна совпадать с выбранным тарифом.');
 }
 
 export class FinanceService {
@@ -772,6 +871,10 @@ export class FinanceService {
       throw new DomainError('VALIDATION', t('domain.validation.paymentCancellation'));
     await this.database.$transaction(async (transaction) => {
       await transaction.payment.update({ data: { status: 'CANCELLED' }, where: { id } });
+      await transaction.attendance.updateMany({
+        data: { directPaymentId: null, directPaymentTariffId: null },
+        where: { directPaymentId: id },
+      });
       const income = await transaction.cashTransaction.findFirst({
         where: { sourceId: id, sourceType: 'PAYMENT', type: 'INCOME' },
       });
@@ -849,6 +952,11 @@ export class FinanceService {
         data: { status: total === payment.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED' },
         where: { id: paymentId },
       });
+      if (total === payment.amount)
+        await transaction.attendance.updateMany({
+          data: { directPaymentId: null, directPaymentTariffId: null },
+          where: { directPaymentId: paymentId },
+        });
       await this.audit(transaction, actor.id, 'PAYMENT_REFUNDED', 'Refund', refund.id, {
         amount: input.amount,
         paymentId,
@@ -935,7 +1043,16 @@ export class FinanceService {
     const [attendances, writeOffs, tariffs] = await Promise.all([
       this.database.attendance.findMany({
         include: {
-          lesson: { include: { group: { select: { name: true } } } },
+          lesson: {
+            include: {
+              branch: { select: { name: true } },
+              coach: { select: { fullName: true } },
+              group: { select: { name: true } },
+              substitution: {
+                include: { substituteTrainer: { select: { fullName: true } } },
+              },
+            },
+          },
         },
         orderBy: { markedAt: 'desc' },
         where: {
@@ -958,25 +1075,35 @@ export class FinanceService {
       ),
     );
     return attendances.flatMap((attendance) => {
-      if (covered.has(`${attendance.lessonId}:${attendance.studentId}`)) return [];
+      if (
+        covered.has(`${attendance.lessonId}:${attendance.studentId}`) ||
+        attendance.directPaymentId
+      )
+        return [];
       const branchTariffs = tariffs.filter(
         ({ branchId }) => branchId === attendance.lesson.branchId,
       );
       const globalTariffs = tariffs.filter(({ branchId }) => branchId === null);
-      const priceSource =
-        branchTariffs.length === 1
-          ? branchTariffs[0]
-          : branchTariffs.length === 0 && globalTariffs.length === 1
-            ? globalTariffs[0]
-            : undefined;
+      const eligibleTariffs = [...branchTariffs, ...globalTariffs];
+      const priceSource = eligibleTariffs.length === 1 ? eligibleTariffs[0] : undefined;
       return [
         {
           amount: priceSource?.price,
           branchId: attendance.lesson.branchId,
+          branchName: attendance.lesson.branch.name,
           groupName: attendance.lesson.group.name,
           lessonId: attendance.lessonId,
+          paymentStatus: attendance.directPaymentOperationId
+            ? ('PENDING' as const)
+            : ('UNPAID' as const),
           startsAt: attendance.lesson.startsAt.toISOString(),
           status: attendance.status,
+          tariffId: priceSource?.id,
+          tariffs: eligibleTariffs.map(({ id, name, price }) => ({ id, name, price })),
+          trainerName:
+            attendance.lesson.substitution?.substituteTrainer.fullName ??
+            attendance.lesson.coach?.fullName ??
+            undefined,
         },
       ];
     });

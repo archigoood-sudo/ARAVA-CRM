@@ -38,6 +38,7 @@ function formatRubles(kopecks: number): string {
 }
 
 export function PaymentDialog({
+  attendancePayment,
   branches,
   error,
   fixedStudent,
@@ -48,6 +49,8 @@ export function PaymentDialog({
   students,
   subscriptions = [],
 }: {
+  attendancePayment?:
+    { amount: number; lessonId: string; tariffId: string; tariffName: string } | undefined;
   branches: BranchSummary[];
   error?: string | undefined;
   fixedStudent?: StudentSummary | undefined;
@@ -88,7 +91,9 @@ export function PaymentDialog({
   useLayoutEffect(() => {
     if (!open) return;
     reset({
-      amount: 0,
+      amount: attendancePayment ? attendancePayment.amount / 100 : 0,
+      attendanceLessonId: attendancePayment?.lessonId,
+      attendanceTariffId: attendancePayment?.tariffId,
       branchId: fixedStudent?.branchId ?? branches[0]?.id ?? '',
       paidAt: localDateTimeValue(),
       paymentMethod: 'CASH',
@@ -111,7 +116,7 @@ export function PaymentDialog({
         );
       })
       .catch(() => setSbpAvailable(false));
-  }, [branches, fixedStudent, open, reset]);
+  }, [attendancePayment, branches, fixedStudent, open, reset]);
 
   useEffect(() => {
     if (
@@ -164,6 +169,12 @@ export function PaymentDialog({
               : 'Оплата через СБП',
         studentId: values.studentId,
         ...(values.subscriptionId ? { subscriptionId: values.subscriptionId } : {}),
+        ...(attendancePayment
+          ? {
+              attendanceLessonId: attendancePayment.lessonId,
+              attendanceTariffId: attendancePayment.tariffId,
+            }
+          : {}),
       });
       const gateway = await getDesktopApi().paymentOperations.startAqsi(
         getSessionToken(),
@@ -332,19 +343,30 @@ export function PaymentDialog({
               </Select>
             )}
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="payment-subscription">{t('payment.subscription')}</Label>
-            <Select id="payment-subscription" {...register('subscriptionId')}>
-              <option value="">{t('payment.subscription.none')}</option>
-              {subscriptions
-                .filter(({ debt }) => debt > 0)
-                .map((subscription) => (
-                  <option key={subscription.id} value={subscription.id}>
-                    {subscription.tariffName}
-                  </option>
-                ))}
-            </Select>
-          </div>
+          {attendancePayment ? (
+            <div className="space-y-2">
+              <Label>Разовый тариф</Label>
+              <div className="rounded-xl border border-border px-3 py-2 text-sm">
+                {attendancePayment.tariffName}
+              </div>
+              <input type="hidden" {...register('attendanceLessonId')} />
+              <input type="hidden" {...register('attendanceTariffId')} />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="payment-subscription">{t('payment.subscription')}</Label>
+              <Select id="payment-subscription" {...register('subscriptionId')}>
+                <option value="">{t('payment.subscription.none')}</option>
+                {subscriptions
+                  .filter(({ debt }) => debt > 0)
+                  .map((subscription) => (
+                    <option key={subscription.id} value={subscription.id}>
+                      {subscription.tariffName}
+                    </option>
+                  ))}
+              </Select>
+            </div>
+          )}
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
@@ -352,6 +374,7 @@ export function PaymentDialog({
             <Input
               id="payment-amount"
               min="0.01"
+              readOnly={Boolean(attendancePayment)}
               step="0.01"
               type="number"
               {...register('amount', { valueAsNumber: true })}

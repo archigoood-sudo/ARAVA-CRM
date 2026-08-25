@@ -932,10 +932,15 @@ export interface StudentFinanceSummary {
 export interface UncoveredAttendanceSummary {
   amount?: number | undefined;
   branchId: string;
+  branchName: string;
   groupName: string;
   lessonId: string;
+  paymentStatus: 'PENDING' | 'UNPAID';
   startsAt: string;
   status: AttendanceStatus;
+  tariffId?: string | undefined;
+  tariffs: { id: string; name: string; price: number }[];
+  trainerName?: string | undefined;
 }
 
 export interface PaymentOperationCreateInput {
@@ -947,6 +952,8 @@ export interface PaymentOperationCreateInput {
   purpose: string;
   studentId: string;
   subscriptionId?: string | undefined;
+  attendanceLessonId?: string | undefined;
+  attendanceTariffId?: string | undefined;
 }
 
 export interface PaymentOperationSummary extends PaymentOperationCreateInput {
@@ -1039,6 +1046,8 @@ export interface PaymentInput {
   paymentMethod: PaymentMethod;
   studentId: string;
   subscriptionId?: string | undefined;
+  attendanceLessonId?: string | undefined;
+  attendanceTariffId?: string | undefined;
 }
 
 export interface PaymentListQuery {

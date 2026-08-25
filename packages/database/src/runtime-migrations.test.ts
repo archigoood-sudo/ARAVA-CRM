@@ -25,6 +25,7 @@ describe('runtime migrations', () => {
       '20260822020000_trainer_attendance_web_actions',
       '20260822030000_payment_foundation',
       '20260824000000_trial_lessons',
+      '20260825000000_uncovered_attendance_payments',
     ]);
   });
 });

@@ -133,6 +133,12 @@ export async function applyAttendanceWriteOff(
   const consumesTrial = input.attendanceStatus === 'TRIAL';
   if (!consumesPaid && !consumesTrial) return null;
 
+  const attendance = await client.attendance.findUnique({
+    select: { directPaymentId: true, directPaymentOperationId: true },
+    where: { lessonId_studentId: { lessonId: input.lessonId, studentId: input.studentId } },
+  });
+  if (attendance?.directPaymentId || attendance?.directPaymentOperationId) return null;
+
   const attendanceId = `${input.lessonId}:${input.studentId}`;
   const existing = await client.subscriptionLedger.findMany({
     include: { reversals: { select: { id: true } } },
@@ -272,7 +278,13 @@ export async function reconcileStudentAttendanceCoverage(
   let applied = 0;
   for (const attendance of attendances) {
     const attendanceId = `${attendance.lessonId}:${attendance.studentId}`;
-    if (covered.has(attendanceId) || attendance.lesson.status === 'CANCELLED') continue;
+    if (
+      covered.has(attendanceId) ||
+      attendance.lesson.status === 'CANCELLED' ||
+      attendance.directPaymentId ||
+      attendance.directPaymentOperationId
+    )
+      continue;
     const subscriptionId = await applyAttendanceWriteOff(client, {
       actorUserId: input.actorUserId,
       attendanceStatus: attendance.status,

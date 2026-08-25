@@ -8,7 +8,7 @@ import {
 } from '@arava/shared';
 import { Prisma } from '@prisma/client';
 
-import { createCanonicalPayment } from './finance-service';
+import { assertDirectAttendancePayment, createCanonicalPayment } from './finance-service';
 import type { DatabaseClient } from './index';
 import { assertBranchAccess, assertPermission } from './permissions';
 import { DomainError } from './security';
@@ -77,7 +77,9 @@ function sameRequest(operation: OperationRecord, input: PaymentOperationCreateIn
     operation.providerType === input.providerType &&
     operation.purpose === input.purpose.trim() &&
     operation.studentId === input.studentId &&
-    operation.subscriptionId === (input.subscriptionId ?? null)
+    operation.subscriptionId === (input.subscriptionId ?? null) &&
+    operation.attendanceLessonId === (input.attendanceLessonId ?? null) &&
+    operation.attendanceTariffId === (input.attendanceTariffId ?? null)
   );
 }
 
@@ -122,8 +124,23 @@ export class PaymentOperationService {
       if (subscription?.studentId !== input.studentId || subscription.branchId !== input.branchId)
         throw new DomainError('VALIDATION', 'Абонемент не принадлежит указанному ученику.');
     }
+    if (Boolean(input.attendanceLessonId) !== Boolean(input.attendanceTariffId))
+      throw new DomainError('VALIDATION', 'Для оплаты посещения выберите занятие и тариф.');
+    if (input.attendanceLessonId && input.subscriptionId)
+      throw new DomainError(
+        'VALIDATION',
+        'Оплата посещения не может одновременно оплачивать абонемент.',
+      );
     try {
       const created = await this.database.$transaction(async (transaction) => {
+        if (input.attendanceLessonId)
+          await assertDirectAttendancePayment(transaction, {
+            amount: input.amount,
+            branchId: input.branchId,
+            lessonId: input.attendanceLessonId,
+            studentId: input.studentId,
+            tariffId: input.attendanceTariffId ?? '',
+          });
         const operation = await transaction.paymentOperation.create({
           data: {
             amount: input.amount,
@@ -135,8 +152,26 @@ export class PaymentOperationService {
             purpose: input.purpose.trim(),
             studentId: input.studentId,
             subscriptionId: input.subscriptionId ?? null,
+            attendanceLessonId: input.attendanceLessonId ?? null,
+            attendanceTariffId: input.attendanceTariffId ?? null,
           },
         });
+        if (input.attendanceLessonId) {
+          const claimed = await transaction.attendance.updateMany({
+            data: {
+              directPaymentOperationId: operation.id,
+              directPaymentTariffId: input.attendanceTariffId ?? null,
+            },
+            where: {
+              directPaymentId: null,
+              directPaymentOperationId: null,
+              lessonId: input.attendanceLessonId,
+              studentId: input.studentId,
+            },
+          });
+          if (claimed.count !== 1)
+            throw new DomainError('CONFLICT', 'Это посещение уже оплачено или находится в оплате.');
+        }
         await transaction.auditLog.create({
           data: {
             action: 'PAYMENT_OPERATION_CREATED',
@@ -146,6 +181,19 @@ export class PaymentOperationService {
             entityType: 'PaymentOperation',
           },
         });
+        if (input.attendanceLessonId)
+          await transaction.auditLog.create({
+            data: {
+              action: 'ATTENDANCE_DIRECT_PAYMENT_STARTED',
+              actorUserId: actor.id,
+              detail: JSON.stringify({
+                amount: input.amount,
+                tariffId: input.attendanceTariffId,
+              }),
+              entityId: `${input.attendanceLessonId}:${input.studentId}`,
+              entityType: 'Attendance',
+            },
+          });
         return operation;
       });
       return await this.get(token, created.id);
@@ -255,6 +303,13 @@ export class PaymentOperationService {
         paymentMethod: completion.paymentMethod,
         studentId: locked.studentId,
         ...(locked.subscriptionId ? { subscriptionId: locked.subscriptionId } : {}),
+        ...(locked.attendanceLessonId
+          ? {
+              attendanceLessonId: locked.attendanceLessonId,
+              attendancePaymentOperationId: locked.id,
+              attendanceTariffId: locked.attendanceTariffId ?? undefined,
+            }
+          : {}),
       });
       const completedAt = new Date();
       await transaction.paymentOperation.update({
@@ -305,6 +360,11 @@ export class PaymentOperationService {
       });
       if (updated.count !== 1)
         throw new DomainError('CONFLICT', 'Состояние операции уже изменилось.');
+      if (['FAILED', 'CANCELLED', 'EXPIRED'].includes(nextStatus))
+        await transaction.attendance.updateMany({
+          data: { directPaymentOperationId: null, directPaymentTariffId: null },
+          where: { directPaymentOperationId: operation.id },
+        });
       await transaction.auditLog.create({
         data: {
           action,

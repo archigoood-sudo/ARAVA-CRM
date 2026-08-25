@@ -44,6 +44,35 @@ test('платёжная операция становится одним под
         lastName: 'Оплатина E2E',
         status: 'ACTIVE',
       });
+      const group = await api.groups.create(token, {
+        branchId: branch.id,
+        capacity: 20,
+        direction: 'Тестовое направление',
+        name: 'Разовая группа E2E',
+        status: 'ACTIVE',
+      });
+      await api.groups.addEnrollment(token, group.id, {
+        joinedAt: new Date(Date.now() - 172_800_000).toISOString().slice(0, 10),
+        overrideCapacity: false,
+        status: 'ACTIVE',
+        studentId: student.id,
+      });
+      const lessonStartsAt = new Date(Date.now() - 86_400_000);
+      const lesson = await api.lessons.create(token, {
+        endsAt: new Date(lessonStartsAt.getTime() + 3_600_000).toISOString(),
+        groupId: group.id,
+        startsAt: lessonStartsAt.toISOString(),
+      });
+      await api.attendance.save(token, lesson.id, [{ status: 'PRESENT', studentId: student.id }]);
+      await api.tariffs.create(token, {
+        branchId: branch.id,
+        currency: 'RUB',
+        isActive: true,
+        lessonCount: 1,
+        name: 'Разовый E2E',
+        price: 1_500,
+        type: 'SINGLE_LESSON',
+      });
       const tariff = await api.tariffs.create(token, {
         branchId: branch.id,
         currency: 'RUB',
@@ -80,6 +109,15 @@ test('платёжная операция становится одним под
     await expect(page.getByText('Операции оплаты')).toBeVisible();
     await expect(page.getByText('Создана')).toBeVisible();
     await expect(page.getByText('Исторический чек с ошибкой')).toBeVisible();
+    await expect(page.getByText('Посещения без покрытия')).toBeVisible();
+    await expect(page.getByText(/Разовая группа E2E ·/u)).toBeVisible();
+    await page.getByRole('button', { name: 'Оплатить разовое посещение' }).click();
+    await expect(page.getByText('Разовый E2E')).toBeVisible();
+    await expect(page.getByLabel('Сумма')).toHaveValue('15');
+    await page.getByRole('button', { name: 'Сохранить платёж' }).click();
+    await expect(
+      page.getByRole('button', { name: 'Оплатить разовое посещение' }),
+    ).not.toBeVisible();
 
     const result = await page.evaluate(async ({ operationId, studentId, token }) => {
       const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
@@ -97,7 +135,7 @@ test('платёжная операция становится одним под
       };
     }, context);
     expect(result.operation.status).toBe('SUCCEEDED');
-    expect(result.payments).toHaveLength(1);
+    expect(result.payments).toHaveLength(2);
     expect(result.debt).toBe(75_000);
 
     await page.getByRole('link', { name: 'Главная', exact: true }).click();
@@ -124,8 +162,8 @@ test('платёжная операция становится одним под
         })
       ).filter(({ studentId: id }) => id === studentId);
     }, context);
-    expect(afterHistoricalRetry).toHaveLength(1);
-    expect(afterHistoricalRetry.reduce((sum, item) => sum + item.amount, 0)).toBe(25_000);
+    expect(afterHistoricalRetry).toHaveLength(2);
+    expect(afterHistoricalRetry.reduce((sum, item) => sum + item.amount, 0)).toBe(26_500);
     await page.getByRole('button', { name: 'Закрыть' }).last().click();
 
     await page.getByRole('button', { name: 'Принять оплату' }).last().click();
@@ -167,7 +205,7 @@ test('платёжная операция становится одним под
         })
       ).filter(({ studentId: id }) => id === studentId);
     }, context);
-    expect(afterQr).toHaveLength(3);
+    expect(afterQr).toHaveLength(4);
     expect(afterQr.filter(({ paymentMethod }) => paymentMethod === 'SBP')).toHaveLength(2);
     expect(afterQr.filter(({ paymentMethod }) => paymentMethod === 'ACQUIRING')).toEqual([
       expect.objectContaining({ amount: 10_000 }),

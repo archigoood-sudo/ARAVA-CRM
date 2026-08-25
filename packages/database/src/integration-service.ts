@@ -5439,6 +5439,9 @@ export class IntegrationService {
         const studentId = requiredString(payload, 'studentId');
         const data = {
           comment: nullableString(payload.comment),
+          directPaymentId: nullableString(payload.directPaymentId),
+          directPaymentOperationId: nullableString(payload.directPaymentOperationId),
+          directPaymentTariffId: nullableString(payload.directPaymentTariffId),
           markedAt: requiredDate(payload, 'markedAt'),
           markedByUserId: ownerId,
           status: enumValue(
@@ -5961,6 +5964,9 @@ export class IntegrationService {
         return row
           ? {
               comment: row.comment,
+              directPaymentId: row.directPaymentId,
+              directPaymentOperationId: row.directPaymentOperationId,
+              directPaymentTariffId: row.directPaymentTariffId,
               id: entityId,
               lessonId: row.lessonId,
               markedAt: row.markedAt.toISOString(),
