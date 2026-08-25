@@ -1,10 +1,23 @@
 import { formatDate, type AttendanceEntryInput, type AttendanceStatus } from '@arava/shared';
-import { Badge, Button, Card, EmptyState, ErrorState, Input, LoadingState, cn } from '@arava/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Input,
+  Label,
+  LoadingState,
+  Select,
+  cn,
+} from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   CheckCheck,
   CircleCheck,
+  Plus,
   Search,
   UserRoundCheck,
   UserRoundX,
@@ -16,7 +29,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { invalidateAttendanceCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
-import { getSessionToken } from '../../stores/auth-store';
+import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 
 const operationalStatuses: {
   active: string;
@@ -56,6 +69,11 @@ export function AttendancePage() {
   const { lessonId = '' } = useParams();
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState('');
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualStatus, setManualStatus] =
+    useState<Extract<AttendanceStatus, 'PRESENT' | 'ABSENT' | 'EXCUSED'>>('PRESENT');
+  const [manualStudentId, setManualStudentId] = useState('');
+  const user = useAuthStore((state) => state.user);
   const client = useQueryClient();
   const attendance = useQuery({
     enabled: Boolean(lessonId),
@@ -67,6 +85,29 @@ export function AttendancePage() {
       getDesktopApi().attendance.save(getSessionToken(), lessonId, entries),
     onSuccess: async (data) => {
       client.setQueryData(queryKeys.attendance(lessonId), data);
+      await invalidateAttendanceCaches(client);
+    },
+  });
+  const studentOptions = useQuery({
+    enabled: manualOpen && Boolean(attendance.data?.lesson.branchId),
+    queryFn: () =>
+      getDesktopApi().students.options(
+        getSessionToken(),
+        attendance.data?.lesson.branchId ?? undefined,
+      ),
+    queryKey: ['attendance', 'manual-student-options', attendance.data?.lesson.branchId, user?.id],
+  });
+  const manualSave = useMutation({
+    mutationFn: () =>
+      getDesktopApi().attendance.manualSave(getSessionToken(), lessonId, {
+        status: manualStatus,
+        studentId: manualStudentId,
+      }),
+    onSuccess: async (data) => {
+      client.setQueryData(queryKeys.attendance(lessonId), data);
+      setManualOpen(false);
+      setManualStudentId('');
+      setManualStatus('PRESENT');
       await invalidateAttendanceCaches(client);
     },
   });
@@ -91,6 +132,8 @@ export function AttendancePage() {
     );
 
   const { lesson, participants } = attendance.data;
+  const participantIds = new Set(participants.map(({ studentId }) => studentId));
+  const manualCandidates = (studentOptions.data ?? []).filter(({ id }) => !participantIds.has(id));
   const counts = {
     ABSENT: participants.filter(({ status }) => status === 'ABSENT').length,
     EXCUSED: participants.filter(({ status }) => status === 'EXCUSED').length,
@@ -164,23 +207,31 @@ export function AttendancePage() {
               value={search}
             />
           </div>
-          <Button
-            disabled={save.isPending || participants.length === 0}
-            onClick={() =>
-              void save.mutateAsync(
-                participants.map(({ studentId }) => ({ status: 'PRESENT', studentId })),
-              )
-            }
-          >
-            <CheckCheck className="size-4" />
-            Отметить всех присутствующими
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {user?.role !== 'COACH' ? (
+              <Button onClick={() => setManualOpen(true)} variant="outline">
+                <Plus className="size-4" />
+                Добавить ученика в занятие
+              </Button>
+            ) : null}
+            <Button
+              disabled={save.isPending || participants.length === 0}
+              onClick={() =>
+                void save.mutateAsync(
+                  participants.map(({ studentId }) => ({ status: 'PRESENT', studentId })),
+                )
+              }
+            >
+              <CheckCheck className="size-4" />
+              Отметить всех присутствующими
+            </Button>
+          </div>
         </div>
 
         {participants.length === 0 ? (
           <div className="p-8">
             <EmptyState
-              description="Добавьте учеников в группу, чтобы отметить посещаемость."
+              description="Добавьте ученика в группу или только в это занятие, чтобы отметить посещаемость."
               icon={UsersRound}
               title="В группе пока нет учеников"
             />
@@ -205,6 +256,9 @@ export function AttendancePage() {
                   <p className="mt-1 text-xs text-muted-foreground">
                     {participant.status ? statusLabels[participant.status] : 'Ещё не отмечен'}
                   </p>
+                  {participant.addedToGroupLater ? (
+                    <Badge className="mt-2 bg-sky-50 text-sky-700">Добавлен в группу позже</Badge>
+                  ) : null}
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {operationalStatuses.map(({ active, icon: Icon, label, status }) => (
@@ -233,6 +287,69 @@ export function AttendancePage() {
           </div>
         )}
       </Card>
+
+      <Dialog
+        closeLabel="Закрыть"
+        description="Ученик будет добавлен только в список этого занятия. История группы не изменится."
+        onClose={() => setManualOpen(false)}
+        open={manualOpen}
+        title="Добавить ученика в занятие"
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="manual-attendance-student">Ученик</Label>
+            <Select
+              id="manual-attendance-student"
+              onChange={(event) => setManualStudentId(event.target.value)}
+              value={manualStudentId}
+            >
+              <option value="">Выберите ученика</option>
+              {manualCandidates.map((student) => (
+                <option key={student.id} value={student.id}>
+                  {student.lastName} {student.firstName}
+                </option>
+              ))}
+            </Select>
+            {studentOptions.isLoading ? (
+              <p className="text-xs text-muted-foreground">Загружаем учеников…</p>
+            ) : manualCandidates.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Других доступных учеников в этом филиале нет.
+              </p>
+            ) : null}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="manual-attendance-status">Результат посещения</Label>
+            <Select
+              id="manual-attendance-status"
+              onChange={(event) =>
+                setManualStatus(
+                  event.target.value as Extract<AttendanceStatus, 'PRESENT' | 'ABSENT' | 'EXCUSED'>,
+                )
+              }
+              value={manualStatus}
+            >
+              <option value="PRESENT">Присутствовал</option>
+              <option value="ABSENT">Отсутствовал</option>
+              <option value="EXCUSED">Болел</option>
+            </Select>
+          </div>
+          {manualSave.isError ? (
+            <p className="text-sm text-red-600">Не удалось добавить ученика в занятие.</p>
+          ) : null}
+          <div className="flex justify-end gap-3">
+            <Button onClick={() => setManualOpen(false)} variant="outline">
+              Отмена
+            </Button>
+            <Button
+              disabled={!manualStudentId || manualSave.isPending}
+              onClick={() => manualSave.mutate()}
+            >
+              {manualSave.isPending ? 'Сохраняем…' : 'Добавить и отметить'}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </main>
   );
 }

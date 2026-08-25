@@ -24,6 +24,7 @@ import {
 } from '@arava/database';
 import {
   IPC_CHANNELS,
+  attendanceEntryInputSchema,
   attendanceEntriesSchema,
   attendanceOccurrenceInputSchema,
   attendanceWorkspaceDateSchema,
@@ -845,6 +846,12 @@ export function createIpcHandlers(
       studio.getAttendance(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeLessonId),
+      ),
+    [IPC_CHANNELS.attendanceManualSave]: (unsafeToken, unsafeLessonId, unsafeEntry) =>
+      studio.saveManualAttendance(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeLessonId),
+        attendanceEntryInputSchema.parse(unsafeEntry),
       ),
     [IPC_CHANNELS.attendanceOpenOccurrence]: (unsafeToken, unsafeInput) =>
       attendanceWorkspace.openOccurrence(
@@ -1827,6 +1834,7 @@ export function registerIpcHandlers(
 const SYNC_RELEVANT_MUTATIONS = new Set<string>([
   IPC_CHANNELS.integrationResolveConflict,
   IPC_CHANNELS.attendanceSave,
+  IPC_CHANNELS.attendanceManualSave,
   IPC_CHANNELS.branchArchive,
   IPC_CHANNELS.branchCreate,
   IPC_CHANNELS.branchUpdate,

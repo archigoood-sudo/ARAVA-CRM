@@ -242,6 +242,8 @@ const desktopApi: AravaDesktopApi = {
   },
   attendance: {
     get: (token, lessonId) => invoke(IPC_CHANNELS.attendanceGet, token, lessonId),
+    manualSave: (token, lessonId, entry) =>
+      invoke(IPC_CHANNELS.attendanceManualSave, token, lessonId, entry),
     openOccurrence: (token, input) => invoke(IPC_CHANNELS.attendanceOpenOccurrence, token, input),
     scanOptions: (token, studentId, date) =>
       invoke(IPC_CHANNELS.attendanceScanOptions, token, studentId, date),

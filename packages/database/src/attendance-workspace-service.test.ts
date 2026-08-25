@@ -281,6 +281,106 @@ describe('Attendance 2.0 workspace', () => {
     ]);
   });
 
+  it('includes current students added later and supports an audited manual participant', async () => {
+    const data = await fixture();
+    const laterStudent = await application.createStudent(ownerToken, {
+      branchId: data.branch.id,
+      firstName: 'Новая',
+      lastName: 'Участница',
+      status: 'ACTIVE',
+    });
+    await studio.addEnrollment(ownerToken, data.group.id, {
+      joinedAt: '2026-08-24',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: laterStudent.id,
+    });
+    const membershipBefore = await database.enrollment.findFirstOrThrow({
+      where: { groupId: data.group.id, studentId: laterStudent.id },
+    });
+
+    expect((await studio.getAttendance(ownerToken, data.current.id)).participants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          addedToGroupLater: true,
+          studentId: laterStudent.id,
+        }),
+        expect.objectContaining({ studentId: data.student.id }),
+      ]),
+    );
+    await studio.saveAttendance(data.adminToken, data.current.id, [
+      { status: 'PRESENT', studentId: laterStudent.id },
+    ]);
+    expect(
+      await database.attendance.findUniqueOrThrow({
+        where: {
+          lessonId_studentId: { lessonId: data.current.id, studentId: laterStudent.id },
+        },
+      }),
+    ).toMatchObject({ status: 'PRESENT' });
+    expect(
+      await database.enrollment.findFirstOrThrow({
+        where: { groupId: data.group.id, studentId: laterStudent.id },
+      }),
+    ).toMatchObject({
+      joinedAt: membershipBefore.joinedAt,
+      leftAt: membershipBefore.leftAt,
+      status: membershipBefore.status,
+    });
+
+    const manualStudent = await application.createStudent(ownerToken, {
+      branchId: data.branch.id,
+      firstName: 'Гость',
+      lastName: 'Занятия',
+      status: 'ACTIVE',
+    });
+    await studio.saveManualAttendance(data.adminToken, data.current.id, {
+      status: 'PRESENT',
+      studentId: manualStudent.id,
+    });
+    await studio.saveManualAttendance(data.adminToken, data.current.id, {
+      status: 'PRESENT',
+      studentId: manualStudent.id,
+    });
+    expect(
+      await database.attendance.count({
+        where: { lessonId: data.current.id, studentId: manualStudent.id },
+      }),
+    ).toBe(1);
+    expect(
+      await database.enrollment.count({
+        where: { groupId: data.group.id, studentId: manualStudent.id },
+      }),
+    ).toBe(0);
+    expect(
+      await database.auditLog.count({
+        where: {
+          action: 'ATTENDANCE_STUDENT_MANUALLY_ADDED',
+          entityId: `${data.current.id}:${manualStudent.id}`,
+        },
+      }),
+    ).toBe(1);
+    await expect(
+      studio.saveManualAttendance(data.coachToken, data.current.id, {
+        status: 'PRESENT',
+        studentId: manualStudent.id,
+      }),
+    ).rejects.toThrow(/недостаточно прав/iu);
+
+    const otherBranchStudent = await application.createStudent(ownerToken, {
+      branchId: data.otherBranch.id,
+      firstName: 'Другой',
+      lastName: 'Филиал',
+      status: 'ACTIVE',
+    });
+    await expect(
+      studio.saveManualAttendance(data.adminToken, data.current.id, {
+        status: 'PRESENT',
+        studentId: otherBranchStudent.id,
+      }),
+    ).rejects.toThrow('У вас нет доступа к этому филиалу.');
+  });
+
   it('resolves and materializes a past weekly occurrence once and reconciles canonical effects', async () => {
     const data = await fixture();
     const pastDate = '2026-08-20';
@@ -320,6 +420,23 @@ describe('Attendance 2.0 workspace', () => {
         where: { groupId: data.group.id, startsAt: new Date(occurrence.startsAt) },
       }),
     ).toBe(1);
+    const laterStudent = await application.createStudent(ownerToken, {
+      branchId: data.branch.id,
+      firstName: 'Поздняя',
+      lastName: 'Участница',
+      status: 'ACTIVE',
+    });
+    await studio.addEnrollment(ownerToken, data.group.id, {
+      joinedAt: '2026-08-21',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: laterStudent.id,
+    });
+    expect((await studio.getAttendance(ownerToken, firstLesson.id)).participants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ addedToGroupLater: true, studentId: laterStudent.id }),
+      ]),
+    );
 
     const finance = new FinanceService(database, application);
     const tariff = await finance.createTariff(ownerToken, {
@@ -336,6 +453,12 @@ describe('Attendance 2.0 workspace', () => {
       salePrice: 40_000,
       startsAt: '2026-08-01',
       studentId: data.student.id,
+      tariffId: tariff.id,
+    });
+    const laterSubscription = await finance.createSubscription(ownerToken, {
+      salePrice: 40_000,
+      startsAt: '2026-08-01',
+      studentId: laterStudent.id,
       tariffId: tariff.id,
     });
     const management = new ManagementService(database, application);
@@ -356,12 +479,22 @@ describe('Attendance 2.0 workspace', () => {
 
     await studio.saveAttendance(ownerToken, firstLesson.id, [
       { status: 'PRESENT', studentId: data.student.id },
+      { status: 'PRESENT', studentId: laterStudent.id },
     ]);
     await studio.saveAttendance(ownerToken, firstLesson.id, [
       { status: 'PRESENT', studentId: data.student.id },
     ]);
-    expect(await database.attendance.count({ where: { lessonId: firstLesson.id } })).toBe(1);
+    expect(await database.attendance.count({ where: { lessonId: firstLesson.id } })).toBe(2);
     expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(1);
+    expect((await finance.getSubscription(ownerToken, laterSubscription.id)).lessonsUsed).toBe(1);
+    expect((await management.calculatePayrollPeriod(ownerToken, period.id)).totalAmount).toBe(
+      20_000,
+    );
+
+    await studio.saveAttendance(ownerToken, firstLesson.id, [
+      { status: 'ABSENT', studentId: laterStudent.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, laterSubscription.id)).lessonsUsed).toBe(0);
     expect((await management.calculatePayrollPeriod(ownerToken, period.id)).totalAmount).toBe(
       10_000,
     );

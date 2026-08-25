@@ -315,6 +315,7 @@ export const IPC_CHANNELS = {
   lessonList: 'lesson:list',
   lessonUpdate: 'lesson:update',
   attendanceGet: 'attendance:get',
+  attendanceManualSave: 'attendance:manual-save',
   attendanceOpenOccurrence: 'attendance:open-occurrence',
   attendanceSave: 'attendance:save',
   attendanceScanOptions: 'attendance:scan-options',
@@ -1763,6 +1764,7 @@ export interface AttendanceEntryInput {
 }
 
 export interface AttendanceParticipant {
+  addedToGroupLater?: boolean | undefined;
   comment?: string | undefined;
   markedAt?: string | undefined;
   status?: AttendanceStatus | undefined;
@@ -2795,6 +2797,11 @@ export interface AravaDesktopApi {
   };
   attendance: {
     get: (token: string, lessonId: string) => Promise<AttendanceLessonDetail>;
+    manualSave: (
+      token: string,
+      lessonId: string,
+      entry: AttendanceEntryInput,
+    ) => Promise<AttendanceLessonDetail>;
     openOccurrence: (token: string, input: AttendanceOccurrenceInput) => Promise<LessonSummary>;
     scanOptions: (token: string, studentId: string, date: string) => Promise<AttendanceScanOptions>;
     save: (

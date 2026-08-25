@@ -52,6 +52,7 @@ import {
 
 const CURRENT_ENROLLMENTS: PrismaEnrollmentStatus[] = ['ACTIVE', 'TRIAL', 'FROZEN'];
 const EXPECTED_ENROLLMENTS: PrismaEnrollmentStatus[] = ['ACTIVE', 'TRIAL'];
+const MANUAL_ATTENDANCE_STATUSES = ['PRESENT', 'ABSENT', 'EXCUSED'] as const;
 
 const groupInclude = {
   _count: {
@@ -95,6 +96,32 @@ const lessonInclude = {
 type GroupRecord = Prisma.DanceGroupGetPayload<{ include: typeof groupInclude }>;
 type ScheduleRecord = Prisma.WeeklyScheduleGetPayload<{ include: typeof scheduleInclude }>;
 type LessonRecord = Prisma.LessonGetPayload<{ include: typeof lessonInclude }>;
+interface AttendanceEnrollment {
+  joinedAt: Date;
+  leftAt: Date | null;
+  status: PrismaEnrollmentStatus;
+  student: { archivedAt: Date | null; status: string };
+}
+
+function attendanceEnrollmentScope(
+  enrollment: AttendanceEnrollment,
+  lessonStartsAt: Date,
+): 'HISTORICAL' | 'CURRENT_LATER' | undefined {
+  if (
+    enrollment.joinedAt <= lessonStartsAt &&
+    (!enrollment.leftAt || enrollment.leftAt >= lessonStartsAt)
+  )
+    return 'HISTORICAL';
+  if (
+    enrollment.joinedAt > lessonStartsAt &&
+    !enrollment.leftAt &&
+    EXPECTED_ENROLLMENTS.includes(enrollment.status) &&
+    ['ACTIVE', 'TRIAL', 'FROZEN'].includes(enrollment.student.status) &&
+    !enrollment.student.archivedAt
+  )
+    return 'CURRENT_LATER';
+  return undefined;
+}
 
 function optionalValue(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -829,11 +856,7 @@ export class StudioService {
           },
         },
         orderBy: { student: { lastName: 'asc' } },
-        where: {
-          groupId: lesson.groupId,
-          joinedAt: { lte: lesson.startsAt },
-          OR: [{ leftAt: null }, { leftAt: { gte: lesson.startsAt } }],
-        },
+        where: { groupId: lesson.groupId },
       }),
       this.database.attendance.findMany({
         include: {
@@ -843,27 +866,33 @@ export class StudioService {
       }),
     ]);
     const markByStudent = new Map(marks.map((mark) => [mark.studentId, mark]));
-    const validEnrollments = enrollments.filter(
-      ({ leftAt, status, student, studentId }) =>
-        markByStudent.has(studentId) ||
-        (leftAt
-          ? leftAt >= lesson.startsAt
-          : EXPECTED_ENROLLMENTS.includes(status) &&
-            ['ACTIVE', 'TRIAL', 'FROZEN'].includes(student.status) &&
-            !student.archivedAt),
+    const enrollmentByStudent = new Map<string, (typeof enrollments)[number]>();
+    const historicallyEnrolled = new Set<string>();
+    const addedLater = new Set<string>();
+    for (const enrollment of enrollments) {
+      const scope = attendanceEnrollmentScope(enrollment, lesson.startsAt);
+      if (!scope && !markByStudent.has(enrollment.studentId)) continue;
+      enrollmentByStudent.set(enrollment.studentId, enrollment);
+      if (scope === 'HISTORICAL') historicallyEnrolled.add(enrollment.studentId);
+      else if (scope === 'CURRENT_LATER') addedLater.add(enrollment.studentId);
+    }
+    const participants: AttendanceParticipant[] = [...enrollmentByStudent.values()].map(
+      ({ student, studentId }) => {
+        const mark = markByStudent.get(studentId);
+        return {
+          ...(addedLater.has(studentId) && !historicallyEnrolled.has(studentId)
+            ? { addedToGroupLater: true }
+            : {}),
+          comment: mark?.comment ?? undefined,
+          markedAt: mark?.markedAt.toISOString(),
+          status: mark?.status,
+          studentId,
+          studentName: [student.lastName, student.firstName, student.middleName]
+            .filter(Boolean)
+            .join(' '),
+        };
+      },
     );
-    const participants: AttendanceParticipant[] = validEnrollments.map(({ student, studentId }) => {
-      const mark = markByStudent.get(studentId);
-      return {
-        comment: mark?.comment ?? undefined,
-        markedAt: mark?.markedAt.toISOString(),
-        status: mark?.status,
-        studentId,
-        studentName: [student.lastName, student.firstName, student.middleName]
-          .filter(Boolean)
-          .join(' '),
-      };
-    });
     const participantIds = new Set(participants.map(({ studentId }) => studentId));
     for (const mark of marks) {
       if (participantIds.has(mark.studentId)) continue;
@@ -898,6 +927,48 @@ export class StudioService {
       throw new DomainError('VALIDATION', t('domain.validation.attendanceCancelled'));
     const allowedStudents = await this.attendanceStudentIds(lesson);
     await this.persistAttendance(actor, lesson, entries, allowedStudents);
+    return this.getAttendance(token, lessonId);
+  }
+
+  async saveManualAttendance(
+    token: string,
+    lessonId: string,
+    entry: AttendanceEntryInput,
+  ): Promise<AttendanceLessonDetail> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'attendance:manage');
+    if (actor.role === 'COACH')
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.permissionDenied'));
+    if (
+      !MANUAL_ATTENDANCE_STATUSES.includes(
+        entry.status as (typeof MANUAL_ATTENDANCE_STATUSES)[number],
+      )
+    )
+      throw new DomainError(
+        'VALIDATION',
+        'Для ручной отметки выберите присутствие, отсутствие или болезнь.',
+      );
+    const lesson = await this.requireLesson(lessonId);
+    this.assertLessonRead(actor, lesson);
+    if (lesson.status === 'CANCELLED')
+      throw new DomainError('VALIDATION', t('domain.validation.attendanceCancelled'));
+    const student = await this.database.student.findUnique({ where: { id: entry.studentId } });
+    if (!student || student.archivedAt)
+      throw new DomainError('NOT_FOUND', t('domain.notFound.student'));
+    assertBranchAccess(actor, student.branchId);
+    if (student.branchId !== lesson.branchId)
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.attendanceStudent'));
+    const allowedStudents = await this.attendanceStudentIds(lesson);
+    allowedStudents.add(entry.studentId);
+    await this.persistAttendance(
+      actor,
+      lesson,
+      [entry],
+      allowedStudents,
+      undefined,
+      false,
+      new Set([entry.studentId]),
+    );
     return this.getAttendance(token, lessonId);
   }
 
@@ -941,11 +1012,7 @@ export class StudioService {
     const [enrollments, existingMarks] = await Promise.all([
       this.database.enrollment.findMany({
         include: { student: { select: { archivedAt: true, status: true } } },
-        where: {
-          groupId: lesson.groupId,
-          joinedAt: { lte: lesson.startsAt },
-          OR: [{ leftAt: null }, { leftAt: { gte: lesson.startsAt } }],
-        },
+        where: { groupId: lesson.groupId },
       }),
       this.database.attendance.findMany({
         select: { studentId: true },
@@ -955,13 +1022,7 @@ export class StudioService {
     return new Set([
       ...existingMarks.map(({ studentId }) => studentId),
       ...enrollments
-        .filter(
-          ({ leftAt, status, student }) =>
-            Boolean(leftAt) ||
-            (EXPECTED_ENROLLMENTS.includes(status) &&
-              ['ACTIVE', 'TRIAL', 'FROZEN'].includes(student.status) &&
-              !student.archivedAt),
-        )
+        .filter((enrollment) => Boolean(attendanceEnrollmentScope(enrollment, lesson.startsAt)))
         .map(({ studentId }) => studentId),
     ]);
   }
@@ -973,6 +1034,7 @@ export class StudioService {
     allowedStudents: Set<string>,
     webActionId?: string,
     allowCoachCorrection = false,
+    manuallyAddedStudents: Set<string> = new Set<string>(),
   ): Promise<void> {
     if (new Set(entries.map(({ studentId }) => studentId)).size !== entries.length)
       throw new DomainError('VALIDATION', t('domain.validation.attendanceUnique'));
@@ -1014,6 +1076,15 @@ export class StudioService {
           },
           where: { lessonId_studentId: { lessonId: lesson.id, studentId: entry.studentId } },
         });
+        if (!previous && manuallyAddedStudents.has(entry.studentId))
+          await this.audit(
+            transaction,
+            actor.id,
+            'ATTENDANCE_STUDENT_MANUALLY_ADDED',
+            'Attendance',
+            `${lesson.id}:${entry.studentId}`,
+            { lessonId: lesson.id, studentId: entry.studentId },
+          );
         if (previous?.status !== entry.status)
           await applyAttendanceWriteOff(transaction, {
             actorUserId: actor.id,

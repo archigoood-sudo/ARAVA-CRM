@@ -1239,6 +1239,33 @@ describe('Electron IPC boundary', () => {
     )) as AttendanceScanOptions;
     expect(options.lessons).toEqual([expect.objectContaining({ lessonId: lesson.id })]);
     expect(await database.attendance.count()).toBe(0);
+    const manualStudent = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Гость',
+      lastName: 'Занятия',
+      status: 'ACTIVE',
+    });
+    await handlers[IPC_CHANNELS.attendanceManualSave]?.(owner.token, lesson.id, {
+      status: 'PRESENT',
+      studentId: manualStudent.id,
+    });
+    expect(
+      await database.attendance.count({
+        where: { lessonId: lesson.id, studentId: manualStudent.id },
+      }),
+    ).toBe(1);
+    await expect(
+      handlers[IPC_CHANNELS.attendanceManualSave]?.(coachSession.token, lesson.id, {
+        status: 'PRESENT',
+        studentId: manualStudent.id,
+      }),
+    ).rejects.toThrow(/недостаточно прав/iu);
+    expect(() =>
+      handlers[IPC_CHANNELS.attendanceManualSave]?.(owner.token, lesson.id, {
+        status: 'UNKNOWN',
+        studentId: manualStudent.id,
+      }),
+    ).toThrow();
     await expect(
       handlers[IPC_CHANNELS.attendanceToday]?.(coachSession.token, '2026-08-23'),
     ).rejects.toThrow('Рабочее место «Посещения» доступно владельцу и администраторам.');

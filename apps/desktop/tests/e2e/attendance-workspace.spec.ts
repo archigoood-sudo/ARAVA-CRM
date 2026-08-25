@@ -88,6 +88,29 @@ test('рабочее место отмечает вручную, через по
       const pastDate = `${String(pastDateValue.getFullYear())}-${String(
         pastDateValue.getMonth() + 1,
       ).padStart(2, '0')}-${String(pastDateValue.getDate()).padStart(2, '0')}`;
+      const joinedLaterDate = new Date(pastDateValue);
+      joinedLaterDate.setDate(joinedLaterDate.getDate() + 1);
+      const joinedLater = `${String(joinedLaterDate.getFullYear())}-${String(
+        joinedLaterDate.getMonth() + 1,
+      ).padStart(2, '0')}-${String(joinedLaterDate.getDate()).padStart(2, '0')}`;
+      const laterStudent = await api.students.create(token, {
+        branchId: branch.id,
+        firstName: 'Поздняя',
+        lastName: 'Участница',
+        status: 'ACTIVE',
+      });
+      await api.groups.addEnrollment(token, group.id, {
+        joinedAt: joinedLater,
+        overrideCapacity: false,
+        status: 'ACTIVE',
+        studentId: laterStudent.id,
+      });
+      const manualStudent = await api.students.create(token, {
+        branchId: branch.id,
+        firstName: 'ВнеГруппы',
+        lastName: 'Гость',
+        status: 'ACTIVE',
+      });
       await api.schedules.create(token, {
         branchId: branch.id,
         coachId: trainer.user.id,
@@ -112,7 +135,10 @@ test('рабочее место отмечает вручную, через по
       });
       return {
         cardStudentId: students[2].id,
+        groupId: group.id,
+        laterStudentId: laterStudent.id,
         lessonId: lesson.id,
+        manualStudentId: manualStudent.id,
         pastDate,
       };
     });
@@ -123,7 +149,7 @@ test('рабочее место отмечает вручную, через по
       page.getByTestId('main-scroll').getByRole('heading', { name: 'Посещения', exact: true }),
     ).toBeVisible();
     const lessonCard = page.getByRole('button').filter({ hasText: 'Хип-хоп 8–10 лет' });
-    await expect(lessonCard).toContainText('Отмечено 0 из 3');
+    await expect(lessonCard).toContainText('Отмечено 0 из 4');
     await lessonCard.click();
     await expect(page).toHaveURL(new RegExp(`/attendance/${fixture.lessonId}`, 'u'));
 
@@ -184,8 +210,13 @@ test('рабочее место отмечает вручную, через по
     const historicalCard = page.getByRole('button').filter({ hasText: 'Хип-хоп 8–10 лет' });
     await expect(historicalCard).toContainText('Отмечено 0 из 3');
     await historicalCard.click();
-    const historicalUrl = page.url();
     await expect(page).toHaveURL(/\/attendance\/[^/]+\?from=workspace&date=/u);
+    const historicalUrl = page.url();
+    const historicalLessonId = /\/attendance\/([^?]+)/u.exec(historicalUrl)?.[1];
+    if (!historicalLessonId) throw new Error('Historical lesson route was not resolved.');
+    await expect(page.getByText('Участница Поздняя', { exact: true })).toBeVisible();
+    await expect(page.getByText('Добавлен в группу позже', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Участница Поздняя: Присутствовал' }).click();
     await page.getByRole('button', { name: 'Иванова Алиса: Присутствовал' }).click();
     await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('1');
     await page.getByRole('button', { name: 'Иванова Алиса: Отсутствовал' }).click();
@@ -196,6 +227,35 @@ test('рабочее место отмечает вручную, через по
     await page.getByRole('button').filter({ hasText: 'Хип-хоп 8–10 лет' }).click();
     await expect(page).toHaveURL(historicalUrl);
     await expect(page.getByText('Отсутствуют', { exact: true }).locator('..')).toContainText('1');
+
+    await page.getByRole('button', { name: 'Добавить ученика в занятие' }).click();
+    const manualDialog = page.getByRole('dialog');
+    await manualDialog.getByLabel('Ученик').selectOption(fixture.manualStudentId);
+    await manualDialog.getByRole('button', { name: 'Добавить и отметить' }).click();
+    await expect(page.getByText('Гость ВнеГруппы', { exact: true })).toBeVisible();
+    const manualResult = await page.evaluate(
+      async ({ groupId, lessonId, manualStudentId }) => {
+        const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+          state?: { token?: string };
+        };
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        const attendance = await api.attendance.get(persisted.state?.token ?? '', lessonId);
+        const group = await api.groups.get(persisted.state?.token ?? '', groupId);
+        return {
+          attendance: attendance.participants.filter(
+            ({ status, studentId }) => studentId === manualStudentId && status === 'PRESENT',
+          ).length,
+          memberships: group.participants.filter(({ studentId }) => studentId === manualStudentId)
+            .length,
+        };
+      },
+      {
+        groupId: fixture.groupId,
+        lessonId: historicalLessonId,
+        manualStudentId: fixture.manualStudentId,
+      },
+    );
+    expect(manualResult).toEqual({ attendance: 1, memberships: 0 });
   } finally {
     await application.close();
   }
