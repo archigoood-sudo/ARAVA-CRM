@@ -11,7 +11,7 @@
     "build": "electron-vite build",
     "dev": "electron-vite dev",
     "package": "electron-builder --dir",
-    "package:win": "electron-builder --win nsis --x64",
+    "package:win": "electron-builder --win nsis --x64 --publish never",
     "release:win": "npm run prepackage:win && electron-builder --win nsis --x64 --publish always",
     "prepackage": "node ../../scripts/prepare-prisma-package.mjs native",
     "prepackage:win": "node ../../scripts/prepare-prisma-package.mjs windows",
