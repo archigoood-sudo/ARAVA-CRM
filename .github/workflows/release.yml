@@ -58,7 +58,7 @@ jobs:
     needs:
       - verify
       - publish-windows
-    runs-on: macos-13
+    runs-on: macos-15-intel
     env:
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
