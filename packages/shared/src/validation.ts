@@ -545,6 +545,7 @@ export const initialPaymentInputSchema = z.object({
 
 export const subscriptionCreateInputSchema: z.ZodType<SubscriptionCreateInput> = z
   .object({
+    expiresAt: isoDate.optional(),
     initialPayment: initialPaymentInputSchema.optional(),
     notes: optionalText(2000),
     salePrice: moneyAmount,
@@ -555,6 +556,10 @@ export const subscriptionCreateInputSchema: z.ZodType<SubscriptionCreateInput> =
   .refine((input) => !input.initialPayment || input.initialPayment.amount <= input.salePrice, {
     message: t('validation.payment.exceedsSale'),
     path: ['initialPayment', 'amount'],
+  })
+  .refine((input) => !input.expiresAt || input.expiresAt >= input.startsAt, {
+    message: 'Дата окончания не может быть раньше даты начала.',
+    path: ['expiresAt'],
   });
 
 export const subscriptionUpdateInputSchema: z.ZodType<SubscriptionUpdateInput> = z

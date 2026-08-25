@@ -846,6 +846,7 @@ export interface InitialPaymentInput {
 }
 
 export interface SubscriptionCreateInput {
+  expiresAt?: string | undefined;
   initialPayment?: InitialPaymentInput | undefined;
   notes?: string | undefined;
   salePrice: number;
@@ -853,6 +854,8 @@ export interface SubscriptionCreateInput {
   studentId: string;
   tariffId: string;
 }
+
+export type SubscriptionPaymentStatus = 'PAID' | 'PARTIALLY_PAID' | 'REFUNDED' | 'UNPAID';
 
 export interface SubscriptionUpdateInput {
   expiresAt?: string | undefined;
@@ -886,6 +889,7 @@ export interface SubscriptionSummary {
   lowBalance: boolean;
   notes?: string | undefined;
   paidAmount: number;
+  paymentStatus: SubscriptionPaymentStatus;
   purchasedAt: string;
   remainingLessons?: number | undefined;
   salePrice: number;

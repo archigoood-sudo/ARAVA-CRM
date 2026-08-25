@@ -118,7 +118,12 @@ describe('Sprint 3 finance service', () => {
 
   it('tracks partial payments, debt, full and partial refunds without deleting history', async () => {
     const { branch, student, subscription } = await tariffAndSubscription();
-    expect(subscription).toMatchObject({ debt: 70_000, paidAmount: 30_000, status: 'ACTIVE' });
+    expect(subscription).toMatchObject({
+      debt: 70_000,
+      paidAmount: 30_000,
+      paymentStatus: 'PARTIALLY_PAID',
+      status: 'ACTIVE',
+    });
     const payment = await finance.createPayment(ownerToken, {
       amount: 20_000,
       branchId: branch.id,
@@ -149,7 +154,10 @@ describe('Sprint 3 finance service', () => {
     ).rejects.toThrow(t('domain.validation.refundExceedsPayment'));
     expect(await database.payment.count()).toBe(2);
     expect(await database.refund.count()).toBe(2);
-    expect((await finance.getSubscription(ownerToken, subscription.id)).debt).toBe(70_000);
+    expect(await finance.getSubscription(ownerToken, subscription.id)).toMatchObject({
+      debt: 70_000,
+      paymentStatus: 'PARTIALLY_PAID',
+    });
   });
 
   it('enforces freeze limits, extends expiry, and audits freeze lifecycle', async () => {
@@ -195,6 +203,7 @@ describe('Sprint 3 finance service', () => {
     });
     expect(subscription).toMatchObject({
       debt: 75_000,
+      paymentStatus: 'UNPAID',
       remainingLessons: 8,
       status: 'PENDING',
     });
@@ -209,6 +218,76 @@ describe('Sprint 3 finance service', () => {
     expect((await finance.cancelSubscription(ownerToken, subscription.id)).status).toBe(
       'CANCELLED',
     );
+    expect(await database.subscription.count({ where: { id: subscription.id } })).toBe(1);
+    expect(await database.payment.count({ where: { subscriptionId: subscription.id } })).toBe(0);
+  });
+
+  it('uses an explicit sale expiry without changing the tariff or sale price snapshot', async () => {
+    const { branch, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 8,
+      name: 'Гибкий срок',
+      price: 82_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    });
+    const startsAt = '2026-08-25';
+    const subscription = await finance.createSubscription(ownerToken, {
+      expiresAt: '2026-10-15',
+      salePrice: tariff.price,
+      startsAt,
+      studentId: student.id,
+      tariffId: tariff.id,
+    });
+    expect(subscription.salePrice).toBe(82_000);
+    expect(subscription.expiresAt?.slice(0, 10)).toBe('2026-10-15');
+    expect((await finance.getTariff(ownerToken, tariff.id)).price).toBe(82_000);
+  });
+
+  it('derives paid and refunded subscription payment states from canonical payments', async () => {
+    const { branch, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 4,
+      name: 'Оплачиваемый тариф',
+      price: 40_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    });
+    const subscription = await finance.createSubscription(ownerToken, {
+      salePrice: tariff.price,
+      startsAt: dateString(new Date()),
+      studentId: student.id,
+      tariffId: tariff.id,
+    });
+    const payment = await finance.createPayment(ownerToken, {
+      amount: 40_000,
+      branchId: branch.id,
+      paidAt: new Date().toISOString(),
+      paymentMethod: 'CASH',
+      studentId: student.id,
+      subscriptionId: subscription.id,
+    });
+    expect(await finance.getSubscription(ownerToken, subscription.id)).toMatchObject({
+      debt: 0,
+      paidAmount: 40_000,
+      paymentStatus: 'PAID',
+    });
+    await finance.createRefund(ownerToken, payment.id, {
+      amount: 40_000,
+      reason: 'Полный возврат по продаже',
+      refundedAt: new Date().toISOString(),
+    });
+    expect(await finance.getSubscription(ownerToken, subscription.id)).toMatchObject({
+      debt: 40_000,
+      paidAmount: 0,
+      paymentStatus: 'REFUNDED',
+    });
     expect(await database.subscription.count({ where: { id: subscription.id } })).toBe(1);
   });
 

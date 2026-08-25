@@ -1,13 +1,11 @@
 import {
-  PAYMENT_METHODS,
   subscriptionCreateInputSchema,
   t,
-  type PaymentMethod,
   type StudentSummary,
   type SubscriptionCreateInput,
   type TariffSummary,
 } from '@arava/shared';
-import { Button, Checkbox, Dialog, Input, Label, Select, Textarea, formatMoney } from '@arava/ui';
+import { Button, Dialog, Input, Label, Select, Textarea, formatMoney } from '@arava/ui';
 import { useEffect, useMemo, useState } from 'react';
 
 function today(): string {
@@ -16,7 +14,22 @@ function today(): string {
   return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 }
 
+export interface SubscriptionSalePaymentPlan {
+  amount: number;
+  mode: 'FULL' | 'NONE' | 'PARTIAL';
+}
+
+function calculatedExpiryDate(startsAt: string, validityDays?: number): string {
+  if (!validityDays || !startsAt) return '';
+  const [year, month, day] = startsAt.split('-').map(Number);
+  const value = new Date(year ?? 0, (month ?? 1) - 1, day ?? 1);
+  value.setDate(value.getDate() + validityDays);
+  const offset = value.getTimezoneOffset() * 60_000;
+  return new Date(value.getTime() - offset).toISOString().slice(0, 10);
+}
+
 export function SubscriptionDialog({
+  activeSubscriptionCount = 0,
   error,
   onClose,
   onSubmit,
@@ -26,63 +39,50 @@ export function SubscriptionDialog({
 }: {
   error?: string | undefined;
   onClose: () => void;
-  onSubmit: (input: SubscriptionCreateInput) => Promise<void>;
+  activeSubscriptionCount?: number | undefined;
+  onSubmit: (input: SubscriptionCreateInput, payment: SubscriptionSalePaymentPlan) => Promise<void>;
   open: boolean;
   student: StudentSummary;
   tariffs: TariffSummary[];
 }) {
   const [tariffId, setTariffId] = useState('');
   const [startsAt, setStartsAt] = useState(today());
-  const [salePrice, setSalePrice] = useState('0');
+  const [expiresAt, setExpiresAt] = useState('');
   const [notes, setNotes] = useState('');
-  const [withPayment, setWithPayment] = useState(true);
+  const [paymentMode, setPaymentMode] = useState<SubscriptionSalePaymentPlan['mode']>('FULL');
   const [paymentAmount, setPaymentAmount] = useState('0');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   const [validationError, setValidationError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const selected = useMemo(
     () => tariffs.find((tariff) => tariff.id === tariffId),
     [tariffId, tariffs],
   );
-  const calculatedExpiry = useMemo(() => {
-    if (!selected?.validityDays || !startsAt) return undefined;
-    const [year, month, day] = startsAt.split('-').map(Number);
-    const value = new Date(year ?? 0, (month ?? 1) - 1, day ?? 1);
-    value.setDate(value.getDate() + selected.validityDays);
-    return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'long' }).format(value);
-  }, [selected?.validityDays, startsAt]);
 
   useEffect(() => {
     if (!open) return;
     const first = tariffs[0];
     setTariffId(first?.id ?? '');
     setStartsAt(today());
-    setSalePrice(first ? String(first.price / 100) : '0');
+    setExpiresAt(calculatedExpiryDate(today(), first?.validityDays));
     setPaymentAmount(first ? String(first.price / 100) : '0');
-    setPaymentMethod('CASH');
     setNotes('');
-    setWithPayment(true);
+    setPaymentMode(first?.price === 0 ? 'NONE' : 'FULL');
     setValidationError(undefined);
   }, [open, tariffs]);
   const chooseTariff = (id: string) => {
     setTariffId(id);
     const tariff = tariffs.find((item) => item.id === id);
     if (tariff) {
-      setSalePrice(String(tariff.price / 100));
+      setExpiresAt(calculatedExpiryDate(startsAt, tariff.validityDays));
       setPaymentAmount(String(tariff.price / 100));
+      if (tariff.price === 0) setPaymentMode('NONE');
     }
   };
   const submit = async () => {
     const input: SubscriptionCreateInput = {
-      initialPayment: withPayment
-        ? {
-            amount: Math.round(Number(paymentAmount) * 100),
-            paidAt: new Date().toISOString(),
-            paymentMethod,
-          }
-        : undefined,
+      expiresAt: expiresAt || undefined,
       notes,
-      salePrice: Math.round(Number(salePrice) * 100),
+      salePrice: selected?.price ?? 0,
       startsAt,
       studentId: student.id,
       tariffId,
@@ -92,9 +92,22 @@ export function SubscriptionDialog({
       setValidationError(result.error.issues[0]?.message ?? t('validation.form'));
       return;
     }
+    const effectivePaymentMode = selected?.price === 0 ? 'NONE' : paymentMode;
+    const amount = effectivePaymentMode === 'NONE' ? 0 : Math.round(Number(paymentAmount) * 100);
+    if (
+      (effectivePaymentMode === 'FULL' && amount !== (selected?.price ?? 0)) ||
+      (effectivePaymentMode === 'PARTIAL' && (amount <= 0 || amount >= (selected?.price ?? 0)))
+    ) {
+      setValidationError(
+        effectivePaymentMode === 'PARTIAL'
+          ? 'Частичный платёж должен быть больше нуля и меньше стоимости абонемента.'
+          : 'Полная оплата должна совпадать со стоимостью абонемента.',
+      );
+      return;
+    }
     setSubmitting(true);
     try {
-      await onSubmit(result.data);
+      await onSubmit(result.data, { amount, mode: effectivePaymentMode });
     } finally {
       setSubmitting(false);
     }
@@ -108,9 +121,15 @@ export function SubscriptionDialog({
       title={t('subscription.createTitle')}
     >
       <div className="space-y-4">
+        {activeSubscriptionCount > 0 ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            У ученика уже есть действующий абонемент. Новый абонемент будет сохранён отдельно.
+          </div>
+        ) : null}
         <div className="space-y-2">
           <Label htmlFor="subscription-tariff">{t('subscription.tariff')}</Label>
           <Select
+            disabled={(selected?.price ?? 0) === 0}
             id="subscription-tariff"
             onChange={(event) => chooseTariff(event.target.value)}
             value={tariffId}
@@ -139,25 +158,31 @@ export function SubscriptionDialog({
             <Label htmlFor="subscription-start">{t('subscription.startsAt')}</Label>
             <Input
               id="subscription-start"
-              onChange={(event) => setStartsAt(event.target.value)}
+              onChange={(event) => {
+                setStartsAt(event.target.value);
+                setExpiresAt(calculatedExpiryDate(event.target.value, selected?.validityDays));
+              }}
               type="date"
               value={startsAt}
             />
-            {calculatedExpiry ? (
-              <p className="text-xs text-muted-foreground">Действует до: {calculatedExpiry}</p>
-            ) : null}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="subscription-price">{t('subscription.salePrice')}</Label>
+            <Label htmlFor="subscription-expiry">{t('subscription.expiresAt')}</Label>
             <Input
-              id="subscription-price"
-              min="0"
-              onChange={(event) => setSalePrice(event.target.value)}
-              step="0.01"
-              type="number"
-              value={salePrice}
+              id="subscription-expiry"
+              min={startsAt}
+              onChange={(event) => setExpiresAt(event.target.value)}
+              type="date"
+              value={expiresAt}
             />
           </div>
+        </div>
+        <div className="rounded-2xl border border-border bg-muted/30 p-4">
+          <p className="text-sm text-muted-foreground">Стоимость абонемента</p>
+          <p className="mt-1 text-2xl font-semibold">{formatMoney(selected?.price ?? 0)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Стоимость фиксируется на момент продажи и не меняется вместе с тарифом.
+          </p>
         </div>
         <div className="space-y-2">
           <Label htmlFor="subscription-notes">{t('subscription.notes')}</Label>
@@ -167,40 +192,39 @@ export function SubscriptionDialog({
             value={notes}
           />
         </div>
-        <label className="flex items-center gap-3 rounded-2xl border border-border p-4 text-sm font-medium">
-          <Checkbox
-            checked={withPayment}
-            onChange={(event) => setWithPayment(event.target.checked)}
-          />
-          {t('subscription.initialPayment')}
-        </label>
-        {withPayment ? (
-          <div className="grid grid-cols-2 gap-4 rounded-2xl bg-muted/40 p-4">
+        <div className="space-y-2">
+          <Label htmlFor="subscription-payment-mode">Оплата при продаже</Label>
+          <Select
+            id="subscription-payment-mode"
+            onChange={(event) => {
+              const mode = event.target.value as SubscriptionSalePaymentPlan['mode'];
+              setPaymentMode(mode);
+              if (mode === 'FULL') setPaymentAmount(String((selected?.price ?? 0) / 100));
+            }}
+            value={paymentMode}
+          >
+            <option value="FULL">Полная оплата</option>
+            <option value="PARTIAL">Частичная оплата</option>
+            <option value="NONE">Без оплаты</option>
+          </Select>
+        </div>
+        {paymentMode !== 'NONE' ? (
+          <div className="rounded-2xl bg-muted/40 p-4">
             <div className="space-y-2">
               <Label htmlFor="subscription-payment">{t('payment.amount')}</Label>
               <Input
                 id="subscription-payment"
                 min="0.01"
                 onChange={(event) => setPaymentAmount(event.target.value)}
+                readOnly={paymentMode === 'FULL'}
                 step="0.01"
                 type="number"
                 value={paymentAmount}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="subscription-method">{t('payment.method')}</Label>
-              <Select
-                id="subscription-method"
-                onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}
-                value={paymentMethod}
-              >
-                {PAYMENT_METHODS.map((method) => (
-                  <option key={method} value={method}>
-                    {t(`payment.method.${method}`)}
-                  </option>
-                ))}
-              </Select>
-            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Способ оплаты — наличные, карта или СБП — выбирается на следующем шаге.
+            </p>
           </div>
         ) : null}
         {validationError || error ? (
@@ -211,7 +235,11 @@ export function SubscriptionDialog({
             {t('common.cancel')}
           </Button>
           <Button disabled={submitting} onClick={() => void submit()}>
-            {submitting ? t('common.saving') : t('subscription.issue')}
+            {submitting
+              ? t('common.saving')
+              : paymentMode === 'NONE'
+                ? 'Продать без оплаты'
+                : 'Продолжить к оплате'}
           </Button>
         </div>
       </div>

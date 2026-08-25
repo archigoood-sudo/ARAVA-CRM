@@ -48,6 +48,7 @@ export function PaymentDialog({
   open,
   students,
   subscriptions = [],
+  subscriptionPayment,
 }: {
   attendancePayment?:
     { amount: number; lessonId: string; tariffId: string; tariffName: string } | undefined;
@@ -60,6 +61,9 @@ export function PaymentDialog({
   open: boolean;
   students: StudentSummary[];
   subscriptions?: SubscriptionSummary[] | undefined;
+  subscriptionPayment?:
+    | { amount: number; fixedAmount?: boolean; subscriptionId: string; tariffName: string }
+    | undefined;
 }) {
   const {
     formState: { isSubmitting },
@@ -91,13 +95,14 @@ export function PaymentDialog({
   useLayoutEffect(() => {
     if (!open) return;
     reset({
-      amount: attendancePayment ? attendancePayment.amount / 100 : 0,
+      amount: (attendancePayment?.amount ?? subscriptionPayment?.amount ?? 0) / 100,
       attendanceLessonId: attendancePayment?.lessonId,
       attendanceTariffId: attendancePayment?.tariffId,
       branchId: fixedStudent?.branchId ?? branches[0]?.id ?? '',
       paidAt: localDateTimeValue(),
       paymentMethod: 'CASH',
       studentId: fixedStudent?.id ?? '',
+      subscriptionId: subscriptionPayment?.subscriptionId,
     });
     setMode('MANUAL');
     setSbpPayment(undefined);
@@ -116,7 +121,7 @@ export function PaymentDialog({
         );
       })
       .catch(() => setSbpAvailable(false));
-  }, [attendancePayment, branches, fixedStudent, open, reset]);
+  }, [attendancePayment, branches, fixedStudent, open, reset, subscriptionPayment]);
 
   useEffect(() => {
     if (
@@ -352,6 +357,14 @@ export function PaymentDialog({
               <input type="hidden" {...register('attendanceLessonId')} />
               <input type="hidden" {...register('attendanceTariffId')} />
             </div>
+          ) : subscriptionPayment ? (
+            <div className="space-y-2">
+              <Label>Абонемент</Label>
+              <div className="rounded-xl border border-border px-3 py-2 text-sm">
+                {subscriptionPayment.tariffName}
+              </div>
+              <input type="hidden" {...register('subscriptionId')} />
+            </div>
           ) : (
             <div className="space-y-2">
               <Label htmlFor="payment-subscription">{t('payment.subscription')}</Label>
@@ -374,7 +387,8 @@ export function PaymentDialog({
             <Input
               id="payment-amount"
               min="0.01"
-              readOnly={Boolean(attendancePayment)}
+              max={subscriptionPayment ? subscriptionPayment.amount / 100 : undefined}
+              readOnly={Boolean(attendancePayment ?? subscriptionPayment?.fixedAmount)}
               step="0.01"
               type="number"
               {...register('amount', { valueAsNumber: true })}

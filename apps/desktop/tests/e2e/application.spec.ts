@@ -117,12 +117,16 @@ test('вход, создание филиала, ученика и контак�
 
     await window.getByRole('link', { name: 'Ученики' }).click();
     await window.getByRole('link', { name: /Петрова Мила/u }).click();
-    await window.getByRole('button', { name: 'Выдать абонемент' }).click();
+    await window.getByRole('button', { name: 'Продать абонемент' }).click();
     const subscriptionDialog = window.getByRole('dialog');
     await subscriptionDialog.getByLabel('Тариф').selectOption({ index: 1 });
-    await subscriptionDialog.getByLabel('Первый платёж').isChecked();
+    await subscriptionDialog.getByLabel('Оплата при продаже').selectOption('PARTIAL');
     await subscriptionDialog.getByLabel('Сумма, ₽').fill('1000');
-    await subscriptionDialog.getByRole('button', { name: 'Выдать абонемент' }).click();
+    await subscriptionDialog.getByRole('button', { name: 'Продолжить к оплате' }).click();
+    const firstPaymentDialog = window.getByRole('dialog');
+    await expect(firstPaymentDialog.getByText('Абонемент E2E')).toBeVisible();
+    await expect(firstPaymentDialog.getByLabel('Сумма, ₽')).toHaveValue('1000');
+    await firstPaymentDialog.getByRole('button', { name: 'Сохранить платёж' }).click();
     await expect(window.getByRole('button', { name: /Абонемент E2E/u })).toBeVisible();
 
     await window.getByRole('button', { name: 'Принять оплату' }).first().click();

@@ -8,7 +8,11 @@ import {
 } from '@arava/shared';
 import { Prisma } from '@prisma/client';
 
-import { assertDirectAttendancePayment, createCanonicalPayment } from './finance-service';
+import {
+  assertDirectAttendancePayment,
+  availableSubscriptionPaymentAmount,
+  createCanonicalPayment,
+} from './finance-service';
 import type { DatabaseClient } from './index';
 import { assertBranchAccess, assertPermission } from './permissions';
 import { DomainError } from './security';
@@ -133,6 +137,17 @@ export class PaymentOperationService {
       );
     try {
       const created = await this.database.$transaction(async (transaction) => {
+        if (input.subscriptionId) {
+          const available = await availableSubscriptionPaymentAmount(
+            transaction,
+            input.subscriptionId,
+          );
+          if (input.amount > available)
+            throw new DomainError(
+              'VALIDATION',
+              'Сумма платежа превышает доступный остаток долга по абонементу.',
+            );
+        }
         if (input.attendanceLessonId)
           await assertDirectAttendancePayment(transaction, {
             amount: input.amount,
@@ -303,6 +318,7 @@ export class PaymentOperationService {
         paymentMethod: completion.paymentMethod,
         studentId: locked.studentId,
         ...(locked.subscriptionId ? { subscriptionId: locked.subscriptionId } : {}),
+        ...(locked.subscriptionId ? { subscriptionPaymentOperationId: locked.id } : {}),
         ...(locked.attendanceLessonId
           ? {
               attendanceLessonId: locked.attendanceLessonId,

@@ -13,7 +13,7 @@ describe('Russian localization', () => {
     expect(t('attendance.action.allPresent')).toBe('Отметить всех присутствующими');
     expect(t('nav.tariffs')).toBe('Тарифы');
     expect(t('nav.finance')).toBe('Финансы');
-    expect(t('subscription.action.issue')).toBe('Выдать абонемент');
+    expect(t('subscription.action.issue')).toBe('Продать абонемент');
     expect(t('refund.action')).toBe('Оформить возврат');
     expect(Object.keys(ru).length).toBeGreaterThan(500);
   });

@@ -138,6 +138,7 @@ function subscriptionSummary(
   now = new Date(),
 ): SubscriptionSummary {
   const paid = paidAmount(subscription);
+  const hasRefund = subscription.payments.some((payment) => payment.refunds.length > 0);
   const remainingLessons =
     subscription.lessonLimit === null
       ? undefined
@@ -159,6 +160,14 @@ function subscriptionSummary(
     lowBalance: isLowLessonBalance(remainingLessons),
     notes: subscription.notes ?? undefined,
     paidAmount: paid,
+    paymentStatus:
+      paid >= subscription.salePrice
+        ? 'PAID'
+        : paid > 0
+          ? 'PARTIALLY_PAID'
+          : hasRefund
+            ? 'REFUNDED'
+            : 'UNPAID',
     purchasedAt: subscription.purchasedAt.toISOString(),
     remainingLessons,
     salePrice: subscription.salePrice,
@@ -171,6 +180,29 @@ function subscriptionSummary(
     tariffType: subscription.tariff.type,
     updatedAt: subscription.updatedAt.toISOString(),
   };
+}
+
+const reservingPaymentOperationStatuses = ['CREATED', 'WAITING_FOR_PAYMENT', 'PROCESSING'] as const;
+
+export async function availableSubscriptionPaymentAmount(
+  client: FinanceClient,
+  subscriptionId: string,
+  excludeOperationId?: string,
+): Promise<number> {
+  const subscription = await client.subscription.findUnique({
+    include: subscriptionInclude,
+    where: { id: subscriptionId },
+  });
+  if (!subscription) throw new DomainError('NOT_FOUND', t('domain.notFound.subscription'));
+  const reserved = await client.paymentOperation.aggregate({
+    _sum: { amount: true },
+    where: {
+      ...(excludeOperationId ? { id: { not: excludeOperationId } } : {}),
+      status: { in: [...reservingPaymentOperationStatuses] },
+      subscriptionId,
+    },
+  });
+  return Math.max(0, subscriptionSummary(subscription).debt - (reserved._sum.amount ?? 0));
 }
 
 function refundSummary(refund: PaymentRecord['refunds'][number]): RefundSummary {
@@ -213,7 +245,10 @@ function paymentSummary(payment: PaymentRecord): PaymentSummary {
 export async function createCanonicalPayment(
   client: Prisma.TransactionClient,
   actor: AuthenticatedUser,
-  input: PaymentInput & { attendancePaymentOperationId?: string | undefined },
+  input: PaymentInput & {
+    attendancePaymentOperationId?: string | undefined;
+    subscriptionPaymentOperationId?: string | undefined;
+  },
 ): Promise<{ id: string }> {
   assertPermission(actor, 'payments:manage');
   if (!Number.isInteger(input.amount) || input.amount <= 0)
@@ -231,7 +266,12 @@ export async function createCanonicalPayment(
     if (!subscription) throw new DomainError('NOT_FOUND', t('domain.notFound.subscription'));
     if (subscription.studentId !== input.studentId || subscription.branchId !== input.branchId)
       throw new DomainError('VALIDATION', t('domain.validation.paymentSubscription'));
-    if (input.amount > subscriptionSummary(subscription).debt)
+    const available = await availableSubscriptionPaymentAmount(
+      client,
+      input.subscriptionId,
+      input.subscriptionPaymentOperationId,
+    );
+    if (input.amount > available)
       throw new DomainError('VALIDATION', t('domain.validation.paymentExceedsDebt'));
   }
   if (Boolean(input.attendanceLessonId) !== Boolean(input.attendanceTariffId))
@@ -493,7 +533,13 @@ export class FinanceService {
     assertBranchAccess(actor, branchId);
     const startsAt = dateOnly(input.startsAt);
     const lessonLimit = tariff.type === 'UNLIMITED' ? null : tariff.lessonCount;
-    const expiresAt = tariff.validityDays ? addDays(startsAt, tariff.validityDays) : null;
+    const expiresAt = input.expiresAt
+      ? endOfDate(input.expiresAt)
+      : tariff.validityDays
+        ? addDays(startsAt, tariff.validityDays)
+        : null;
+    if (expiresAt && expiresAt < startsAt)
+      throw new DomainError('VALIDATION', 'Дата окончания не может быть раньше даты начала.');
     const status = startsAt > new Date() ? 'PENDING' : 'ACTIVE';
     const subscriptionId = await this.database.$transaction(async (transaction) => {
       const subscription = await transaction.subscription.create({

@@ -49,7 +49,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { AdjustmentDialog } from './adjustment-dialog';
 import { FreezeDialog } from './freeze-dialog';
-import { SubscriptionDialog } from './subscription-dialog';
+import { SubscriptionDialog, type SubscriptionSalePaymentPlan } from './subscription-dialog';
 import { SubscriptionEditDialog } from './subscription-edit-dialog';
 
 const currentStatuses: SubscriptionStatus[] = ['ACTIVE', 'FROZEN'];
@@ -75,6 +75,12 @@ export function StudentFinance({
     amount: number;
     lessonId: string;
     tariffId: string;
+    tariffName: string;
+  }>();
+  const [subscriptionPayment, setSubscriptionPayment] = useState<{
+    amount: number;
+    fixedAmount?: boolean;
+    subscriptionId: string;
     tariffName: string;
   }>();
   const [attendanceTariffs, setAttendanceTariffs] = useState<Record<string, string>>({});
@@ -130,6 +136,31 @@ export function StudentFinance({
     mutationFn: (input: SubscriptionCreateInput) =>
       getDesktopApi().subscriptions.create(getSessionToken(), input),
   });
+  const sellSubscription = async (
+    input: SubscriptionCreateInput,
+    paymentPlan: SubscriptionSalePaymentPlan,
+  ) => {
+    setError(undefined);
+    try {
+      const created = await issue.mutateAsync(input);
+      await refresh();
+      setIssueOpen(false);
+      if (paymentPlan.mode !== 'NONE') {
+        setSubscriptionPayment({
+          amount: paymentPlan.amount,
+          fixedAmount: paymentPlan.mode === 'FULL',
+          subscriptionId: created.id,
+          tariffName: created.tariffName,
+        });
+        setAttendancePayment(undefined);
+        setPaymentOpen(true);
+      } else {
+        setDetailId(created.id);
+      }
+    } catch (caught) {
+      setError(getErrorMessage(caught, t('subscription.errorSave')));
+    }
+  };
   const update = useMutation({
     mutationFn: (input: SubscriptionUpdateInput) =>
       getDesktopApi().subscriptions.update(getSessionToken(), editId ?? '', input),
@@ -365,6 +396,7 @@ export function StudentFinance({
               <Button
                 onClick={() => {
                   setAttendancePayment(undefined);
+                  setSubscriptionPayment(undefined);
                   setError(undefined);
                   setPaymentOpen(true);
                 }}
@@ -382,7 +414,7 @@ export function StudentFinance({
                 size="small"
               >
                 <Plus className="size-4" />
-                {t('subscription.action.issue')}
+                Продать абонемент
               </Button>
             </div>
           ) : null}
@@ -490,15 +522,10 @@ export function StudentFinance({
         </Card>
       ) : null}
       <SubscriptionDialog
+        activeSubscriptionCount={active.length}
         error={error}
         onClose={() => setIssueOpen(false)}
-        onSubmit={(input) =>
-          perform(
-            () => issue.mutateAsync(input),
-            t('subscription.errorSave'),
-            () => setIssueOpen(false),
-          )
-        }
+        onSubmit={sellSubscription}
         open={issueOpen}
         student={student}
         tariffs={tariffs.data ?? []}
@@ -511,6 +538,7 @@ export function StudentFinance({
         onClose={() => {
           setPaymentOpen(false);
           setAttendancePayment(undefined);
+          setSubscriptionPayment(undefined);
         }}
         onSbpCompleted={refresh}
         onSubmit={(input) =>
@@ -520,12 +548,14 @@ export function StudentFinance({
             () => {
               setPaymentOpen(false);
               setAttendancePayment(undefined);
+              setSubscriptionPayment(undefined);
             },
           )
         }
         open={paymentOpen}
         students={[]}
         subscriptions={finance.data?.subscriptions}
+        subscriptionPayment={subscriptionPayment}
       />
       <PaymentOperationDetailsDialog
         busy={refreshAqsi.isPending || retryFiscalReceipt.isPending}
@@ -591,11 +621,32 @@ export function StudentFinance({
                 </p>
               </div>
               {detail.data.debt > 0 ? (
-                <BalanceIndicator
-                  label={t('subscription.debt')}
-                  tone="danger"
-                  value={formatMoneyForIndicator(detail.data.debt)}
-                />
+                <div className="space-y-3">
+                  <BalanceIndicator
+                    label={t('subscription.debt')}
+                    tone="danger"
+                    value={formatMoneyForIndicator(detail.data.debt)}
+                  />
+                  {canManage ? (
+                    <Button
+                      onClick={() => {
+                        setSubscriptionPayment({
+                          amount: detail.data.debt,
+                          subscriptionId: detail.data.id,
+                          tariffName: detail.data.tariffName,
+                        });
+                        setAttendancePayment(undefined);
+                        setDetailId(undefined);
+                        setError(undefined);
+                        setPaymentOpen(true);
+                      }}
+                      size="small"
+                    >
+                      <WalletCards className="size-4" />
+                      Принять оплату
+                    </Button>
+                  ) : null}
+                </div>
               ) : (
                 <BalanceIndicator
                   label={t('subscription.paid')}
@@ -667,6 +718,63 @@ export function StudentFinance({
               ) : null}
             </div>
             <div>
+              <div className="mb-5">
+                <h3 className="mb-3 text-sm font-semibold">Оплата абонемента</h3>
+                <div className="grid grid-cols-3 gap-2">
+                  <BalanceIndicator
+                    label="Стоимость"
+                    tone="neutral"
+                    value={formatMoneyForIndicator(detail.data.salePrice)}
+                  />
+                  <BalanceIndicator
+                    label="Оплачено"
+                    tone="success"
+                    value={formatMoneyForIndicator(detail.data.paidAmount)}
+                  />
+                  <BalanceIndicator
+                    label="Статус"
+                    tone={detail.data.debt > 0 ? 'warning' : 'success'}
+                    value={paymentStatusLabel(detail.data.paymentStatus)}
+                  />
+                </div>
+                {detail.data.payments.length ? (
+                  <div className="mt-3 space-y-2">
+                    {detail.data.payments.map((item) => (
+                      <div
+                        className="flex items-center justify-between rounded-xl border border-border px-3 py-2 text-sm"
+                        key={item.id}
+                      >
+                        <span>
+                          {formatDate(item.paidAt, { dateStyle: 'short', timeStyle: 'short' })} ·{' '}
+                          {t(`payment.method.${item.paymentMethod}`)}
+                        </span>
+                        <span className="font-semibold">
+                          {formatMoneyForIndicator(item.netAmount)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-muted-foreground">Платежей ещё нет.</p>
+                )}
+                {(paymentOperations.data ?? []).some(
+                  (operation) => operation.subscriptionId === detail.data.id,
+                ) ? (
+                  <div className="mt-3 space-y-2">
+                    {(paymentOperations.data ?? [])
+                      .filter((operation) => operation.subscriptionId === detail.data.id)
+                      .map((operation) => (
+                        <div
+                          className="flex items-center justify-between rounded-xl bg-muted/40 px-3 py-2 text-sm"
+                          key={operation.id}
+                        >
+                          <span>{operation.purpose}</span>
+                          <Badge>{t(`payment.operation.status.${operation.status}`)}</Badge>
+                        </div>
+                      ))}
+                  </div>
+                ) : null}
+              </div>
               <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
                 <History className="size-4" />
                 {t('subscription.ledger')}
@@ -726,6 +834,15 @@ function formatMoneyForIndicator(amount: number): string {
   return new Intl.NumberFormat('ru-RU', { currency: 'RUB', style: 'currency' }).format(
     amount / 100,
   );
+}
+
+function paymentStatusLabel(status: SubscriptionSummary['paymentStatus']): string {
+  return {
+    PAID: 'Оплачен',
+    PARTIALLY_PAID: 'Частично оплачен',
+    REFUNDED: 'Возврат',
+    UNPAID: 'Не оплачен',
+  }[status];
 }
 
 function SubscriptionGroup({

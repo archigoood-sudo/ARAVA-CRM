@@ -114,6 +114,36 @@ describe('Sprint 4.6A payment foundation', () => {
     ).rejects.toThrow('Ключ операции уже использован');
   });
 
+  it('reserves subscription debt across pending operations and releases it on cancellation', async () => {
+    const reserved = await operations.create(ownerToken, {
+      ...createInput('reserved-subscription-payment'),
+      amount: 80_000,
+    });
+    await expect(
+      operations.create(ownerToken, {
+        ...createInput('overlapping-subscription-payment'),
+        amount: 20_001,
+      }),
+    ).rejects.toThrow('превышает доступный остаток');
+    await expect(
+      finance.createPayment(ownerToken, {
+        amount: 20_001,
+        branchId,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+        studentId,
+        subscriptionId,
+      }),
+    ).rejects.toThrow('превышает долг');
+    await operations.cancel(ownerToken, reserved.id, 'Клиент выбрал другой способ оплаты');
+    await expect(
+      operations.create(ownerToken, {
+        ...createInput('payment-after-release'),
+        amount: 100_000,
+      }),
+    ).resolves.toMatchObject({ amount: 100_000, status: 'CREATED' });
+  });
+
   it('enforces valid transitions and records failed, cancelled and expired terminal states', async () => {
     const waiting = await operations.create(ownerToken, createInput('waiting-operation'));
     await operations.transition(ownerToken, waiting.id, 'WAITING_FOR_PAYMENT', undefined, 'sbp-1');
