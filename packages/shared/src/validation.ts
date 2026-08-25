@@ -79,6 +79,7 @@ import {
   type StudentListQuery,
   type SubscriptionAdjustmentInput,
   type SubscriptionCreateInput,
+  type SubscriptionUpdateInput,
   type SubscriptionFreezeInput,
   type TariffInput,
   type TariffListQuery,
@@ -554,6 +555,18 @@ export const subscriptionCreateInputSchema: z.ZodType<SubscriptionCreateInput> =
   .refine((input) => !input.initialPayment || input.initialPayment.amount <= input.salePrice, {
     message: t('validation.payment.exceedsSale'),
     path: ['initialPayment', 'amount'],
+  });
+
+export const subscriptionUpdateInputSchema: z.ZodType<SubscriptionUpdateInput> = z
+  .object({
+    expiresAt: isoDate.optional(),
+    notes: optionalText(2000),
+    startsAt: isoDate,
+    tariffId: z.string().min(1).max(100),
+  })
+  .refine((input) => !input.expiresAt || input.expiresAt >= input.startsAt, {
+    message: 'Дата окончания не может быть раньше даты начала.',
+    path: ['expiresAt'],
   });
 
 export const subscriptionFreezeInputSchema: z.ZodType<SubscriptionFreezeInput> = z.object({

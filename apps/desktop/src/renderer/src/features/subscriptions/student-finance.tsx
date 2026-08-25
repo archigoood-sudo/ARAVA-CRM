@@ -10,6 +10,7 @@ import {
   type SubscriptionFreezeInput,
   type SubscriptionStatus,
   type SubscriptionSummary,
+  type SubscriptionUpdateInput,
 } from '@arava/shared';
 import {
   Badge,
@@ -31,6 +32,7 @@ import {
   CalendarClock,
   CreditCard,
   History,
+  Pencil,
   Pause,
   Plus,
   RotateCcw,
@@ -47,6 +49,7 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { AdjustmentDialog } from './adjustment-dialog';
 import { FreezeDialog } from './freeze-dialog';
 import { SubscriptionDialog } from './subscription-dialog';
+import { SubscriptionEditDialog } from './subscription-edit-dialog';
 
 const currentStatuses: SubscriptionStatus[] = ['ACTIVE', 'FROZEN'];
 
@@ -69,6 +72,7 @@ export function StudentFinance({
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [freezeId, setFreezeId] = useState<string>();
   const [detailId, setDetailId] = useState<string>();
+  const [editId, setEditId] = useState<string>();
   const [paymentOperationId, setPaymentOperationId] = useState<string>();
   const [gatewayPayment, setGatewayPayment] = useState<AqsiGatewayPayment>();
   const [adjustOpen, setAdjustOpen] = useState(false);
@@ -107,13 +111,17 @@ export function StudentFinance({
     queryKey: queryKeys.tariffs({ branchId: student.branchId }),
   });
   const detail = useQuery({
-    enabled: Boolean(detailId),
-    queryFn: () => getDesktopApi().subscriptions.get(getSessionToken(), detailId ?? ''),
-    queryKey: ['subscriptions', 'detail', detailId],
+    enabled: Boolean(detailId ?? editId),
+    queryFn: () => getDesktopApi().subscriptions.get(getSessionToken(), detailId ?? editId ?? ''),
+    queryKey: ['subscriptions', 'detail', detailId ?? editId],
   });
   const issue = useMutation({
     mutationFn: (input: SubscriptionCreateInput) =>
       getDesktopApi().subscriptions.create(getSessionToken(), input),
+  });
+  const update = useMutation({
+    mutationFn: (input: SubscriptionUpdateInput) =>
+      getDesktopApi().subscriptions.update(getSessionToken(), editId ?? '', input),
   });
   const freeze = useMutation({
     mutationFn: ({ id, input }: { id: string; input: SubscriptionFreezeInput }) =>
@@ -242,6 +250,33 @@ export function StudentFinance({
           </CardContent>
         </Card>
       </div>
+      {finance.data?.uncoveredAttendances.length ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Посещения без покрытия</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Эти посещения не были учтены ни одним действующим абонементом.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {finance.data.uncoveredAttendances.map((attendance) => (
+              <div
+                className="flex items-center justify-between rounded-2xl border border-border p-3 text-sm"
+                key={`${attendance.lessonId}:${attendance.startsAt}`}
+              >
+                <span>
+                  {attendance.groupName} · {formatDate(attendance.startsAt)}
+                </span>
+                {attendance.amount === undefined ? (
+                  <Badge>Нужно выбрать стоимость</Badge>
+                ) : (
+                  <Money amount={attendance.amount} className="font-semibold text-destructive" />
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div>
@@ -522,6 +557,17 @@ export function StudentFinance({
                   ) : null}
                   <Button
                     onClick={() => {
+                      setEditId(detail.data.id);
+                      setDetailId(undefined);
+                    }}
+                    size="small"
+                    variant="outline"
+                  >
+                    <Pencil className="size-4" />
+                    Изменить абонемент
+                  </Button>
+                  <Button
+                    onClick={() => {
                       if (window.confirm(t('subscription.cancelConfirm')))
                         void perform(
                           () => cancel.mutateAsync(detail.data.id),
@@ -563,6 +609,20 @@ export function StudentFinance({
           </div>
         ) : null}
       </Dialog>
+      <SubscriptionEditDialog
+        error={error}
+        onClose={() => setEditId(undefined)}
+        onSubmit={(input) =>
+          perform(
+            () => update.mutateAsync(input),
+            t('subscription.errorSave'),
+            () => setEditId(undefined),
+          )
+        }
+        open={Boolean(editId)}
+        subscription={detail.data}
+        tariffs={tariffs.data ?? []}
+      />
       <AdjustmentDialog
         error={error}
         onClose={() => setAdjustOpen(false)}

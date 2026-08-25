@@ -328,6 +328,7 @@ export const IPC_CHANNELS = {
   subscriptionAdjust: 'subscription:adjust',
   subscriptionCancel: 'subscription:cancel',
   subscriptionCreate: 'subscription:create',
+  subscriptionUpdate: 'subscription:update',
   subscriptionFreeze: 'subscription:freeze',
   subscriptionGet: 'subscription:get',
   subscriptionListStudent: 'subscription:list-student',
@@ -853,6 +854,13 @@ export interface SubscriptionCreateInput {
   tariffId: string;
 }
 
+export interface SubscriptionUpdateInput {
+  expiresAt?: string | undefined;
+  notes?: string | undefined;
+  startsAt: string;
+  tariffId: string;
+}
+
 export interface SubscriptionFreezeInput {
   days: number;
 }
@@ -916,6 +924,18 @@ export interface StudentFinanceSummary {
   lowBalance: number;
   subscriptions: SubscriptionSummary[];
   totalDebt: number;
+  uncoveredAttendances: UncoveredAttendanceSummary[];
+  uncoveredDebt: number;
+  unpricedUncoveredAttendanceCount: number;
+}
+
+export interface UncoveredAttendanceSummary {
+  amount?: number | undefined;
+  branchId: string;
+  groupName: string;
+  lessonId: string;
+  startsAt: string;
+  status: AttendanceStatus;
 }
 
 export interface PaymentOperationCreateInput {
@@ -1782,6 +1802,7 @@ export interface AttendanceWorkspaceLesson {
   attendanceCompletedAt?: string | undefined;
   attendanceExpected: number;
   attendanceMarked: number;
+  attendancePresent?: number | undefined;
   branchId: string;
   branchName: string;
   direction: string;
@@ -1854,6 +1875,20 @@ export interface DashboardStats {
   trialsToday: number;
   users: number;
   subscriptionsExpiringSoon: number;
+  todayLessons: DashboardTodayLesson[];
+}
+
+export interface DashboardTodayLesson {
+  attendanceMarked: number;
+  branchName: string;
+  endsAt: string;
+  expectedStudents: number;
+  groupName: string;
+  id: string;
+  lessonId?: string | undefined;
+  roomName?: string | undefined;
+  startsAt: string;
+  trainerName?: string | undefined;
 }
 
 export type AttentionCategory =
@@ -2834,6 +2869,11 @@ export interface AravaDesktopApi {
     ) => Promise<SubscriptionDetail>;
     get: (token: string, id: string) => Promise<SubscriptionDetail>;
     listStudent: (token: string, studentId: string) => Promise<StudentFinanceSummary>;
+    update: (
+      token: string,
+      id: string,
+      input: SubscriptionUpdateInput,
+    ) => Promise<SubscriptionDetail>;
     unfreeze: (token: string, id: string) => Promise<SubscriptionDetail>;
   };
   payments: {

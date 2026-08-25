@@ -11,7 +11,9 @@ import { Button, Checkbox, Dialog, Input, Label, Select, Textarea, formatMoney }
 import { useEffect, useMemo, useState } from 'react';
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 }
 
 export function SubscriptionDialog({
@@ -42,6 +44,13 @@ export function SubscriptionDialog({
     () => tariffs.find((tariff) => tariff.id === tariffId),
     [tariffId, tariffs],
   );
+  const calculatedExpiry = useMemo(() => {
+    if (!selected?.validityDays || !startsAt) return undefined;
+    const [year, month, day] = startsAt.split('-').map(Number);
+    const value = new Date(year ?? 0, (month ?? 1) - 1, day ?? 1);
+    value.setDate(value.getDate() + selected.validityDays);
+    return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'long' }).format(value);
+  }, [selected?.validityDays, startsAt]);
 
   useEffect(() => {
     if (!open) return;
@@ -134,6 +143,9 @@ export function SubscriptionDialog({
               type="date"
               value={startsAt}
             />
+            {calculatedExpiry ? (
+              <p className="text-xs text-muted-foreground">Действует до: {calculatedExpiry}</p>
+            ) : null}
           </div>
           <div className="space-y-2">
             <Label htmlFor="subscription-price">{t('subscription.salePrice')}</Label>

@@ -195,9 +195,14 @@ describe('Sprint 3 finance service', () => {
       remainingLessons: 8,
       status: 'PENDING',
     });
-    expect(new Date(subscription.expiresAt ?? 0).getTime()).toBe(
-      new Date(`${startsAt}T00:00:00.000Z`).getTime() + 30 * DAY_MS,
-    );
+    const expectedExpiry = new Date(`${startsAt}T00:00:00`);
+    expectedExpiry.setDate(expectedExpiry.getDate() + 30);
+    const actualExpiry = new Date(subscription.expiresAt ?? 0);
+    expect([actualExpiry.getFullYear(), actualExpiry.getMonth(), actualExpiry.getDate()]).toEqual([
+      expectedExpiry.getFullYear(),
+      expectedExpiry.getMonth(),
+      expectedExpiry.getDate(),
+    ]);
     expect((await finance.cancelSubscription(ownerToken, subscription.id)).status).toBe(
       'CANCELLED',
     );
@@ -294,6 +299,97 @@ describe('Sprint 3 finance service', () => {
       await database.auditLog.count({ where: { action: 'SUBSCRIPTION_WRITE_OFF_REVERSED' } }),
     ).toBe(2);
     expect(branch.id).toBeTruthy();
+  });
+
+  it('prices uncovered PRESENT attendance and retroactively covers it exactly once', async () => {
+    const { branch, group, student } = await foundation();
+    await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 1,
+      name: 'Разовое посещение',
+      price: 1_500,
+      type: 'SINGLE_LESSON',
+    });
+    const lessonStartsAt = new Date(Date.now() - 3 * DAY_MS);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(lessonStartsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: lessonStartsAt.toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    const uncovered = await finance.listStudentSubscriptions(ownerToken, student.id);
+    expect(uncovered).toMatchObject({ totalDebt: 1_500, uncoveredDebt: 1_500 });
+    expect(uncovered.uncoveredAttendances).toHaveLength(1);
+
+    const pack = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 4,
+      name: 'Абонемент на четыре занятия',
+      price: 5_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    });
+    const subscription = await finance.createSubscription(ownerToken, {
+      salePrice: 5_000,
+      startsAt: dateString(new Date(lessonStartsAt.getTime() - DAY_MS)),
+      studentId: student.id,
+      tariffId: pack.id,
+    });
+    expect(subscription.lessonsUsed).toBe(1);
+    const covered = await finance.listStudentSubscriptions(ownerToken, student.id);
+    expect(covered.uncoveredAttendances).toHaveLength(0);
+    expect(covered.totalDebt).toBe(5_000);
+    await finance.updateSubscription(ownerToken, subscription.id, {
+      expiresAt: dateString(new Date(lessonStartsAt.getTime() + 10 * DAY_MS)),
+      startsAt: dateString(new Date(lessonStartsAt.getTime() - DAY_MS)),
+      tariffId: pack.id,
+    });
+    expect(
+      await database.subscriptionLedger.count({
+        where: { attendanceId: `${lesson.id}:${student.id}`, type: 'LESSON_WRITE_OFF' },
+      }),
+    ).toBe(1);
+  });
+
+  it('reverses coverage after moving startsAt forward without changing attendance or payments', async () => {
+    const { group, student, subscription, tariff } = await tariffAndSubscription({
+      lessonCount: 4,
+    });
+    const lessonStartsAt = new Date();
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(lessonStartsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: lessonStartsAt.toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(1);
+    const paymentsBefore = await database.payment.count({
+      where: { subscriptionId: subscription.id },
+    });
+    const updated = await finance.updateSubscription(ownerToken, subscription.id, {
+      startsAt: dateString(new Date(lessonStartsAt.getTime() + 2 * DAY_MS)),
+      tariffId: tariff.id,
+    });
+    expect(updated.lessonsUsed).toBe(0);
+    expect(await database.attendance.count({ where: { lessonId: lesson.id } })).toBe(1);
+    expect(await database.payment.count({ where: { subscriptionId: subscription.id } })).toBe(
+      paymentsBefore,
+    );
+    expect(
+      await database.auditLog.count({
+        where: { action: { in: ['SUBSCRIPTION_UPDATED', 'SUBSCRIPTION_WRITE_OFF_REVERSED'] } },
+      }),
+    ).toBe(2);
+    const summary = await finance.listStudentSubscriptions(ownerToken, student.id);
+    expect(summary.uncoveredAttendances).toHaveLength(1);
   });
 
   it('enforces manager branch limits and blocks coach payments and manager refunds or corrections', async () => {

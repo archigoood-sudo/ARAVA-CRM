@@ -94,6 +94,7 @@ import {
   studentNoteInputSchema,
   subscriptionAdjustmentInputSchema,
   subscriptionCreateInputSchema,
+  subscriptionUpdateInputSchema,
   subscriptionFreezeInputSchema,
   tariffInputSchema,
   tariffListQuerySchema,
@@ -915,6 +916,12 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
       ),
+    [IPC_CHANNELS.subscriptionUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
+      finance.updateSubscription(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        subscriptionUpdateInputSchema.parse(unsafeInput),
+      ),
     [IPC_CHANNELS.subscriptionFreeze]: (unsafeToken, unsafeId, unsafeInput) =>
       finance.freezeSubscription(
         sessionTokenSchema.parse(unsafeToken),
@@ -1622,6 +1629,30 @@ export function createIpcHandlers(
               : transaction.amount),
         0,
       );
+      const localDate = [
+        String(dayStart.getFullYear()).padStart(4, '0'),
+        String(dayStart.getMonth() + 1).padStart(2, '0'),
+        String(dayStart.getDate()).padStart(2, '0'),
+      ].join('-');
+      const todayLessons =
+        actor.role === 'COACH'
+          ? []
+          : (
+              await attendanceWorkspace.today(sessionTokenSchema.parse(unsafeToken), localDate)
+            ).lessons
+              .filter(({ status }) => status !== 'CANCELLED')
+              .map((lesson) => ({
+                attendanceMarked: lesson.attendancePresent ?? 0,
+                branchName: lesson.branchName,
+                endsAt: lesson.endsAt,
+                expectedStudents: lesson.attendanceExpected,
+                groupName: lesson.groupName,
+                id: lesson.id,
+                lessonId: lesson.lessonId,
+                roomName: lesson.roomName,
+                startsAt: lesson.startsAt,
+                trainerName: lesson.effectiveTrainerName,
+              }));
       return {
         activeGroups: groups.length,
         attendanceMarked,
@@ -1649,6 +1680,7 @@ export function createIpcHandlers(
         subscriptionsExpiringSoon: subscriptions.filter(
           ({ expiresAt }) => expiresAt && expiresAt >= now && expiresAt <= expiringBoundary,
         ).length,
+        todayLessons,
         trialStudents,
         trialsToday: lessons.reduce((total, lesson) => total + lesson.trialStudents, 0),
         users,
@@ -1881,6 +1913,7 @@ const SYNC_RELEVANT_MUTATIONS = new Set<string>([
   IPC_CHANNELS.subscriptionAdjust,
   IPC_CHANNELS.subscriptionCancel,
   IPC_CHANNELS.subscriptionCreate,
+  IPC_CHANNELS.subscriptionUpdate,
   IPC_CHANNELS.subscriptionFreeze,
   IPC_CHANNELS.subscriptionUnfreeze,
   IPC_CHANNELS.substitutionAssign,

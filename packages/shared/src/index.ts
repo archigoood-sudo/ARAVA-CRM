@@ -81,6 +81,7 @@ export {
   studentStatusSchema,
   subscriptionAdjustmentInputSchema,
   subscriptionCreateInputSchema,
+  subscriptionUpdateInputSchema,
   subscriptionFreezeInputSchema,
   tariffInputSchema,
   tariffListQuerySchema,

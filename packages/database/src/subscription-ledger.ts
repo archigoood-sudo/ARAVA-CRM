@@ -65,6 +65,40 @@ async function restoreSubscriptionAfterReversal(
   });
 }
 
+async function reverseWriteOff(
+  client: LedgerClient,
+  writeOff: {
+    attendanceId: string | null;
+    id: string;
+    lessonDelta: number;
+    lessonId: string | null;
+    studentId: string;
+    subscriptionId: string;
+  },
+  actorUserId: string,
+  comment: string,
+): Promise<void> {
+  await restoreSubscriptionAfterReversal(client, writeOff.subscriptionId, writeOff.lessonDelta);
+  const reversal = await client.subscriptionLedger.create({
+    data: {
+      attendanceId: writeOff.attendanceId,
+      comment,
+      createdByUserId: actorUserId,
+      lessonDelta: -writeOff.lessonDelta,
+      lessonId: writeOff.lessonId,
+      reversesLedgerId: writeOff.id,
+      studentId: writeOff.studentId,
+      subscriptionId: writeOff.subscriptionId,
+      type: 'REVERSAL',
+    },
+  });
+  await audit(client, actorUserId, 'SUBSCRIPTION_WRITE_OFF_REVERSED', reversal.id, {
+    attendanceId: writeOff.attendanceId,
+    subscriptionId: writeOff.subscriptionId,
+    writeOffId: writeOff.id,
+  });
+}
+
 export async function reverseAttendanceWriteOffs(
   client: LedgerClient,
   attendanceId: string,
@@ -78,25 +112,7 @@ export async function reverseAttendanceWriteOffs(
   let reversed = 0;
   for (const writeOff of writeOffs) {
     if (writeOff.reversals.length) continue;
-    await restoreSubscriptionAfterReversal(client, writeOff.subscriptionId, writeOff.lessonDelta);
-    const reversal = await client.subscriptionLedger.create({
-      data: {
-        attendanceId,
-        comment,
-        createdByUserId: actorUserId,
-        lessonDelta: -writeOff.lessonDelta,
-        lessonId: writeOff.lessonId,
-        reversesLedgerId: writeOff.id,
-        studentId: writeOff.studentId,
-        subscriptionId: writeOff.subscriptionId,
-        type: 'REVERSAL',
-      },
-    });
-    await audit(client, actorUserId, 'SUBSCRIPTION_WRITE_OFF_REVERSED', reversal.id, {
-      attendanceId,
-      subscriptionId: writeOff.subscriptionId,
-      writeOffId: writeOff.id,
-    });
+    await reverseWriteOff(client, writeOff, actorUserId, comment);
     reversed += 1;
   }
   return reversed;
@@ -118,11 +134,11 @@ export async function applyAttendanceWriteOff(
   if (!consumesPaid && !consumesTrial) return null;
 
   const attendanceId = `${input.lessonId}:${input.studentId}`;
-  const existing = await client.subscriptionLedger.findFirst({
+  const existing = await client.subscriptionLedger.findMany({
     include: { reversals: { select: { id: true } } },
     where: { attendanceId, type: 'LESSON_WRITE_OFF' },
   });
-  if (existing?.reversals.length === 0)
+  if (existing.some(({ reversals }) => reversals.length === 0))
     throw new DomainError('CONFLICT', t('domain.conflict.writeOffDuplicate'));
 
   const candidates = await client.subscription.findMany({
@@ -178,6 +194,99 @@ export async function applyAttendanceWriteOff(
     subscriptionId: subscription.id,
   });
   return subscription.id;
+}
+
+function writeOffStillEligible(
+  writeOff: {
+    lesson: { branchId: string; startsAt: Date; status: string } | null;
+    subscription: {
+      branchId: string;
+      expiresAt: Date | null;
+      startsAt: Date;
+      tariff: { type: string };
+    };
+  },
+  attendanceStatus: AttendanceStatus | undefined,
+): boolean {
+  const lesson = writeOff.lesson;
+  if (!lesson || lesson.status === 'CANCELLED' || !attendanceStatus) return false;
+  const paid = attendanceStatus === 'PRESENT' || attendanceStatus === 'LATE';
+  const trial = attendanceStatus === 'TRIAL';
+  if (!paid && !trial) return false;
+  const subscription = writeOff.subscription;
+  if (subscription.branchId !== lesson.branchId || subscription.startsAt > lesson.startsAt)
+    return false;
+  if (subscription.expiresAt && subscription.expiresAt < lesson.startsAt) return false;
+  return trial
+    ? subscription.tariff.type === 'TRIAL'
+    : ['LESSON_PACK', 'SINGLE_LESSON', 'UNLIMITED'].includes(subscription.tariff.type);
+}
+
+export async function reconcileStudentAttendanceCoverage(
+  client: LedgerClient,
+  input: { actorUserId: string; studentId: string },
+): Promise<{ applied: number; reversed: number }> {
+  const attendances = await client.attendance.findMany({
+    include: { lesson: true },
+    orderBy: { lesson: { startsAt: 'asc' } },
+    where: {
+      studentId: input.studentId,
+      status: { in: ['PRESENT', 'LATE', 'TRIAL'] },
+    },
+  });
+  const attendanceById = new Map(
+    attendances.map((attendance) => [
+      `${attendance.lessonId}:${attendance.studentId}`,
+      attendance.status,
+    ]),
+  );
+  const writeOffs = await client.subscriptionLedger.findMany({
+    include: {
+      lesson: { select: { branchId: true, startsAt: true, status: true } },
+      reversals: { select: { id: true } },
+      subscription: { include: { tariff: { select: { type: true } } } },
+    },
+    where: { studentId: input.studentId, type: 'LESSON_WRITE_OFF' },
+  });
+  let reversed = 0;
+  for (const writeOff of writeOffs) {
+    if (writeOff.reversals.length || !writeOff.attendanceId) continue;
+    if (writeOffStillEligible(writeOff, attendanceById.get(writeOff.attendanceId))) continue;
+    await reverseWriteOff(
+      client,
+      writeOff,
+      input.actorUserId,
+      'Пересчёт после изменения абонемента',
+    );
+    reversed += 1;
+  }
+  const active = await client.subscriptionLedger.findMany({
+    include: { reversals: { select: { id: true } } },
+    where: { studentId: input.studentId, type: 'LESSON_WRITE_OFF' },
+  });
+  const covered = new Set(
+    active.flatMap(({ attendanceId, reversals }) =>
+      attendanceId && reversals.length === 0 ? [attendanceId] : [],
+    ),
+  );
+  let applied = 0;
+  for (const attendance of attendances) {
+    const attendanceId = `${attendance.lessonId}:${attendance.studentId}`;
+    if (covered.has(attendanceId) || attendance.lesson.status === 'CANCELLED') continue;
+    const subscriptionId = await applyAttendanceWriteOff(client, {
+      actorUserId: input.actorUserId,
+      attendanceStatus: attendance.status,
+      branchId: attendance.lesson.branchId,
+      lessonId: attendance.lessonId,
+      lessonStartsAt: attendance.lesson.startsAt,
+      studentId: attendance.studentId,
+    });
+    if (subscriptionId) {
+      covered.add(attendanceId);
+      applied += 1;
+    }
+  }
+  return { applied, reversed };
 }
 
 export async function reverseLessonWriteOffs(

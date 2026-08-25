@@ -15,6 +15,7 @@ import type {
   SubscriptionDetail,
   SubscriptionFreezeInput,
   SubscriptionSummary,
+  SubscriptionUpdateInput,
   TariffInput,
   TariffListQuery,
   TariffSummary,
@@ -26,7 +27,11 @@ import type { DatabaseClient } from './index';
 import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
-import { addDays, subscriptionStatusAt } from './subscription-ledger';
+import {
+  addDays,
+  reconcileStudentAttendanceCoverage,
+  subscriptionStatusAt,
+} from './subscription-ledger';
 import { DAY_MS, isExpiringSoon, isLowLessonBalance } from './attention-rules';
 
 const subscriptionInclude = {
@@ -80,7 +85,14 @@ function optionalValue(value: string | undefined): string | null {
 }
 
 function dateOnly(value: string): Date {
-  return new Date(`${value}T00:00:00.000Z`);
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year ?? 0, (month ?? 1) - 1, day ?? 1);
+}
+
+function endOfDate(value: string): Date {
+  const result = dateOnly(value);
+  result.setHours(23, 59, 59, 999);
+  return result;
 }
 
 function fullName(person: {
@@ -440,6 +452,10 @@ export class FinanceService {
           tariffId: input.tariffId,
         },
       );
+      await reconcileStudentAttendanceCoverage(transaction, {
+        actorUserId: actor.id,
+        studentId: input.studentId,
+      });
       return subscription.id;
     });
     return this.getSubscription(token, subscriptionId);
@@ -456,6 +472,11 @@ export class FinanceService {
       where: { studentId },
     });
     const summaries = subscriptions.map((subscription) => subscriptionSummary(subscription));
+    const uncoveredAttendances = await this.uncoveredAttendances(studentId);
+    const uncoveredDebt = uncoveredAttendances.reduce(
+      (sum, attendance) => sum + (attendance.amount ?? 0),
+      0,
+    );
     return {
       activeSubscriptions: summaries.filter(
         ({ status }) => status === 'ACTIVE' || status === 'FROZEN',
@@ -463,8 +484,87 @@ export class FinanceService {
       expiringSoon: summaries.filter(({ expiringSoon }) => expiringSoon).length,
       lowBalance: summaries.filter(({ lowBalance }) => lowBalance).length,
       subscriptions: summaries,
-      totalDebt: summaries.reduce((sum, subscription) => sum + subscription.debt, 0),
+      totalDebt:
+        summaries.reduce((sum, subscription) => sum + subscription.debt, 0) + uncoveredDebt,
+      uncoveredAttendances,
+      uncoveredDebt,
+      unpricedUncoveredAttendanceCount: uncoveredAttendances.filter(
+        ({ amount }) => amount === undefined,
+      ).length,
     };
+  }
+
+  async updateSubscription(
+    token: string,
+    id: string,
+    input: SubscriptionUpdateInput,
+  ): Promise<SubscriptionDetail> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'subscriptions:manage');
+    const current = await this.requireSubscription(id);
+    assertBranchAccess(actor, current.branchId);
+    if (current.status === 'CANCELLED')
+      throw new DomainError('VALIDATION', 'Отменённый абонемент нельзя изменить.');
+    const tariff = await this.requireTariff(input.tariffId);
+    if (!tariff.isActive || tariff.archivedAt)
+      throw new DomainError('VALIDATION', t('domain.validation.tariffArchived'));
+    if (tariff.branchId && tariff.branchId !== current.branchId)
+      throw new DomainError('VALIDATION', t('domain.validation.tariffBranch'));
+    const changingTariff = current.tariffId !== input.tariffId;
+    if (changingTariff) {
+      const [payments, operations] = await Promise.all([
+        this.database.payment.count({ where: { subscriptionId: id } }),
+        this.database.paymentOperation.count({ where: { subscriptionId: id } }),
+      ]);
+      if (payments || operations)
+        throw new DomainError(
+          'VALIDATION',
+          'Тариф нельзя изменить после проведения оплаты. Даты и примечание можно исправить.',
+        );
+    }
+    const startsAt = dateOnly(input.startsAt);
+    const expiresAt = input.expiresAt
+      ? endOfDate(input.expiresAt)
+      : tariff.validityDays
+        ? addDays(startsAt, tariff.validityDays)
+        : null;
+    if (expiresAt && expiresAt < startsAt)
+      throw new DomainError('VALIDATION', 'Дата окончания не может быть раньше даты начала.');
+    const lessonLimit = tariff.type === 'UNLIMITED' ? null : tariff.lessonCount;
+    if (lessonLimit !== null && current.lessonsUsed > lessonLimit)
+      throw new DomainError('VALIDATION', 'Новый тариф не может вместить уже учтённые занятия.');
+    await this.database.$transaction(async (transaction) => {
+      await transaction.subscription.update({
+        data: {
+          expiresAt,
+          lessonLimit,
+          notes: optionalValue(input.notes),
+          startsAt,
+          status: subscriptionStatusAt({
+            ...current,
+            expiresAt,
+            lessonLimit,
+            startsAt,
+          }),
+          tariffId: input.tariffId,
+        },
+        where: { id },
+      });
+      await reconcileStudentAttendanceCoverage(transaction, {
+        actorUserId: actor.id,
+        studentId: current.studentId,
+      });
+      await this.audit(transaction, actor.id, 'SUBSCRIPTION_UPDATED', 'Subscription', id, {
+        after: { expiresAt, notes: optionalValue(input.notes), startsAt, tariffId: input.tariffId },
+        before: {
+          expiresAt: current.expiresAt,
+          notes: current.notes,
+          startsAt: current.startsAt,
+          tariffId: current.tariffId,
+        },
+      });
+    });
+    return this.getSubscription(token, id);
   }
 
   async getSubscription(token: string, id: string): Promise<SubscriptionDetail> {
@@ -829,6 +929,57 @@ export class FinanceService {
       revenueThisMonth,
       revenueToday,
     };
+  }
+
+  private async uncoveredAttendances(studentId: string) {
+    const [attendances, writeOffs, tariffs] = await Promise.all([
+      this.database.attendance.findMany({
+        include: {
+          lesson: { include: { group: { select: { name: true } } } },
+        },
+        orderBy: { markedAt: 'desc' },
+        where: {
+          lesson: { status: { not: 'CANCELLED' } },
+          status: { in: ['PRESENT', 'LATE'] },
+          studentId,
+        },
+      }),
+      this.database.subscriptionLedger.findMany({
+        include: { reversals: { select: { id: true } } },
+        where: { studentId, type: 'LESSON_WRITE_OFF' },
+      }),
+      this.database.tariff.findMany({
+        where: { archivedAt: null, isActive: true, type: 'SINGLE_LESSON' },
+      }),
+    ]);
+    const covered = new Set(
+      writeOffs.flatMap(({ attendanceId, reversals }) =>
+        attendanceId && reversals.length === 0 ? [attendanceId] : [],
+      ),
+    );
+    return attendances.flatMap((attendance) => {
+      if (covered.has(`${attendance.lessonId}:${attendance.studentId}`)) return [];
+      const branchTariffs = tariffs.filter(
+        ({ branchId }) => branchId === attendance.lesson.branchId,
+      );
+      const globalTariffs = tariffs.filter(({ branchId }) => branchId === null);
+      const priceSource =
+        branchTariffs.length === 1
+          ? branchTariffs[0]
+          : branchTariffs.length === 0 && globalTariffs.length === 1
+            ? globalTariffs[0]
+            : undefined;
+      return [
+        {
+          amount: priceSource?.price,
+          branchId: attendance.lesson.branchId,
+          groupName: attendance.lesson.group.name,
+          lessonId: attendance.lessonId,
+          startsAt: attendance.lesson.startsAt.toISOString(),
+          status: attendance.status,
+        },
+      ];
+    });
   }
 
   private tariffData(input: TariffInput): Prisma.TariffUncheckedCreateInput {

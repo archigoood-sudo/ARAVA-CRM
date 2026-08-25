@@ -146,6 +146,7 @@ export { ATTENTION_RULES, DAY_MS, isExpiringSoon, isLowLessonBalance } from './a
 export {
   addDays,
   applyAttendanceWriteOff,
+  reconcileStudentAttendanceCoverage,
   reverseAttendanceWriteOffs,
   reverseLessonWriteOffs,
   subscriptionStatusAt,

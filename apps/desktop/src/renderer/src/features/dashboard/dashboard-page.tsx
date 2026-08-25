@@ -33,6 +33,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { buildDashboardWorkspace, type DashboardActionItem } from './dashboard-workspace';
+import { classifyTodayLessons } from './dashboard-today';
 
 function greetingKey(hour: number) {
   if (hour < 5) return 'dashboard.greeting.night' as const;
@@ -63,6 +64,7 @@ const EMPTY_STATS: DashboardStats = {
   trialStudents: 0,
   trialsToday: 0,
   users: 0,
+  todayLessons: [],
 };
 
 export function DashboardPage() {
@@ -118,7 +120,7 @@ export function DashboardPage() {
     retry: false,
   });
   const firstName = user?.fullName.trim().split(/\s+/u)[0] ?? '';
-  const now = useMemo(() => new Date(), []);
+  const now = useMemo(() => new Date(stats.dataUpdatedAt || Date.now()), [stats.dataUpdatedAt]);
   const currentStats = stats.data ?? EMPTY_STATS;
   const workspace = useMemo(
     () =>
@@ -252,6 +254,14 @@ export function DashboardPage() {
       )}
 
       {manager ? (
+        <LessonTimeline
+          lessons={currentStats.todayLessons}
+          now={now}
+          onOpenAttendance={() => navigate('/attendance')}
+        />
+      ) : null}
+
+      {manager ? (
         <section className="mt-5 grid items-start gap-5 xl:grid-cols-2">
           <ActionQueue
             empty="Срочных проблем нет."
@@ -298,7 +308,114 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       </section>
+
+      {manager ? (
+        <section className="mt-5">
+          <Card>
+            <CardHeader>
+              <CardTitle>Быстрые действия</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button onClick={() => navigate('/students')} variant="outline">
+                Найти ученика
+              </Button>
+              <Button onClick={() => navigate('/leads')} variant="outline">
+                Заявки
+              </Button>
+              <Button onClick={() => navigate('/attendance')} variant="outline">
+                Посещения
+              </Button>
+              <Button onClick={() => navigate('/schedule')} variant="outline">
+                Расписание
+              </Button>
+            </CardContent>
+          </Card>
+        </section>
+      ) : null}
     </main>
+  );
+}
+
+function LessonTimeline({
+  lessons,
+  now,
+  onOpenAttendance,
+}: {
+  lessons: DashboardStats['todayLessons'];
+  now: Date;
+  onOpenAttendance: () => void;
+}) {
+  const { current, upcoming } = classifyTodayLessons(lessons, now);
+  return (
+    <section className="mt-5 grid items-start gap-5 xl:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>Идёт сейчас</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {current.length ? (
+            <div className="space-y-3">
+              {current.map((lesson) => (
+                <TodayLesson key={lesson.id} lesson={lesson} onOpen={onOpenAttendance} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Сейчас занятий нет.
+              {upcoming[0]
+                ? ` Ближайшее начнётся в ${formatDate(upcoming[0].startsAt, { hour: '2-digit', minute: '2-digit' })}.`
+                : ''}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Дальше сегодня</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {upcoming.length ? (
+            <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
+              {upcoming.map((lesson) => (
+                <TodayLesson key={lesson.id} lesson={lesson} onOpen={onOpenAttendance} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">На сегодня больше занятий нет.</p>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function TodayLesson({
+  lesson,
+  onOpen,
+}: {
+  lesson: DashboardStats['todayLessons'][number];
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      className="flex w-full items-center justify-between gap-4 rounded-2xl border border-border p-4 text-left transition hover:bg-muted/50"
+      onClick={onOpen}
+      type="button"
+    >
+      <span className="min-w-0">
+        <span className="block font-semibold">{lesson.groupName}</span>
+        <span className="mt-1 block truncate text-xs text-muted-foreground">
+          {[lesson.trainerName, lesson.branchName, lesson.roomName].filter(Boolean).join(' · ')}
+        </span>
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {lesson.expectedStudents} учеников · присутствуют {lesson.attendanceMarked}
+        </span>
+      </span>
+      <span className="shrink-0 text-sm font-semibold">
+        {formatDate(lesson.startsAt, { hour: '2-digit', minute: '2-digit' })}–
+        {formatDate(lesson.endsAt, { hour: '2-digit', minute: '2-digit' })}
+      </span>
+    </button>
   );
 }
 

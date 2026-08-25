@@ -165,6 +165,8 @@ export class AttendanceWorkspaceService {
             : {}),
           attendanceExpected: occurrence.expectedStudents,
           attendanceMarked: occurrence.attendanceMarked,
+          attendancePresent:
+            lesson?.attendance.filter(({ status }) => status === 'PRESENT').length ?? 0,
           branchId: occurrence.branchId,
           ...metadata,
           endsAt: occurrence.endsAt.toISOString(),

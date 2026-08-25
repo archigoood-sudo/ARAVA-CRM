@@ -266,6 +266,7 @@ const desktopApi: AravaDesktopApi = {
     get: (token, id) => invoke(IPC_CHANNELS.subscriptionGet, token, id),
     listStudent: (token, studentId) =>
       invoke(IPC_CHANNELS.subscriptionListStudent, token, studentId),
+    update: (token, id, input) => invoke(IPC_CHANNELS.subscriptionUpdate, token, id, input),
     unfreeze: (token, id) => invoke(IPC_CHANNELS.subscriptionUnfreeze, token, id),
   },
   payments: {

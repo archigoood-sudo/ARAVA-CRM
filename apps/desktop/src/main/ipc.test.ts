@@ -149,10 +149,19 @@ describe('Electron IPC boundary', () => {
     });
     const handlers = createIpcHandlers(database, service, '/test/arava.db');
 
-    await expect(handlers[IPC_CHANNELS.dashboardStats]?.(owner.token)).resolves.toMatchObject({
+    const dashboard = (await handlers[IPC_CHANNELS.dashboardStats]?.(
+      owner.token,
+    )) as DashboardStats;
+    expect(dashboard).toMatchObject({
       expectedToday: 1,
       lessonsToday: 1,
     } satisfies Partial<DashboardStats>);
+    expect(dashboard.todayLessons).toHaveLength(1);
+    expect(dashboard.todayLessons[0]).toMatchObject({
+      branchName: 'Расписание Dashboard',
+      expectedStudents: 1,
+      groupName: 'KDS BABY',
+    });
   });
 
   it('keeps integration IPC OWNER-only and never returns device credentials', async () => {
