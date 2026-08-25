@@ -10,7 +10,7 @@ import {
   toSqliteUrl,
   type DatabaseClient,
 } from '@arava/database';
-import { app } from 'electron';
+import { app, shell } from 'electron';
 import log from 'electron-log/main';
 import electronUpdater from 'electron-updater';
 import { join } from 'node:path';
@@ -78,6 +78,8 @@ async function bootstrap(): Promise<void> {
   await customerDisplay.initialize();
   updates = new UpdateManager(service, autoUpdater, {
     currentVersion: app.getVersion(),
+    openExternal: (url) => shell.openExternal(url),
+    platform: process.platform,
     prepareForInstall: async () => {
       await shutdown();
       shutdownComplete = true;

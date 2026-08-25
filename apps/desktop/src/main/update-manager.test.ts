@@ -3,7 +3,11 @@ import type { AppUpdater } from 'electron-updater';
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { isDesktopUpdateSupported, UpdateManager } from './update-manager';
+import {
+  createMacReleaseDownloadUrl,
+  isDesktopUpdateSupported,
+  UpdateManager,
+} from './update-manager';
 
 class MockUpdater extends EventEmitter {
   public allowDowngrade = true;
@@ -18,6 +22,7 @@ class MockUpdater extends EventEmitter {
 function createManager(
   role: UserRole = 'OWNER',
   overrides: {
+    openExternal?: (url: string) => Promise<void>;
     platform?: NodeJS.Platform;
     prepareForInstall?: () => Promise<void>;
     supported?: boolean;
@@ -27,16 +32,19 @@ function createManager(
   const authorization = {
     authenticate: vi.fn(() => Promise.resolve({ role })),
   };
+  const platform = overrides.platform ?? 'darwin';
+  const openExternal = overrides.openExternal ?? vi.fn(() => Promise.resolve());
   const manager = new UpdateManager(authorization, updater as unknown as AppUpdater, {
     currentVersion: '0.4.6',
     now: () => new Date('2026-08-25T10:00:00.000Z'),
+    openExternal,
+    platform,
     prepareForInstall: overrides.prepareForInstall ?? vi.fn(() => Promise.resolve()),
     startupDelayMs: 10,
-    supported:
-      overrides.supported ?? isDesktopUpdateSupported(true, overrides.platform ?? 'darwin'),
+    supported: overrides.supported ?? isDesktopUpdateSupported(true, platform),
   });
   manager.initialize();
-  return { authorization, manager, updater };
+  return { authorization, manager, openExternal, updater };
 }
 
 afterEach(() => {
@@ -53,9 +61,11 @@ describe('UpdateManager', () => {
     },
   );
 
-  it('runs the explicit macOS check, download and install lifecycle', async () => {
+  it('opens only the safe GitHub DMG for a macOS update and never self-installs', async () => {
     const prepareForInstall = vi.fn(() => Promise.resolve());
+    const openExternal = vi.fn(() => Promise.resolve());
     const { manager, updater } = createManager('OWNER', {
+      openExternal,
       platform: 'darwin',
       prepareForInstall,
     });
@@ -63,22 +73,34 @@ describe('UpdateManager', () => {
       updater.emit('update-available', { version: '0.4.7' });
       return Promise.resolve(null);
     });
-    updater.downloadUpdate.mockImplementationOnce(() => {
-      updater.emit('download-progress', { percent: 72 });
-      updater.emit('update-downloaded', { version: '0.4.7' });
-      return Promise.resolve([]);
-    });
 
-    await expect(manager.check('owner-token')).resolves.toMatchObject({ status: 'AVAILABLE' });
-    await expect(manager.download('owner-token')).resolves.toMatchObject({
-      progress: 100,
-      status: 'DOWNLOADED',
+    await expect(manager.check('owner-token')).resolves.toMatchObject({
+      installMode: 'MANUAL',
+      status: 'AVAILABLE',
     });
-    await manager.install('owner-token');
+    const downloadState = await manager.download('owner-token');
+    expect(downloadState).toMatchObject({
+      installMode: 'MANUAL',
+      status: 'AVAILABLE',
+    });
+    await expect(manager.install('owner-token')).rejects.toThrow(
+      'Автоматическая установка на macOS недоступна',
+    );
 
-    expect(prepareForInstall).toHaveBeenCalledOnce();
-    expect(updater.quitAndInstall).toHaveBeenCalledOnce();
+    expect(openExternal).toHaveBeenCalledWith(
+      'https://github.com/archigoood-sudo/ARAVA-CRM/releases/download/v0.4.7/ARAVA-CRM-0.4.7-universal.dmg',
+    );
+    expect(updater.downloadUpdate).not.toHaveBeenCalled();
+    expect(prepareForInstall).not.toHaveBeenCalled();
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+    expect(JSON.stringify(downloadState)).not.toContain('github.com');
+    expect(JSON.stringify(downloadState)).not.toContain('.dmg');
+    expect(JSON.stringify(downloadState)).not.toContain('/Users/');
     manager.shutdown();
+  });
+
+  it('rejects unsafe versions before opening an external macOS URL', () => {
+    expect(() => createMacReleaseDownloadUrl('../latest')).toThrow('Некорректная версия');
   });
 
   it('reports that the installed version is current', async () => {
@@ -90,13 +112,14 @@ describe('UpdateManager', () => {
 
     await expect(manager.check('owner-token')).resolves.toMatchObject({
       currentVersion: '0.4.6',
+      installMode: 'MANUAL',
       status: 'CURRENT',
     });
     manager.shutdown();
   });
 
   it('reports an available update without downloading it automatically', async () => {
-    const { manager, updater } = createManager();
+    const { manager, updater } = createManager('OWNER', { platform: 'win32' });
     updater.checkForUpdates.mockImplementationOnce(() => {
       updater.emit('update-available', { version: '0.4.7' });
       return Promise.resolve(null);
@@ -104,6 +127,7 @@ describe('UpdateManager', () => {
 
     await expect(manager.check('owner-token')).resolves.toMatchObject({
       availableVersion: '0.4.7',
+      installMode: 'AUTOMATIC',
       status: 'AVAILABLE',
     });
     expect(updater.downloadUpdate).not.toHaveBeenCalled();
@@ -111,7 +135,7 @@ describe('UpdateManager', () => {
   });
 
   it('publishes download progress and the downloaded state', async () => {
-    const { manager, updater } = createManager();
+    const { manager, updater } = createManager('OWNER', { platform: 'win32' });
     updater.emit('update-available', { version: '0.4.7' });
     updater.downloadUpdate.mockImplementationOnce(() => {
       updater.emit('download-progress', { percent: 53.7 });
@@ -121,6 +145,7 @@ describe('UpdateManager', () => {
 
     await expect(manager.download('owner-token')).resolves.toMatchObject({
       progress: 100,
+      installMode: 'AUTOMATIC',
       status: 'DOWNLOADED',
     });
     manager.shutdown();
@@ -128,7 +153,10 @@ describe('UpdateManager', () => {
 
   it('closes application services before an explicitly requested installation', async () => {
     const prepareForInstall = vi.fn(() => Promise.resolve());
-    const { manager, updater } = createManager('OWNER', { prepareForInstall });
+    const { manager, updater } = createManager('OWNER', {
+      platform: 'win32',
+      prepareForInstall,
+    });
     updater.emit('update-available', { version: '0.4.7' });
     updater.emit('update-downloaded', { version: '0.4.7' });
 
@@ -218,6 +246,7 @@ describe('UpdateManager', () => {
 
     await expect(manager.getState('coach-token')).resolves.toEqual({
       currentVersion: '0.4.6',
+      installMode: 'MANUAL',
       message: 'Обновления проверяются автоматически',
       status: 'IDLE',
     });

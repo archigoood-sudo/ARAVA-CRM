@@ -8,6 +8,12 @@ import { BrandMark } from '../../components/brand-mark';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
+import {
+  getAboutUpdateAction,
+  getAboutUpdateActionLabel,
+  MAC_MANUAL_INSTALL_MESSAGE,
+  type AboutUpdateAction,
+} from './about-update-model';
 
 const details = [
   { icon: Database, text: t('about.localData') },
@@ -27,7 +33,7 @@ export function AboutPage() {
     queryKey: updateKey,
   });
   const updateAction = useMutation({
-    mutationFn: async (action: 'CHECK' | 'DOWNLOAD' | 'INSTALL') => {
+    mutationFn: async (action: AboutUpdateAction) => {
       if (action === 'CHECK') return getDesktopApi().updates.check(getSessionToken());
       if (action === 'DOWNLOAD') return getDesktopApi().updates.download(getSessionToken());
       await getDesktopApi().updates.install(getSessionToken());
@@ -101,23 +107,13 @@ export function AboutPage() {
 interface UpdateCardProps {
   isOwner: boolean;
   loading: boolean;
-  onAction: (action: 'CHECK' | 'DOWNLOAD' | 'INSTALL') => void;
+  onAction: (action: AboutUpdateAction) => void;
   state?: DesktopUpdateState | undefined;
 }
 
 function UpdateCard({ isOwner, loading, onAction, state }: UpdateCardProps) {
-  const action =
-    state?.status === 'AVAILABLE'
-      ? 'DOWNLOAD'
-      : state?.status === 'DOWNLOADED'
-        ? 'INSTALL'
-        : 'CHECK';
-  const actionLabel =
-    action === 'DOWNLOAD'
-      ? 'Скачать обновление'
-      : action === 'INSTALL'
-        ? 'Перезапустить и установить'
-        : 'Проверить обновления';
+  const action = getAboutUpdateAction(state);
+  const actionLabel = getAboutUpdateActionLabel(action, state);
   const busy = loading || state?.status === 'CHECKING' || state?.status === 'DOWNLOADING';
 
   return (
@@ -139,6 +135,9 @@ function UpdateCard({ isOwner, loading, onAction, state }: UpdateCardProps) {
           <p className="mt-2 text-xs text-muted-foreground">
             Обновления автоматически проверяются после запуска и каждые несколько часов.
           </p>
+          {state?.installMode === 'MANUAL' ? (
+            <p className="mt-2 text-xs text-muted-foreground">{MAC_MANUAL_INSTALL_MESSAGE}</p>
+          ) : null}
         </div>
         {isOwner && state?.status !== 'UNSUPPORTED' ? (
           <Button disabled={busy} onClick={() => onAction(action)} variant="outline">

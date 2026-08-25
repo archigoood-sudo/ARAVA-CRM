@@ -23,9 +23,21 @@ interface UpdateManagerOptions {
   currentVersion: string;
   intervalMs?: number;
   now?: () => Date;
+  openExternal: (url: string) => Promise<void>;
+  platform: NodeJS.Platform;
   prepareForInstall: () => Promise<void>;
   startupDelayMs?: number;
   supported: boolean;
+}
+
+const MAC_RELEASE_DOWNLOAD_BASE = 'https://github.com/archigoood-sudo/ARAVA-CRM/releases/download/';
+const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+
+export function createMacReleaseDownloadUrl(version: string): string {
+  if (!SEMVER_PATTERN.test(version)) throw new Error('Некорректная версия обновления.');
+  const tag = encodeURIComponent(`v${version}`);
+  const fileName = encodeURIComponent(`ARAVA-CRM-${version}-universal.dmg`);
+  return new URL(`${tag}/${fileName}`, MAC_RELEASE_DOWNLOAD_BASE).toString();
 }
 
 export function isDesktopUpdateSupported(
@@ -53,11 +65,13 @@ export class UpdateManager implements UpdateController {
     this.state = options.supported
       ? {
           currentVersion: options.currentVersion,
+          installMode: options.platform === 'darwin' ? 'MANUAL' : 'AUTOMATIC',
           message: 'Обновления проверяются автоматически',
           status: 'IDLE',
         }
       : {
           currentVersion: options.currentVersion,
+          installMode: 'UNSUPPORTED',
           message: 'Автоматическое обновление доступно в установленной версии для Windows и macOS',
           status: 'UNSUPPORTED',
         };
@@ -108,6 +122,17 @@ export class UpdateManager implements UpdateController {
   public async download(token: string): Promise<DesktopUpdateState> {
     await this.assertOwner(token);
     if (!this.options.supported) return this.snapshot();
+    if (this.options.platform === 'darwin') {
+      if (this.state.status !== 'AVAILABLE' || !this.state.availableVersion) {
+        throw new Error('Сначала проверьте наличие обновления.');
+      }
+      try {
+        await this.options.openExternal(createMacReleaseDownloadUrl(this.state.availableVersion));
+      } catch {
+        this.setError('Не удалось открыть загрузку. Проверьте интернет и повторите попытку.');
+      }
+      return this.snapshot();
+    }
     if (this.state.status === 'DOWNLOADED') return this.snapshot();
     if (this.state.status !== 'AVAILABLE' && this.state.status !== 'ERROR') {
       throw new Error('Сначала проверьте наличие обновления.');
@@ -135,6 +160,9 @@ export class UpdateManager implements UpdateController {
 
   public async install(token: string): Promise<void> {
     await this.assertOwner(token);
+    if (this.options.platform === 'darwin') {
+      throw new Error('Автоматическая установка на macOS недоступна.');
+    }
     if (!this.options.supported || this.state.status !== 'DOWNLOADED') {
       throw new Error('Обновление ещё не готово к установке.');
     }
@@ -146,6 +174,7 @@ export class UpdateManager implements UpdateController {
     this.updater.on('checking-for-update', () => {
       this.setState({
         currentVersion: this.options.currentVersion,
+        installMode: this.state.installMode,
         message: 'Проверка обновлений…',
         status: 'CHECKING',
       });
@@ -154,6 +183,7 @@ export class UpdateManager implements UpdateController {
       this.setState({
         checkedAt: this.nowIso(),
         currentVersion: this.options.currentVersion,
+        installMode: this.state.installMode,
         message: 'Установлена актуальная версия',
         status: 'CURRENT',
       });
@@ -163,11 +193,13 @@ export class UpdateManager implements UpdateController {
         availableVersion: information.version,
         checkedAt: this.nowIso(),
         currentVersion: this.options.currentVersion,
+        installMode: this.state.installMode,
         message: `Доступна версия ${information.version}`,
         status: 'AVAILABLE',
       });
     });
     this.updater.on('download-progress', (progress) => {
+      if (this.options.platform === 'darwin') return;
       this.setState({
         ...this.state,
         message: 'Загрузка обновления',
@@ -176,10 +208,12 @@ export class UpdateManager implements UpdateController {
       });
     });
     this.updater.on('update-downloaded', (information) => {
+      if (this.options.platform === 'darwin') return;
       this.setState({
         availableVersion: information.version,
         checkedAt: this.state.checkedAt,
         currentVersion: this.options.currentVersion,
+        installMode: this.state.installMode,
         message: 'Обновление готово',
         progress: 100,
         status: 'DOWNLOADED',
@@ -190,6 +224,7 @@ export class UpdateManager implements UpdateController {
         this.setState({
           checkedAt: this.nowIso(),
           currentVersion: this.options.currentVersion,
+          installMode: this.state.installMode,
           message: 'Установлена актуальная версия',
           status: 'CURRENT',
         });
@@ -208,6 +243,7 @@ export class UpdateManager implements UpdateController {
 
     this.setState({
       currentVersion: this.options.currentVersion,
+      installMode: this.state.installMode,
       message: 'Проверка обновлений…',
       status: 'CHECKING',
     });
@@ -240,6 +276,7 @@ export class UpdateManager implements UpdateController {
       availableVersion: this.state.availableVersion,
       checkedAt: this.nowIso(),
       currentVersion: this.options.currentVersion,
+      installMode: this.state.installMode,
       message,
       status: 'ERROR',
     });

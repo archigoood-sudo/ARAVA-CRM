@@ -13,7 +13,7 @@
     "package": "electron-builder --dir",
     "package:mac": "npm run prepackage:mac && electron-builder --mac --universal --publish never",
     "package:win": "electron-builder --win nsis --x64 --publish never",
-    "release:mac": "npm run prepackage:mac && electron-builder --mac --universal --publish always -c.forceCodeSigning=true",
+    "release:mac": "npm run prepackage:mac && electron-builder --mac --universal --publish always",
     "release:win": "npm run prepackage:win && electron-builder --win nsis --x64 --publish always",
     "prepackage": "node ../../scripts/prepare-prisma-package.mjs native",
     "prepackage:mac": "node ../../scripts/prepare-prisma-package.mjs mac-universal",

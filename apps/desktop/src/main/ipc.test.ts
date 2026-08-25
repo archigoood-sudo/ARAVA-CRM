@@ -476,6 +476,7 @@ describe('Electron IPC boundary', () => {
     const safeState = {
       availableVersion: '0.4.6',
       currentVersion: '0.4.5',
+      installMode: 'AUTOMATIC' as const,
       message: 'Доступна версия 0.4.6',
       status: 'AVAILABLE' as const,
     };

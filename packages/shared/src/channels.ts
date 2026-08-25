@@ -1945,6 +1945,7 @@ export interface DesktopUpdateState {
   availableVersion?: string | undefined;
   checkedAt?: string | undefined;
   currentVersion: string;
+  installMode: 'AUTOMATIC' | 'MANUAL' | 'UNSUPPORTED';
   message: string;
   progress?: number | undefined;
   status: DesktopUpdateStatus;

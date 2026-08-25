@@ -29,8 +29,8 @@ publish:
   releaseType: release
 mac:
   category: public.app-category.business
-  hardenedRuntime: true
-  notarize: true
+  hardenedRuntime: false
+  notarize: false
   target:
     - dmg
     - zip
