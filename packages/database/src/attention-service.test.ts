@@ -70,9 +70,11 @@ describe('Sprint 4.2B attention center', () => {
     const { branch, coach, student } = await branchFoundation();
     let items = await attention.listItems(ownerToken);
     expect(items.map(({ id }) => id)).toEqual(
-      expect.arrayContaining([`student:no-group:${student.id}`]),
+      expect.arrayContaining([
+        `student:no-group:${student.id}`,
+        `student:no-subscription:${student.id}`,
+      ]),
     );
-    expect(items.map(({ id }) => id)).not.toContain(`student:no-subscription:${student.id}`);
 
     const group = await database.danceGroup.create({
       data: {
