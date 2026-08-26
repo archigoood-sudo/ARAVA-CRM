@@ -104,6 +104,7 @@ export function AttendanceWorkspacePage() {
   const role = useAuthStore(({ user }) => user?.role);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialDate = searchParams.get('date');
+  const requestedGroupId = searchParams.get('groupId');
   const requestedOccurrenceId = searchParams.get('occurrence');
   const openedOccurrenceId = useRef<string>();
   const [date, setDate] = useState(() =>
@@ -140,7 +141,10 @@ export function AttendanceWorkspacePage() {
   }, [attendance.data?.lessons, openOccurrence, requestedOccurrenceId]);
   const selectDate = (nextDate: string) => {
     setDate(nextDate);
-    setSearchParams(nextDate === today ? {} : { date: nextDate }, { replace: true });
+    const next = new URLSearchParams();
+    if (nextDate !== today) next.set('date', nextDate);
+    if (requestedGroupId) next.set('groupId', requestedGroupId);
+    setSearchParams(next, { replace: true });
   };
   if (role === 'COACH') return <Navigate replace to="/schedule" />;
   if (attendance.isLoading) return <LoadingState label="Загружаем занятия…" />;
@@ -153,7 +157,10 @@ export function AttendanceWorkspacePage() {
         title="Что-то пошло не так"
       />
     );
-  const groups = groupAttendanceLessons(attendance.data.lessons);
+  const visibleLessons = requestedGroupId
+    ? attendance.data.lessons.filter(({ groupId }) => groupId === requestedGroupId)
+    : attendance.data.lessons;
+  const groups = groupAttendanceLessons(visibleLessons);
   const isToday = date === today;
   const dateTitle = isToday
     ? `Сегодня, ${formatDate(`${date}T12:00:00`, { dateStyle: 'long' })}`
@@ -169,7 +176,7 @@ export function AttendanceWorkspacePage() {
           <p className="mt-2 text-lg text-muted-foreground">{dateTitle}</p>
         </div>
         <div className="rounded-2xl border border-border bg-surface px-4 py-3 text-right">
-          <p className="text-2xl font-semibold">{attendance.data.lessons.length}</p>
+          <p className="text-2xl font-semibold">{visibleLessons.length}</p>
           <p className="text-xs text-muted-foreground">занятий</p>
         </div>
       </header>
@@ -217,7 +224,7 @@ export function AttendanceWorkspacePage() {
         </p>
       ) : null}
 
-      {attendance.data.lessons.length === 0 ? (
+      {visibleLessons.length === 0 ? (
         <Card className="p-8">
           <EmptyState
             description="Здесь появятся занятия из расписания на выбранную дату."

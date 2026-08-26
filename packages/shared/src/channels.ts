@@ -254,6 +254,7 @@ export const IPC_CHANNELS = {
   groupCreate: 'group:create',
   groupGet: 'group:get',
   groupList: 'group:list',
+  groupRosterGet: 'group:roster-get',
   groupUpdate: 'group:update',
   globalSearch: 'global-search:query',
   integrationConfirmInitialSync: 'integration:confirm-initial-sync',
@@ -1662,6 +1663,47 @@ export interface GroupDetail extends GroupSummary {
   upcomingLessons: LessonSummary[];
 }
 
+export type GroupRosterSegment = 'CURRENT' | 'FORMER' | 'FUTURE';
+
+export interface GroupRosterSubscriptionSummary {
+  expiresAt?: string | undefined;
+  remainingLessons?: number | undefined;
+  status: SubscriptionStatus;
+  tariffName: string;
+}
+
+export interface GroupRosterMember {
+  age?: number | undefined;
+  joinedAt: string;
+  lastAttendanceAt?: string | undefined;
+  leftAt?: string | undefined;
+  membershipId: string;
+  membershipStatus: EnrollmentStatus;
+  recentlyAdded: boolean;
+  segment: GroupRosterSegment;
+  studentId: string;
+  studentName: string;
+  studentPhone?: string | undefined;
+  studentStatus: StudentStatus;
+  subscription?: GroupRosterSubscriptionSummary | undefined;
+  totalDebt?: number | undefined;
+}
+
+export interface GroupRosterOverview {
+  activeCount: number;
+  asOfDate: string;
+  capacity: number;
+  capacityOccupiedCount: number;
+  currentCount: number;
+  formerCount: number;
+  freePlaces: number;
+  frozenCount: number;
+  futureCount: number;
+  members: GroupRosterMember[];
+  recentlyAddedCount: number;
+  trialCount: number;
+}
+
 export interface WeeklyScheduleInput {
   branchId: string;
   coachId?: string | undefined;
@@ -2903,6 +2945,7 @@ export interface AravaDesktopApi {
     archive: (token: string, id: string) => Promise<GroupSummary>;
     create: (token: string, input: GroupInput) => Promise<GroupSummary>;
     get: (token: string, id: string) => Promise<GroupDetail>;
+    getRoster: (token: string, id: string, asOfDate: string) => Promise<GroupRosterOverview>;
     listEligibleGroups: (token: string, studentId: string) => Promise<GroupMembershipGroupOption[]>;
     listEligibleStudents: (
       token: string,

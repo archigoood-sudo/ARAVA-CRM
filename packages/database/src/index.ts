@@ -106,6 +106,7 @@ export async function closeDatabase(database: DatabaseClient): Promise<void> {
 
 export { ApplicationService, isBranchVisibleToUser } from './services';
 export { StudioService } from './studio-service';
+export { GroupRosterService } from './group-roster-service';
 export { FinanceService } from './finance-service';
 export {
   PaymentOperationService,

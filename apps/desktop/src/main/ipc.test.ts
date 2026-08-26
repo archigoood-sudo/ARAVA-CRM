@@ -710,6 +710,12 @@ describe('Electron IPC boundary', () => {
     await expect(
       handlers[IPC_CHANNELS.enrollmentEligibleStudents]?.(owner.token, group.id),
     ).resolves.toEqual([expect.objectContaining({ id: student.id })]);
+    await expect(
+      handlers[IPC_CHANNELS.groupRosterGet]?.(owner.token, group.id, '2026-08-26'),
+    ).resolves.toMatchObject({ currentCount: 0 });
+    expect(() =>
+      handlers[IPC_CHANNELS.groupRosterGet]?.(owner.token, group.id, '26.08.2026'),
+    ).toThrow();
   });
 
   it('validates and executes specialized student bulk IPC without exposing a generic patch', async () => {

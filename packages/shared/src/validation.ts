@@ -322,6 +322,8 @@ export const groupListQuerySchema: z.ZodType<GroupListQuery> = z.object({
   status: groupStatusSchema.optional(),
 });
 
+export const groupRosterDateSchema = isoDate;
+
 export const enrollmentInputSchema: z.ZodType<EnrollmentInput> = z.object({
   joinedAt: isoDate,
   notes: optionalText(2000),

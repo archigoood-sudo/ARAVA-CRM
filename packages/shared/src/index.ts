@@ -35,6 +35,7 @@ export {
   genderSchema,
   groupInputSchema,
   groupListQuerySchema,
+  groupRosterDateSchema,
   groupStatusSchema,
   globalSearchQuerySchema,
   identifierSchema,

@@ -41,6 +41,8 @@ type BulkInput =
 
 export function StudentBulkDialog({
   action,
+  fixedSourceGroupId,
+  fixedTargetGroupId,
   groups,
   onClose,
   onSuccess,
@@ -48,6 +50,8 @@ export function StudentBulkDialog({
   studentIds,
 }: {
   action?: StudentBulkAction | undefined;
+  fixedSourceGroupId?: string | undefined;
+  fixedTargetGroupId?: string | undefined;
   groups: GroupSummary[];
   onClose: () => void;
   onSuccess: (result: StudentBulkExecutionResult) => void;
@@ -71,14 +75,14 @@ export function StudentBulkDialog({
   useEffect(() => {
     if (!open) return;
     setEffectiveDate(localDateInputValue());
-    setSourceGroupId('');
-    setTargetGroupId('');
+    setSourceGroupId(fixedSourceGroupId ?? '');
+    setTargetGroupId(fixedTargetGroupId ?? '');
     setStatus('ACTIVE');
     setOverrideCapacity(false);
     setShowCapacityOverride(false);
     setPreview(undefined);
     setError(undefined);
-  }, [action, open]);
+  }, [action, fixedSourceGroupId, fixedTargetGroupId, open]);
 
   if (!action) return null;
 
@@ -214,7 +218,7 @@ export function StudentBulkDialog({
       title={actionTitles[action]}
     >
       <div className="space-y-5">
-        {action === 'MOVE_TO_GROUP' || action === 'REMOVE_FROM_GROUP' ? (
+        {(action === 'MOVE_TO_GROUP' || action === 'REMOVE_FROM_GROUP') && !fixedSourceGroupId ? (
           <div className="space-y-2">
             <Label>Исходная группа</Label>
             <Select
@@ -235,7 +239,7 @@ export function StudentBulkDialog({
           </div>
         ) : null}
 
-        {action === 'ADD_TO_GROUP' || action === 'MOVE_TO_GROUP' ? (
+        {(action === 'ADD_TO_GROUP' || action === 'MOVE_TO_GROUP') && !fixedTargetGroupId ? (
           <div className="space-y-2">
             <Label>{action === 'ADD_TO_GROUP' ? 'Группа' : 'Целевая группа'}</Label>
             <Select

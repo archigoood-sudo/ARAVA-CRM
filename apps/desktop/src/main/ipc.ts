@@ -6,6 +6,7 @@ import {
   CardService,
   FinanceService,
   GlobalSearchService,
+  GroupRosterService,
   LeadService,
   LessonOccurrenceService,
   ManagementService,
@@ -54,6 +55,7 @@ import {
   forcedPasswordChangeSchema,
   groupInputSchema,
   groupListQuerySchema,
+  groupRosterDateSchema,
   globalSearchQuerySchema,
   identifierSchema,
   loginCredentialsSchema,
@@ -185,6 +187,7 @@ export function createIpcHandlers(
   backupDependencies: BackupIpcDependencies = {},
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
+  const groupRoster = new GroupRosterService(database, service);
   const attendanceWorkspace = new AttendanceWorkspaceService(database, service);
   const lessonOccurrences = new LessonOccurrenceService(database);
   const finance = new FinanceService(database, service);
@@ -788,6 +791,12 @@ export function createIpcHandlers(
       ),
     [IPC_CHANNELS.groupGet]: (unsafeToken, unsafeId) =>
       studio.getGroup(sessionTokenSchema.parse(unsafeToken), identifierSchema.parse(unsafeId)),
+    [IPC_CHANNELS.groupRosterGet]: (unsafeToken, unsafeId, unsafeDate) =>
+      groupRoster.get(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        groupRosterDateSchema.parse(unsafeDate),
+      ),
     [IPC_CHANNELS.enrollmentEligibleGroups]: (unsafeToken, unsafeStudentId) =>
       studio.listEligibleGroupsForStudent(
         sessionTokenSchema.parse(unsafeToken),

@@ -21,6 +21,8 @@ export const queryKeys = {
   branches: (includeArchived = false) => ['branches', { includeArchived }] as const,
   dashboard: ['dashboard', 'stats'] as const,
   group: (id: string) => ['groups', 'detail', id] as const,
+  groupRoster: (id: string, date: string, accessKey: string) =>
+    ['groups', 'roster', id, date, accessKey] as const,
   groups: (query: GroupListQuery) => ['groups', 'list', query] as const,
   integrationLog: ['integration', 'log'] as const,
   integrationConflicts: ['integration', 'conflicts'] as const,

@@ -213,6 +213,7 @@ const desktopApi: AravaDesktopApi = {
     archive: (token, id) => invoke(IPC_CHANNELS.groupArchive, token, id),
     create: (token, input) => invoke(IPC_CHANNELS.groupCreate, token, input),
     get: (token, id) => invoke(IPC_CHANNELS.groupGet, token, id),
+    getRoster: (token, id, asOfDate) => invoke(IPC_CHANNELS.groupRosterGet, token, id, asOfDate),
     listEligibleGroups: (token, studentId) =>
       invoke(IPC_CHANNELS.enrollmentEligibleGroups, token, studentId),
     listEligibleStudents: (token, groupId) =>

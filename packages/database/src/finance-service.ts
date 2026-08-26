@@ -58,6 +58,16 @@ type SubscriptionRecord = Prisma.SubscriptionGetPayload<{ include: typeof subscr
 type PaymentRecord = Prisma.PaymentGetPayload<{ include: typeof paymentInclude }>;
 type FinanceClient = DatabaseClient | Prisma.TransactionClient;
 
+export interface RosterFinanceEntry {
+  subscription?: {
+    expiresAt?: string | undefined;
+    remainingLessons?: number | undefined;
+    status: SubscriptionSummary['status'];
+    tariffName: string;
+  };
+  totalDebt?: number | undefined;
+}
+
 async function ensurePaymentRegister(
   client: FinanceClient,
   branchId: string,
@@ -676,6 +686,70 @@ export class FinanceService {
     };
   }
 
+  async rosterFinance(
+    token: string,
+    branchId: string,
+    studentIds: string[],
+  ): Promise<Map<string, RosterFinanceEntry>> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'subscriptions:read');
+    assertBranchAccess(actor, branchId);
+    if (studentIds.length === 0) return new Map();
+    const students = await this.database.student.findMany({
+      select: { branchId: true, id: true },
+      where: { id: { in: studentIds } },
+    });
+    if (
+      students.length !== new Set(studentIds).size ||
+      students.some((student) => student.branchId !== branchId)
+    )
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.branchDenied'));
+    const now = new Date();
+    const subscriptions = await this.database.subscription.findMany({
+      include: subscriptionInclude,
+      orderBy: [{ startsAt: 'desc' }, { createdAt: 'desc' }],
+      where: { studentId: { in: studentIds } },
+    });
+    const summaries = subscriptions.map((subscription) => ({
+      ...subscriptionSummary(subscription, now),
+      status: subscriptionStatusAt(subscription, now),
+    }));
+    const canSeeDebt = actor.role !== 'COACH';
+    const uncoveredDebt = canSeeDebt
+      ? await this.uncoveredDebtByStudent(studentIds)
+      : new Map<string, number>();
+    return new Map(
+      studentIds.map((studentId) => {
+        const studentSubscriptions = summaries.filter((item) => item.studentId === studentId);
+        const active = studentSubscriptions
+          .filter(({ status }) => status === 'ACTIVE' || status === 'FROZEN')
+          .sort((left, right) =>
+            (left.expiresAt ?? '9999').localeCompare(right.expiresAt ?? '9999'),
+          )[0];
+        const totalDebt = canSeeDebt
+          ? studentSubscriptions.reduce((sum, item) => sum + item.debt, 0) +
+            (uncoveredDebt.get(studentId) ?? 0)
+          : undefined;
+        return [
+          studentId,
+          {
+            ...(active
+              ? {
+                  subscription: {
+                    expiresAt: active.expiresAt,
+                    remainingLessons: active.remainingLessons,
+                    status: active.status,
+                    tariffName: active.tariffName,
+                  },
+                }
+              : {}),
+            ...(totalDebt === undefined ? {} : { totalDebt }),
+          },
+        ];
+      }),
+    );
+  }
+
   async updateSubscription(
     token: string,
     id: string,
@@ -1120,6 +1194,53 @@ export class FinanceService {
       revenueThisMonth,
       revenueToday,
     };
+  }
+
+  private async uncoveredDebtByStudent(studentIds: string[]): Promise<Map<string, number>> {
+    const [attendances, writeOffs, tariffs] = await Promise.all([
+      this.database.attendance.findMany({
+        select: {
+          directPaymentId: true,
+          lesson: { select: { branchId: true, status: true } },
+          lessonId: true,
+          studentId: true,
+        },
+        where: {
+          lesson: { status: { not: 'CANCELLED' } },
+          status: { in: ['PRESENT', 'LATE'] },
+          studentId: { in: studentIds },
+        },
+      }),
+      this.database.subscriptionLedger.findMany({
+        include: { reversals: { select: { id: true } } },
+        where: { studentId: { in: studentIds }, type: 'LESSON_WRITE_OFF' },
+      }),
+      this.database.tariff.findMany({
+        where: { archivedAt: null, isActive: true, type: 'SINGLE_LESSON' },
+      }),
+    ]);
+    const covered = new Set(
+      writeOffs.flatMap(({ attendanceId, reversals }) =>
+        attendanceId && reversals.length === 0 ? [attendanceId] : [],
+      ),
+    );
+    const result = new Map<string, number>();
+    for (const attendance of attendances) {
+      if (
+        attendance.directPaymentId ||
+        covered.has(`${attendance.lessonId}:${attendance.studentId}`)
+      )
+        continue;
+      const eligibleTariffs = [
+        ...tariffs.filter(({ branchId }) => branchId === attendance.lesson.branchId),
+        ...tariffs.filter(({ branchId }) => branchId === null),
+      ];
+      if (eligibleTariffs.length !== 1) continue;
+      const tariff = eligibleTariffs[0];
+      if (!tariff) continue;
+      result.set(attendance.studentId, (result.get(attendance.studentId) ?? 0) + tariff.price);
+    }
+    return result;
   }
 
   private async uncoveredAttendances(studentId: string) {

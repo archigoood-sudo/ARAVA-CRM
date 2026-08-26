@@ -162,12 +162,15 @@ test('вход, создание филиала, ученика и контак�
       .filter({ hasText: 'Импульс E2E' })
       .getByRole('button', { name: 'Действия' })
       .click();
-    await window.getByRole('button', { name: 'Добавить ученика' }).click();
-    const enrollmentDialog = window.getByRole('dialog');
-    await expect(enrollmentDialog.getByRole('option', { name: 'Петрова Мила' })).toBeAttached();
-    await expect(enrollmentDialog.getByRole('option', { name: 'Соколова Ирина' })).toBeAttached();
-    await enrollmentDialog.getByLabel('Выберите ученика').selectOption({ label: 'Петрова Мила' });
-    await enrollmentDialog.getByRole('button', { name: 'Добавить в группу' }).click();
+    await window.getByRole('button', { name: 'Добавить учеников' }).first().click();
+    const enrollmentSelection = window.getByRole('dialog', { name: 'Добавить учеников' });
+    await expect(enrollmentSelection.getByLabel('Выбрать Петрова Мила')).toBeVisible();
+    await expect(enrollmentSelection.getByLabel('Выбрать Соколова Ирина')).toBeVisible();
+    await enrollmentSelection.getByLabel('Выбрать Петрова Мила').check();
+    await enrollmentSelection.getByRole('button', { name: 'Продолжить' }).click();
+    const enrollmentDialog = window.getByRole('dialog', { name: 'Добавить в группу' });
+    await enrollmentDialog.getByRole('button', { name: 'Проверить изменения' }).click();
+    await enrollmentDialog.getByRole('button', { name: 'Добавить 1 учеников' }).click();
     await expect(window.getByText('Петрова Мила')).toBeVisible();
 
     await window.getByRole('link', { name: 'Ученики' }).click();
