@@ -2044,6 +2044,8 @@ export interface DashboardTodayLesson {
 }
 
 export type AttentionCategory =
+  | 'LEADS'
+  | 'TRIALS'
   | 'STUDENTS'
   | 'SUBSCRIPTIONS'
   | 'PAYMENTS'

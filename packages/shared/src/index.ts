@@ -1,6 +1,7 @@
 export * from './channels';
 export * from './i18n';
 export * from './permissions';
+export * from './retention-rules';
 export { settingKeySchema, settingUpdateSchema } from './ipc';
 export {
   attendanceEntriesSchema,

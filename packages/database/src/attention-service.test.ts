@@ -70,11 +70,9 @@ describe('Sprint 4.2B attention center', () => {
     const { branch, coach, student } = await branchFoundation();
     let items = await attention.listItems(ownerToken);
     expect(items.map(({ id }) => id)).toEqual(
-      expect.arrayContaining([
-        `student:no-group:${student.id}`,
-        `student:no-subscription:${student.id}`,
-      ]),
+      expect.arrayContaining([`student:no-group:${student.id}`]),
     );
+    expect(items.map(({ id }) => id)).not.toContain(`student:no-subscription:${student.id}`);
 
     const group = await database.danceGroup.create({
       data: {
@@ -130,12 +128,12 @@ describe('Sprint 4.2B attention center', () => {
     items = await attention.listItems(ownerToken);
     expect(items.map(({ id }) => id)).toEqual(
       expect.arrayContaining([
-        `subscription:low:${subscription.id}`,
         `subscription:expiring:${subscription.id}`,
         `student:debt:${student.id}`,
         `card:lost:${card.id}`,
       ]),
     );
+    expect(items.map(({ id }) => id)).not.toContain(`subscription:low:${subscription.id}`);
     expect(items).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: `student:no-group:${student.id}` })]),
     );
@@ -166,6 +164,187 @@ describe('Sprint 4.2B attention center', () => {
       ]),
     );
     expect(payment.amount).toBe(4_000);
+  });
+
+  it('keeps subscription retention current and warns only at one remaining lesson', async () => {
+    const { branch, coach, student } = await branchFoundation('Удержание');
+    const group = await database.danceGroup.create({
+      data: {
+        branchId: branch.id,
+        capacity: 20,
+        coachId: coach.id,
+        direction: 'Танцы',
+        name: 'Удержание',
+        status: 'ACTIVE',
+      },
+    });
+    await database.enrollment.create({
+      data: { groupId: group.id, joinedAt: at(-30), status: 'ACTIVE', studentId: student.id },
+    });
+    const tariff = await database.tariff.create({
+      data: { lessonCount: 10, name: 'Десять', price: 10_000, type: 'LESSON_PACK' },
+    });
+    const expired = await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: coach.id,
+        expiresAt: at(-2),
+        lessonLimit: 10,
+        lessonsUsed: 10,
+        purchasedAt: at(-40),
+        salePrice: 10_000,
+        startsAt: at(-40),
+        status: 'EXPIRED',
+        studentId: student.id,
+        tariffId: tariff.id,
+      },
+    });
+    const active = await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: coach.id,
+        expiresAt: at(20),
+        lessonLimit: 10,
+        lessonsUsed: 8,
+        purchasedAt: at(-1),
+        salePrice: 10_000,
+        startsAt: at(-1),
+        status: 'ACTIVE',
+        studentId: student.id,
+        tariffId: tariff.id,
+      },
+    });
+
+    let items = await attention.listItems(ownerToken, { category: 'SUBSCRIPTIONS' });
+    expect(items.some(({ entityId }) => entityId === expired.id)).toBe(false);
+    expect(items.some(({ id }) => id === `subscription:low:${active.id}`)).toBe(false);
+
+    await database.subscription.update({ data: { lessonsUsed: 9 }, where: { id: active.id } });
+    items = await attention.listItems(ownerToken, { category: 'SUBSCRIPTIONS' });
+    const lowBalance = items.find(({ id }) => id === `subscription:low:${active.id}`);
+    expect(lowBalance?.title).toContain('осталось 1 занятие');
+  });
+
+  it('creates one retention signal after three explicit consecutive absences', async () => {
+    const { branch, coach, student } = await branchFoundation('Пропуски');
+    const group = await database.danceGroup.create({
+      data: {
+        branchId: branch.id,
+        capacity: 20,
+        coachId: coach.id,
+        direction: 'Танцы',
+        name: 'Регулярная группа',
+        status: 'ACTIVE',
+      },
+    });
+    const enrollment = await database.enrollment.create({
+      data: { groupId: group.id, joinedAt: at(-2.5), status: 'ACTIVE', studentId: student.id },
+    });
+    let latestLessonId = '';
+    for (const day of [-3, -2, -1]) {
+      const lesson = await database.lesson.create({
+        data: {
+          attendanceCompletedAt: NOW,
+          branchId: branch.id,
+          coachId: coach.id,
+          endsAt: at(day, 1),
+          groupId: group.id,
+          startsAt: at(day),
+          status: 'COMPLETED',
+        },
+      });
+      await database.attendance.create({
+        data: {
+          lessonId: lesson.id,
+          markedAt: NOW,
+          markedByUserId: coach.id,
+          status: 'ABSENT',
+          studentId: student.id,
+        },
+      });
+      latestLessonId = lesson.id;
+    }
+
+    let items = await attention.listItems(ownerToken, { category: 'ATTENDANCE' });
+    expect(items.some(({ id }) => id === `attendance:retention:${student.id}`)).toBe(false);
+    await database.enrollment.update({
+      data: { joinedAt: at(-10) },
+      where: { id: enrollment.id },
+    });
+    items = await attention.listItems(ownerToken, { category: 'ATTENDANCE' });
+    expect(items.filter(({ id }) => id === `attendance:retention:${student.id}`)).toHaveLength(1);
+    await database.attendance.update({
+      data: { status: 'PRESENT' },
+      where: { lessonId_studentId: { lessonId: latestLessonId, studentId: student.id } },
+    });
+    items = await attention.listItems(ownerToken, { category: 'ATTENDANCE' });
+    expect(items.some(({ id }) => id === `attendance:retention:${student.id}`)).toBe(false);
+  });
+
+  it('applies grace periods to trial outcome and THINKING follow-up signals', async () => {
+    const { branch, coach, student } = await branchFoundation('Пробное');
+    const group = await database.danceGroup.create({
+      data: {
+        branchId: branch.id,
+        capacity: 20,
+        coachId: coach.id,
+        direction: 'Танцы',
+        name: 'Пробная группа',
+        status: 'ACTIVE',
+      },
+    });
+    const lesson = await database.lesson.create({
+      data: {
+        branchId: branch.id,
+        coachId: coach.id,
+        endsAt: new Date(NOW.getTime() - 3 * 60 * 60 * 1000),
+        groupId: group.id,
+        startsAt: new Date(NOW.getTime() - 4 * 60 * 60 * 1000),
+        status: 'COMPLETED',
+      },
+    });
+    const trial = await database.trialAppointment.create({
+      data: {
+        createdByUserId: coach.id,
+        externalLeadId: `student:${student.id}`,
+        groupId: group.id,
+        lessonId: lesson.id,
+        studentId: student.id,
+      },
+    });
+    let items = await attention.listItems(ownerToken, { category: 'TRIALS' });
+    expect(items).toContainEqual(
+      expect.objectContaining({ id: `trial:outcome:${trial.id}`, severity: 'WARNING' }),
+    );
+
+    await database.trialAppointment.update({
+      data: { outcome: 'THINKING', updatedAt: new Date(NOW.getTime() - 23 * 60 * 60 * 1000) },
+      where: { id: trial.id },
+    });
+    items = await attention.listItems(ownerToken, { category: 'TRIALS' });
+    expect(items.some(({ entityId }) => entityId === trial.id)).toBe(false);
+    await database.trialAppointment.update({
+      data: { updatedAt: new Date(NOW.getTime() - 25 * 60 * 60 * 1000) },
+      where: { id: trial.id },
+    });
+    items = await attention.listItems(ownerToken, { category: 'TRIALS' });
+    expect(items).toContainEqual(
+      expect.objectContaining({ id: `trial:thinking:${trial.id}`, severity: 'INFO' }),
+    );
+    await database.trialAppointment.update({
+      data: { outcome: 'NO_SHOW' },
+      where: { id: trial.id },
+    });
+    items = await attention.listItems(ownerToken, { category: 'TRIALS' });
+    expect(items).toContainEqual(
+      expect.objectContaining({ id: `trial:missed:${trial.id}`, severity: 'WARNING' }),
+    );
+    await database.trialAppointment.update({
+      data: { supersededAt: NOW },
+      where: { id: trial.id },
+    });
+    items = await attention.listItems(ownerToken, { category: 'TRIALS' });
+    expect(items.some(({ entityId }) => entityId === trial.id)).toBe(false);
   });
 
   it('surfaces failed payment operations and removes the task after resolution', async () => {

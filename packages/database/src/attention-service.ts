@@ -4,9 +4,10 @@ import type {
   AttentionSeverity,
   AttentionSummary,
 } from '@arava/shared';
+import { RETENTION_RULES } from '@arava/shared';
 
 import type { DatabaseClient } from './index';
-import { ATTENTION_RULES, DAY_MS, isExpiringSoon, isLowLessonBalance } from './attention-rules';
+import { ATTENTION_RULES, DAY_MS, isExpiringSoon } from './attention-rules';
 import { accessibleBranchIds, assertBranchAccess } from './permissions';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
@@ -75,7 +76,14 @@ export class AttentionService {
           include: {
             branch: { select: { name: true } },
             enrollments: {
-              select: { id: true },
+              select: {
+                group: { select: { name: true } },
+                groupId: true,
+                id: true,
+                joinedAt: true,
+                leftAt: true,
+                status: true,
+              },
               where: { leftAt: null, status: { in: [...ACTIVE_ENROLLMENTS] } },
             },
             membershipCards: {
@@ -235,13 +243,57 @@ export class AttentionService {
         student: { select: { firstName: true, lastName: true } },
       },
       where: {
-        outcome: null,
         status: 'BOOKED',
         supersededAt: null,
         group: branchIds ? { branchId: { in: branchIds } } : {},
-        OR: [{ lesson: { endsAt: { lte: now } } }, { lesson: { status: 'CANCELLED' } }],
+        OR: [
+          {
+            outcome: null,
+            lesson: {
+              endsAt: {
+                lte: new Date(
+                  now.getTime() - RETENTION_RULES.trialOutcomeGraceHours * 60 * 60 * 1000,
+                ),
+              },
+            },
+          },
+          { outcome: null, lesson: { status: 'CANCELLED' } },
+          {
+            outcome: 'THINKING',
+            updatedAt: {
+              lte: new Date(now.getTime() - RETENTION_RULES.thinkingFollowUpHours * 60 * 60 * 1000),
+            },
+          },
+          { outcome: 'NO_SHOW' },
+        ],
       },
     });
+    const retentionGroupIds = [
+      ...new Set(
+        students.flatMap((student) =>
+          student.enrollments
+            .filter(({ status }) => status === 'ACTIVE')
+            .map(({ groupId }) => groupId),
+        ),
+      ),
+    ];
+    const retentionLessons = retentionGroupIds.length
+      ? await this.database.lesson.findMany({
+          include: { attendance: { select: { status: true, studentId: true } } },
+          orderBy: { startsAt: 'desc' },
+          where: {
+            endsAt: { gte: historyStart, lte: now },
+            groupId: { in: retentionGroupIds },
+            status: { not: 'CANCELLED' },
+          },
+        })
+      : [];
+    const retentionLessonsByGroup = new Map<string, typeof retentionLessons>();
+    for (const lesson of retentionLessons) {
+      const groupLessons = retentionLessonsByGroup.get(lesson.groupId) ?? [];
+      groupLessons.push(lesson);
+      retentionLessonsByGroup.set(lesson.groupId, groupLessons);
+    }
     const uncoveredAttendanceCandidates = await this.database.attendance.findMany({
       include: {
         lesson: {
@@ -289,31 +341,43 @@ export class AttentionService {
         : null;
       const missed = attendance?.status === 'ABSENT' || attendance?.status === 'EXCUSED';
       const cancelled = trial.lesson.status === 'CANCELLED';
+      const thinking = trial.outcome === 'THINKING';
+      const noShow = trial.outcome === 'NO_SHOW' || missed;
       add({
-        actionLabel: trial.studentId ? 'Открыть ученика' : 'Открыть заявку',
+        actionLabel: noShow
+          ? 'Перенести пробное'
+          : trial.studentId
+            ? 'Открыть ученика'
+            : 'Открыть заявку',
         actionRoute: trial.studentId
           ? `/students/${trial.studentId}`
           : `/leads?leadId=${encodeURIComponent(trial.externalLeadId)}`,
         branchId: trial.group.branchId,
         branchName: trial.group.branch.name,
-        category: 'STUDENTS',
+        category: 'TRIALS',
         description: `${trial.group.name} · ${trial.lesson.startsAt.toLocaleString('ru-RU')}`,
         entityId: trial.id,
         entityType: 'TrialAppointment',
-        id: `trial:${cancelled ? 'reschedule' : missed ? 'missed' : 'outcome'}:${trial.id}`,
+        id: `trial:${cancelled ? 'reschedule' : noShow ? 'missed' : thinking ? 'thinking' : 'outcome'}:${trial.id}`,
         occurredAt: trial.lesson.endsAt.toISOString(),
-        severity: cancelled || missed ? 'CRITICAL' : 'WARNING',
+        severity: cancelled || noShow ? 'WARNING' : thinking ? 'INFO' : 'WARNING',
         title: cancelled
           ? 'Пробное занятие отменено — выберите новую дату'
-          : missed
+          : noShow
             ? `${trial.student ? `${trial.student.firstName} ${trial.student.lastName}` : 'Клиент'} не пришёл на пробное`
-            : 'Укажите результат пробного',
+            : thinking
+              ? 'Клиент думает после пробного'
+              : 'Пробное прошло — укажите результат',
       });
     }
 
+    const absenceStudents = new Set<string>();
     for (const student of students) {
       const name = fullName(student);
       const common = { branchId: student.branchId, branchName: student.branch.name };
+      const retentionEligible =
+        student.status === 'ACTIVE' &&
+        student.enrollments.some(({ status }) => status === 'ACTIVE');
       if (!student.enrollments.length)
         add({
           ...common,
@@ -350,7 +414,17 @@ export class AttentionService {
           subscription.lessonsUsed >= subscription.lessonLimit &&
           subscription.updatedAt >= historyStart,
       );
-      if (!activeSubscriptions.length && !recentlyExpired && !recentlyUsedUp)
+      const endedSubscription = [recentlyExpired, recentlyUsedUp]
+        .filter((subscription): subscription is NonNullable<typeof subscription> =>
+          Boolean(subscription),
+        )
+        .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())[0];
+      if (
+        student.status === 'ACTIVE' &&
+        !activeSubscriptions.length &&
+        !recentlyExpired &&
+        !recentlyUsedUp
+      )
         add({
           ...common,
           actionLabel: 'Оформить абонемент',
@@ -364,10 +438,7 @@ export class AttentionService {
           title: 'Нет активного абонемента',
         });
 
-      for (const subscription of [
-        ...activeSubscriptions,
-        ...(recentlyUsedUp ? [recentlyUsedUp] : []),
-      ]) {
+      for (const subscription of activeSubscriptions) {
         const remaining =
           subscription.lessonLimit === null
             ? undefined
@@ -385,18 +456,18 @@ export class AttentionService {
             severity: 'CRITICAL',
             title: `${name}: занятия закончились`,
           });
-        else if (isLowLessonBalance(remaining))
+        else if (remaining === RETENTION_RULES.lowSubscriptionRemainingLessons)
           add({
             ...common,
             actionLabel: 'Открыть ученика',
             actionRoute: `/students/${student.id}?section=subscription`,
             category: 'SUBSCRIPTIONS',
-            description: `В абонементе «${subscription.tariff.name}» осталось ${String(remaining)} занятия.`,
+            description: `В абонементе «${subscription.tariff.name}» осталось 1 занятие.`,
             entityId: subscription.id,
             entityType: 'Subscription',
             id: `subscription:low:${subscription.id}`,
             severity: 'WARNING',
-            title: `${name}: мало занятий`,
+            title: `${name}: осталось 1 занятие`,
           });
         if (subscription.expiresAt && isExpiringSoon(subscription.expiresAt, now))
           add({
@@ -414,23 +485,63 @@ export class AttentionService {
           });
       }
 
-      if (recentlyExpired) {
-        const expiredOn = recentlyExpired.expiresAt
-          ? recentlyExpired.expiresAt.toLocaleDateString('ru-RU')
-          : 'недавно';
+      if (retentionEligible && !activeSubscriptions.length && endedSubscription) {
+        const expiredByDate = endedSubscription.status !== 'USED_UP';
+        const endedOn = endedSubscription.expiresAt
+          ? endedSubscription.expiresAt.toLocaleDateString('ru-RU')
+          : endedSubscription.updatedAt.toLocaleDateString('ru-RU');
         add({
           ...common,
-          actionLabel: 'Оформить абонемент',
+          actionLabel: 'Продать абонемент',
           actionRoute: `/students/${student.id}?action=subscription`,
           category: 'SUBSCRIPTIONS',
-          description: `Абонемент «${recentlyExpired.tariff.name}» закончился ${expiredOn}.`,
-          dueAt: recentlyExpired.expiresAt?.toISOString(),
-          entityId: recentlyExpired.id,
+          description: `Абонемент «${endedSubscription.tariff.name}» закончился ${endedOn}.`,
+          dueAt: endedSubscription.expiresAt?.toISOString(),
+          entityId: endedSubscription.id,
           entityType: 'Subscription',
-          id: `subscription:expired:${recentlyExpired.id}`,
+          id: `subscription:ended:${student.id}`,
+          occurredAt: endedSubscription.updatedAt.toISOString(),
           severity: 'WARNING',
-          title: `${name}: абонемент истёк`,
+          title: `${name}: абонемент ${expiredByDate ? 'истёк' : 'закончился'}`,
         });
+      }
+
+      if (retentionEligible && !absenceStudents.has(student.id)) {
+        const absence = student.enrollments
+          .filter(({ status }) => status === 'ACTIVE')
+          .map((enrollment) => {
+            const latest = (retentionLessonsByGroup.get(enrollment.groupId) ?? [])
+              .filter(
+                (lesson) =>
+                  lesson.groupId === enrollment.groupId && lesson.startsAt >= enrollment.joinedAt,
+              )
+              .slice(0, RETENTION_RULES.consecutiveAbsenceCount);
+            const consecutive =
+              latest.length === RETENTION_RULES.consecutiveAbsenceCount &&
+              latest.every(
+                (lesson) =>
+                  lesson.attendance.find(({ studentId }) => studentId === student.id)?.status ===
+                  'ABSENT',
+              );
+            return consecutive ? { enrollment, latest } : undefined;
+          })
+          .find(Boolean);
+        if (absence) {
+          absenceStudents.add(student.id);
+          add({
+            ...common,
+            actionLabel: 'Открыть посещаемость',
+            actionRoute: `/students/${student.id}?section=attendance`,
+            category: 'ATTENDANCE',
+            description: `${absence.enrollment.group.name} · три последних состоявшихся занятия отмечены как пропуски.`,
+            entityId: student.id,
+            entityType: 'Student',
+            id: `attendance:retention:${student.id}`,
+            occurredAt: absence.latest[0]?.startsAt.toISOString(),
+            severity: 'WARNING',
+            title: `${name}: не был на последних 3 занятиях`,
+          });
+        }
       }
 
       const debt = student.subscriptions.reduce(

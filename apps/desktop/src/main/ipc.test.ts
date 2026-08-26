@@ -1136,7 +1136,7 @@ describe('Electron IPC boundary', () => {
     });
     const handlers = createIpcHandlers(database, service, '/test/arava.db');
     expect(() =>
-      handlers[IPC_CHANNELS.attentionList]?.(owner.token, { category: 'LEADS' }),
+      handlers[IPC_CHANNELS.attentionList]?.(owner.token, { category: 'UNKNOWN' }),
     ).toThrow();
     const items = (await handlers[IPC_CHANNELS.attentionList]?.(owner.token, {
       category: 'STUDENTS',

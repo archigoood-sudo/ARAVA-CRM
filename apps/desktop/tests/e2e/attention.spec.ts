@@ -94,7 +94,7 @@ test('центр внимания ведёт к действию, автораз
         status: 'ACTIVE',
       });
       await api.groups.addEnrollment(token, group.id, {
-        joinedAt: new Date().toISOString().slice(0, 10),
+        joinedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
         overrideCapacity: false,
         status: 'ACTIVE',
         studentId: student.id,
@@ -116,7 +116,7 @@ test('центр внимания ведёт к действию, автораз
         studentId: student.id,
         tariffId: tariff.id,
       });
-      const startsAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const startsAt = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
       const lesson = await api.lessons.create(token, {
         coachId: trainer.user.id,
         endsAt: new Date(startsAt.getTime() + 60 * 60 * 1000).toISOString(),
@@ -133,6 +133,18 @@ test('центр внимания ведёт к действию, автораз
       await api.attendance.save(token, completedLesson.id, [
         { status: 'ABSENT', studentId: student.id },
       ]);
+      for (const daysAgo of [2, 3]) {
+        const previousStarts = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+        const previousLesson = await api.lessons.create(token, {
+          coachId: trainer.user.id,
+          endsAt: new Date(previousStarts.getTime() + 60 * 60 * 1000).toISOString(),
+          groupId: group.id,
+          startsAt: previousStarts.toISOString(),
+        });
+        await api.attendance.save(token, previousLesson.id, [
+          { status: 'ABSENT', studentId: student.id },
+        ]);
+      }
       return {
         adminEmail: admin.user.email,
         adminPassword: admin.temporaryPassword,
@@ -169,6 +181,7 @@ test('центр внимания ведёт к действию, автораз
     await page.getByLabel('Категория').selectOption('PAYMENTS');
     await expect(page.getByText(/Должникова E2E Мария: есть задолженность/u)).toHaveCount(0);
     await page.getByLabel('Категория').selectOption('ATTENDANCE');
+    await expect(page.getByText(/не был на последних 3 занятиях/u)).toBeVisible();
     await expect(page.getByText('Не заполнена посещаемость')).toHaveCount(1);
     const attendance = page.getByText('Не заполнена посещаемость');
     await expect(attendance).toBeVisible();

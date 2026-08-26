@@ -55,12 +55,12 @@ describe('Sprint 4.2B attention filters', () => {
   it('accepts supported filters and rejects unknown categories', () => {
     expect(
       attentionFiltersSchema.parse({
-        category: 'PAYMENTS',
+        category: 'LEADS',
         relevance: 'TODAY',
         severity: 'WARNING',
       }),
-    ).toEqual({ category: 'PAYMENTS', relevance: 'TODAY', severity: 'WARNING' });
-    expect(attentionFiltersSchema.safeParse({ category: 'LEADS' }).success).toBe(false);
+    ).toEqual({ category: 'LEADS', relevance: 'TODAY', severity: 'WARNING' });
+    expect(attentionFiltersSchema.safeParse({ category: 'UNKNOWN' }).success).toBe(false);
   });
 });
 

@@ -4,6 +4,7 @@ import type {
   LeadSummary,
   TrialAppointmentSummary,
 } from '@arava/shared';
+import { isLeadResponseOverdue } from '@arava/shared';
 
 export interface DashboardActionItem {
   actionLabel: string;
@@ -77,6 +78,7 @@ export function buildDashboardWorkspace({
       .filter(
         (item) =>
           item.severity === 'CRITICAL' ||
+          item.category === 'TRIALS' ||
           (!item.dueAt && (item.category === 'PAYMENTS' || item.category === 'SUBSCRIPTIONS')),
       )
       .map(fromAttention),
@@ -84,14 +86,14 @@ export function buildDashboardWorkspace({
   );
 
   const leadItems: DashboardActionItem[] = leads
-    .filter(({ status }) => status === 'NEW')
+    .filter((lead) => isLeadResponseOverdue(lead, now))
     .map((lead) => ({
       actionLabel: 'Открыть заявку',
       actionRoute: `/leads?leadId=${encodeURIComponent(lead.id)}`,
       description: [lead.parentName, lead.phone, lead.direction].filter(Boolean).join(' · '),
       id: `lead:${lead.id}`,
       priority: 'YELLOW',
-      title: `Новая заявка: ${lead.childName}`,
+      title: `Новая заявка ждёт ответа: ${lead.childName}`,
     }));
   const chatItems: DashboardActionItem[] = chats
     .filter(({ unreadCount }) => unreadCount > 0)
@@ -129,7 +131,7 @@ export function buildDashboardWorkspace({
       title: `${trial.leadName} · пробное`,
     }));
   const followUpItems: DashboardActionItem[] = trials
-    .filter(({ state }) => state === 'FOLLOW_UP')
+    .filter((trial) => trial.state === 'FOLLOW_UP' && trial.outcome !== 'THINKING')
     .map((trial) => ({
       actionLabel: trial.studentId ? 'Оформить абонемент' : 'Открыть заявку',
       actionRoute: trial.studentId

@@ -75,7 +75,7 @@ it('prioritizes urgent problems and separates today from the next seven days', (
 it('creates direct actions for new leads and unread chats and removes them after resolution', () => {
   const lead = {
     childName: 'Анна',
-    createdAt: NOW.toISOString(),
+    createdAt: new Date(NOW.getTime() - 25 * 60 * 60 * 1000).toISOString(),
     id: 'lead-1',
     originalPhone: '+79990000000',
     phone: '+79990000000',
@@ -123,19 +123,27 @@ it('creates direct actions for new leads and unread chats and removes them after
   expect(resolved.today).toEqual([]);
 });
 
-it('shows an attended trial follow-up and removes it after a subscription purchase', () => {
+it('shows a delayed trial follow-up from canonical attention and removes it after resolution', () => {
   const pending = buildDashboardWorkspace({
-    attention: [],
+    attention: [
+      attention({
+        actionRoute: '/students/student-1',
+        category: 'TRIALS',
+        id: 'trial:thinking:trial-1',
+        severity: 'INFO',
+        title: 'Клиент думает после пробного',
+      }),
+    ],
     chats: [],
     leads: [],
     now: NOW,
-    trials: [{ ...trial, state: 'FOLLOW_UP', studentId: 'student-1' }],
+    trials: [],
   });
-  expect(pending.today).toContainEqual(
+  expect(pending.attention).toContainEqual(
     expect.objectContaining({
-      actionRoute: '/students/student-1?action=subscription',
-      id: 'trial:follow-up:trial-1',
-      title: 'Связаться после пробного: Мария',
+      actionRoute: '/students/student-1',
+      id: 'trial:thinking:trial-1',
+      title: 'Клиент думает после пробного',
     }),
   );
 
@@ -144,7 +152,7 @@ it('shows an attended trial follow-up and removes it after a subscription purcha
     chats: [],
     leads: [],
     now: NOW,
-    trials: [{ ...trial, state: 'SUBSCRIPTION_PURCHASED', studentId: 'student-1' }],
+    trials: [],
   });
   expect(resolved.today).toEqual([]);
 });

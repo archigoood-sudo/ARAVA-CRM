@@ -4,7 +4,7 @@ import type {
   AttentionItem,
   AttentionSeverity,
 } from '@arava/shared';
-import { formatDate } from '@arava/shared';
+import { formatDate, isLeadResponseOverdue } from '@arava/shared';
 import {
   AttentionCard,
   Badge,
@@ -29,6 +29,7 @@ import {
   IdCard,
   Inbox,
   RefreshCw,
+  Sparkles,
   CloudCog,
   UserRoundCog,
   UsersRound,
@@ -43,6 +44,8 @@ import { WebActionsSection } from './web-actions-section';
 import { leadAttentionKey } from '../leads/lead-model';
 
 const categories: { icon: typeof BellRing; label: string; value: AttentionCategory }[] = [
+  { icon: Inbox, label: 'Заявки', value: 'LEADS' },
+  { icon: Sparkles, label: 'Пробные', value: 'TRIALS' },
   { icon: UsersRound, label: 'Ученики', value: 'STUDENTS' },
   { icon: CreditCard, label: 'Абонементы', value: 'SUBSCRIPTIONS' },
   { icon: HandCoins, label: 'Оплаты', value: 'PAYMENTS' },
@@ -122,6 +125,10 @@ export function AttentionPage() {
     refetchInterval: 60_000,
     retry: false,
   });
+  const overdueLeads = useMemo(
+    () => newLeads.data?.leads.filter((lead) => isLeadResponseOverdue(lead)) ?? [],
+    [newLeads.data?.leads],
+  );
 
   if (user?.role === 'COACH') return <Navigate replace to="/dashboard" />;
 
@@ -135,7 +142,7 @@ export function AttentionPage() {
 
       <WebActionsSection />
 
-      {newLeads.data?.leads.length ? (
+      {overdueLeads.length && (!category || category === 'LEADS') ? (
         <Card className="mt-7 p-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
@@ -144,10 +151,10 @@ export function AttentionPage() {
               </p>
               <h2 className="mt-1 text-lg font-semibold">Новые обращения</h2>
             </div>
-            <Badge>{newLeads.data.newCount}</Badge>
+            <Badge>{overdueLeads.length}</Badge>
           </div>
           <div className="space-y-3">
-            {newLeads.data.leads.slice(0, 5).map((lead) => (
+            {overdueLeads.slice(0, 5).map((lead) => (
               <AttentionCard
                 action={
                   <Button
@@ -169,8 +176,8 @@ export function AttentionPage() {
                   month: 'long',
                   year: 'numeric',
                 })}
-                title="Новая заявка"
-                tone="info"
+                title="Новая заявка ждёт ответа"
+                tone="warning"
               />
             ))}
           </div>
@@ -243,7 +250,7 @@ export function AttentionPage() {
           />
         </Card>
       ) : null}
-      {items.data?.length === 0 ? (
+      {items.data?.length === 0 && !(category === 'LEADS' && overdueLeads.length) ? (
         <Card className="mt-5">
           <EmptyState
             icon={BellRing}
@@ -268,7 +275,9 @@ export function AttentionPage() {
             </button>
             {categories.map(({ icon: Icon, label, value }) => {
               const count =
-                summary.data?.categories.find((item) => item.category === value)?.count ?? 0;
+                value === 'LEADS'
+                  ? overdueLeads.length
+                  : (summary.data?.categories.find((item) => item.category === value)?.count ?? 0);
               if (!count && category !== value) return null;
               return (
                 <button

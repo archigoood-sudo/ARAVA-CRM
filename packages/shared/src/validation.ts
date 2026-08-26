@@ -1004,6 +1004,8 @@ export const attentionFiltersSchema: z.ZodType<AttentionFilters> = z.object({
   branchId: optionalIdentifier,
   category: z
     .enum([
+      'LEADS',
+      'TRIALS',
       'STUDENTS',
       'SUBSCRIPTIONS',
       'PAYMENTS',
@@ -1013,6 +1015,8 @@ export const attentionFiltersSchema: z.ZodType<AttentionFilters> = z.object({
       'SCHEDULE',
       'ROOMS',
       'SUBSTITUTIONS',
+      'BACKUPS',
+      'INTEGRATION',
     ])
     .optional(),
   relevance: z.enum(['ALL', 'TODAY', 'UPCOMING']).optional(),
