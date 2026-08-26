@@ -21,6 +21,7 @@ import {
 } from './integration-service';
 import { ApplicationService } from './services';
 import { StudioService } from './studio-service';
+import { LeadService } from './lead-service';
 
 class MemoryCredentials implements IntegrationCredentialStore {
   deviceId = 'e69370b3-70d3-47eb-8d7a-509ba0f27e9d';
@@ -289,12 +290,34 @@ describe('Sprint 4.5A multi-device integration', () => {
         return;
       }
       if (request.url?.includes('/changes?')) {
-        const after = Number(new URL(request.url, 'http://localhost').searchParams.get('after'));
+        const url = new URL(request.url, 'http://localhost');
+        const after = Number(url.searchParams.get('after'));
+        const requestedTypes = new Set((url.searchParams.get('entityTypes') ?? '').split(','));
+        const source =
+          url.searchParams.get('snapshot') === 'canonical'
+            ? [...canonical.entries()].map(([key, value]) => {
+                const separator = key.indexOf(':');
+                return {
+                  entityId: key.slice(separator + 1),
+                  entityType: key.slice(0, separator),
+                  operation: value.operation,
+                  payload: value.payload,
+                  revision: value.revision,
+                  sequence: value.sequence,
+                  serverUpdatedAt: now.toISOString(),
+                  sourceDeviceId: 'mock-server',
+                };
+              })
+            : changes;
+        const selected = source.filter(
+          (change) =>
+            Number(change.sequence) > after && requestedTypes.has(String(change.entityType)),
+        );
         json(response, 200, {
           apiVersion: 'v1',
           canonicalCount: canonical.size,
-          changes: changes.filter((change) => Number(change.sequence) > after),
-          cursor: changes.length,
+          changes: selected,
+          cursor: selected.at(-1)?.sequence ?? after,
           hasMore: false,
         });
         return;
@@ -992,6 +1015,56 @@ describe('Sprint 4.5A multi-device integration', () => {
     await expect(application.restoreSession(ownerToken)).resolves.toMatchObject({ role: 'OWNER' });
   });
 
+  it('restores synchronized trial history and protects an unsent trial before recovery', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Recovery trials' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 10,
+      direction: 'Контемп',
+      name: 'Recovery group',
+      status: 'RECRUITING',
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Ольга',
+      lastName: 'Recovery',
+      status: 'TRIAL',
+    });
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: '2030-08-24T16:00:00.000Z',
+      groupId: group.id,
+      startsAt: '2030-08-24T15:00:00.000Z',
+    });
+    const trials = new LeadService(database, application, integration, studio);
+    const trial = await trials.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      startsAt: lesson.startsAt,
+      studentId: student.id,
+    });
+    await expect(integration.recoverFromServer(ownerToken)).rejects.toThrow(
+      'неотправленные изменения',
+    );
+    await database.syncOutbox.deleteMany({
+      where: { entityId: trial.id, entityType: 'TRIAL_APPOINTMENT' },
+    });
+    for (let attempt = 0; attempt < 4; attempt += 1) await integration.processPending();
+    expect(await database.syncOutbox.count({ where: { status: 'PENDING' } })).toBe(0);
+    expect(
+      await database.syncOutbox.findUnique({
+        where: { idempotencyKey: `trial-bootstrap:${trial.id}` },
+      }),
+    ).toMatchObject({ status: 'SYNCED' });
+
+    await integration.recoverFromServer(ownerToken);
+    expect(await database.trialAppointment.findUnique({ where: { id: trial.id } })).toMatchObject({
+      lessonId: lesson.id,
+      status: 'BOOKED',
+      studentId: student.id,
+    });
+  });
+
   it('sends the explicitly confirmed device version to canonical conflict resolution', async () => {
     await pair();
     managedConflicts = [
@@ -1049,6 +1122,7 @@ describe('Sprint 4.5A multi-device integration', () => {
         type: 'DAY_OFF',
       },
     });
+    await database.syncOutbox.deleteMany();
     await expect(integration.recoverFromServer(ownerToken)).rejects.toThrow(
       'локальные финансовые или операционные данные',
     );
@@ -1364,6 +1438,170 @@ describe('Sprint 4.5A multi-device integration', () => {
         }),
       ).toBe(1);
       expect(await database.syncOutbox.count({ where: { entityId: membership.id } })).toBe(0);
+    } finally {
+      await closeDatabase(secondDatabase);
+      await rm(secondDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it('replicates trial create, reschedule, cancel, and outcome without replaying business commands', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Пробные sync' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 20,
+      direction: 'Хип-хоп',
+      name: 'Пробная группа',
+      status: 'RECRUITING',
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Пробная',
+      status: 'TRIAL',
+    });
+    const firstLesson = await studio.createLesson(ownerToken, {
+      endsAt: '2030-08-20T16:00:00.000Z',
+      groupId: group.id,
+      startsAt: '2030-08-20T15:00:00.000Z',
+    });
+    const secondLesson = await studio.createLesson(ownerToken, {
+      endsAt: '2030-08-22T16:00:00.000Z',
+      groupId: group.id,
+      startsAt: '2030-08-22T15:00:00.000Z',
+    });
+    const leadService = new LeadService(database, application, integration, studio);
+    const first = await leadService.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      startsAt: firstLesson.startsAt,
+      studentId: student.id,
+    });
+    expect(
+      await database.syncOutbox.count({
+        where: { entityId: first.id, entityType: 'TRIAL_APPOINTMENT' },
+      }),
+    ).toBe(1);
+    for (let attempt = 0; attempt < 4; attempt += 1) await integration.processPending();
+
+    const secondDirectory = await mkdtemp(join(tmpdir(), 'arava-trial-sync-device-b-'));
+    const secondDatabase = createDatabaseClient(toSqliteUrl(join(secondDirectory, 'device-b.db')));
+    try {
+      await initializeDatabase(secondDatabase);
+      const secondApplication = new ApplicationService(secondDatabase);
+      const secondLogin = await secondApplication.login({
+        email: INITIAL_OWNER_EMAIL,
+        password: INITIAL_OWNER_PASSWORD,
+      });
+      await secondApplication.changePassword(secondLogin.token, {
+        currentPassword: INITIAL_OWNER_PASSWORD,
+        newPassword: 'Owner!TrialDeviceB2026',
+      });
+      const secondCredentials = new MemoryCredentials();
+      secondCredentials.deviceId = '67b1345e-77e3-47ab-8665-239393041edf';
+      const secondIntegration = new IntegrationService(
+        secondDatabase,
+        secondApplication,
+        secondCredentials,
+        new IntegrationApiClient(),
+        () => now,
+      );
+      await secondIntegration.initialize();
+      await secondIntegration.pair(secondLogin.token, {
+        baseUrl: serverUrl,
+        enabled: true,
+        pairingCode: '654321',
+      });
+      for (let attempt = 0; attempt < 4; attempt += 1) await secondIntegration.processPending();
+      expect(
+        await secondDatabase.trialAppointment.findUnique({ where: { id: first.id } }),
+      ).toMatchObject({ lessonId: firstLesson.id, status: 'BOOKED', studentId: student.id });
+
+      const secondStudio = new StudioService(secondDatabase, secondApplication);
+      const secondLeadService = new LeadService(
+        secondDatabase,
+        secondApplication,
+        secondIntegration,
+        secondStudio,
+      );
+      const purchased = await secondLeadService.setTrialOutcome(secondLogin.token, first.id, {
+        expectedVersion: (
+          await secondDatabase.trialAppointment.findUniqueOrThrow({ where: { id: first.id } })
+        ).version,
+        outcome: 'PURCHASED',
+      });
+      await secondIntegration.processPending();
+      await integration.processPending();
+      expect(
+        await database.trialAppointment.findUniqueOrThrow({ where: { id: first.id } }),
+      ).toMatchObject({
+        outcome: 'PURCHASED',
+        version: purchased.version,
+      });
+      expect(await database.subscription.count({ where: { studentId: student.id } })).toBe(0);
+
+      const rescheduled = await secondLeadService.scheduleTrial(secondLogin.token, {
+        groupId: group.id,
+        startsAt: secondLesson.startsAt,
+        studentId: student.id,
+      });
+      await secondLeadService.setTrialOutcome(secondLogin.token, rescheduled.id, {
+        expectedVersion: rescheduled.version ?? 1,
+        outcome: 'THINKING',
+      });
+      for (let attempt = 0; attempt < 4; attempt += 1) await secondIntegration.processPending();
+      for (let attempt = 0; attempt < 4; attempt += 1) await integration.processPending();
+
+      expect(await database.trialAppointment.findUnique({ where: { id: first.id } })).toMatchObject(
+        { status: 'CANCELLED' },
+      );
+      const replicated = await database.trialAppointment.findUniqueOrThrow({
+        where: { id: rescheduled.id },
+      });
+      expect(replicated).toMatchObject({ lessonId: secondLesson.id, outcome: 'THINKING' });
+      expect(await database.subscription.count({ where: { studentId: student.id } })).toBe(0);
+      await leadService.setTrialOutcome(ownerToken, replicated.id, {
+        expectedVersion: replicated.version,
+        outcome: 'DECLINED',
+      });
+      const secondCopy = await secondDatabase.trialAppointment.findUniqueOrThrow({
+        where: { id: rescheduled.id },
+      });
+      await secondLeadService.setTrialOutcome(secondLogin.token, rescheduled.id, {
+        expectedVersion: secondCopy.version,
+        outcome: 'NO_SHOW',
+      });
+      await integration.processPending();
+      await secondIntegration.processPending();
+      expect(
+        await secondDatabase.syncConflict.count({
+          where: {
+            entityId: rescheduled.id,
+            entityType: 'TRIAL_APPOINTMENT',
+            status: 'OPEN',
+          },
+        }),
+      ).toBe(1);
+      expect(
+        await secondDatabase.trialAppointment.findUniqueOrThrow({ where: { id: rescheduled.id } }),
+      ).toMatchObject({ outcome: 'NO_SHOW' });
+
+      const current = await database.trialAppointment.findUniqueOrThrow({
+        where: { id: replicated.id },
+      });
+      await leadService.cancelTrial(ownerToken, replicated.id, {
+        expectedVersion: current.version,
+      });
+      await integration.processPending();
+      await secondIntegration.processPending();
+      expect(
+        await secondDatabase.trialAppointment.findUnique({ where: { id: replicated.id } }),
+      ).toMatchObject({ status: 'CANCELLED' });
+      expect(
+        await secondDatabase.syncOutbox.count({
+          where: { entityType: 'TRIAL_APPOINTMENT', status: 'PENDING' },
+        }),
+      ).toBe(0);
     } finally {
       await closeDatabase(secondDatabase);
       await rm(secondDirectory, { force: true, recursive: true });

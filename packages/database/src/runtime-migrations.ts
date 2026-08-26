@@ -781,4 +781,13 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'CREATE INDEX "TrialAppointment_studentId_supersededAt_idx" ON "TrialAppointment"("studentId", "supersededAt")',
     ],
   },
+  {
+    id: '20260826010000_trial_sync',
+    statements: [
+      'DROP TRIGGER IF EXISTS "sync_trial_appointment_insert"',
+      'CREATE TRIGGER "sync_trial_appointment_insert" AFTER INSERT ON "TrialAppointment" WHEN COALESCE((SELECT "value" FROM "AppSetting" WHERE "key" = \'integration.applyingRemote\'), \'false\') != \'true\' BEGIN\n  INSERT INTO "SyncOutbox" ("id", "entityType", "entityId", "operation", "idempotencyKey", "baseRevision", "updatedAt")\n  VALUES (lower(hex(randomblob(16))), \'TRIAL_APPOINTMENT\', NEW."id", \'UPSERT\', lower(hex(randomblob(16))), COALESCE((SELECT "revision" FROM "SyncEntityState" WHERE "entityType" = \'TRIAL_APPOINTMENT\' AND "entityId" = NEW."id"), 0), CURRENT_TIMESTAMP);\nEND',
+      'DROP TRIGGER IF EXISTS "sync_trial_appointment_update"',
+      'CREATE TRIGGER "sync_trial_appointment_update" AFTER UPDATE ON "TrialAppointment" WHEN COALESCE((SELECT "value" FROM "AppSetting" WHERE "key" = \'integration.applyingRemote\'), \'false\') != \'true\' BEGIN\n  INSERT INTO "SyncOutbox" ("id", "entityType", "entityId", "operation", "idempotencyKey", "baseRevision", "updatedAt")\n  VALUES (lower(hex(randomblob(16))), \'TRIAL_APPOINTMENT\', NEW."id", \'UPSERT\', lower(hex(randomblob(16))), COALESCE((SELECT "revision" FROM "SyncEntityState" WHERE "entityType" = \'TRIAL_APPOINTMENT\' AND "entityId" = NEW."id"), 0), CURRENT_TIMESTAMP);\nEND',
+    ],
+  },
 ];

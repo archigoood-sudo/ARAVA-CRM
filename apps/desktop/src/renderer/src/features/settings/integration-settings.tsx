@@ -78,6 +78,7 @@ const entityLabels: Record<string, string> = {
   SUBSTITUTION: 'Замена тренера',
   TARIFF: 'Тариф',
   TRAINER: 'Тренер',
+  TRIAL_APPOINTMENT: 'Пробное занятие',
 };
 const diagnosticOverallLabels = {
   ERROR: 'Обнаружены ошибки',

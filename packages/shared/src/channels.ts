@@ -261,6 +261,7 @@ export const IPC_CHANNELS = {
   globalSearch: 'global-search:query',
   integrationConfirmInitialSync: 'integration:confirm-initial-sync',
   integrationDiagnose: 'integration:diagnose',
+  integrationDataChanged: 'integration:data-changed',
   integrationListConflicts: 'integration:list-conflicts',
   integrationResolveConflict: 'integration:resolve-conflict',
   integrationRecoverFromServer: 'integration:recover-from-server',
@@ -2764,6 +2765,7 @@ export interface AravaDesktopApi {
   integration: {
     confirmInitialSync: (token: string) => Promise<IntegrationStatus>;
     diagnose: (token: string) => Promise<IntegrationDiagnostics>;
+    onDataChanged: (listener: (entityType: string) => void) => () => void;
     listConflicts: (token: string) => Promise<IntegrationConflictSummary[]>;
     resolveConflict: (
       token: string,

@@ -85,6 +85,13 @@ const desktopApi: AravaDesktopApi = {
     getStatus: (token) => invoke(IPC_CHANNELS.integrationGetStatus, token),
     listConflicts: (token) => invoke(IPC_CHANNELS.integrationListConflicts, token),
     listLog: (token) => invoke(IPC_CHANNELS.integrationListLog, token),
+    onDataChanged: (listener) => {
+      const handler = (_event: IpcRendererEvent, entityType: unknown) => {
+        if (typeof entityType === 'string') listener(entityType);
+      };
+      ipcRenderer.on(IPC_CHANNELS.integrationDataChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.integrationDataChanged, handler);
+    },
     pair: (token, input) => invoke(IPC_CHANNELS.integrationPair, token, input),
     renameDevice: (token, deviceId, input) =>
       invoke(IPC_CHANNELS.integrationRenameDevice, token, deviceId, input),

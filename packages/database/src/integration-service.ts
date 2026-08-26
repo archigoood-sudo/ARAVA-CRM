@@ -73,6 +73,7 @@ const SETTINGS = {
   lastOutboundSync: 'integration.lastOutboundSync',
   inboundCursor: 'integration.inboundCursor',
   reconciliationApproved: 'integration.reconciliationApproved',
+  trialSnapshotImported: 'integration.trialSnapshotImported',
 } as const;
 
 export type SyncEntityType =
@@ -91,6 +92,7 @@ export type SyncEntityType =
   | 'SUBSCRIPTION'
   | 'SUBSCRIPTION_LEDGER'
   | 'ATTENDANCE'
+  | 'TRIAL_APPOINTMENT'
   | 'STUDENT_NOTE'
   | 'PUBLICATION'
   | 'CHAT_MESSAGE';
@@ -497,6 +499,29 @@ function enumValue<T extends string>(value: unknown, allowed: readonly T[], fall
   return typeof value === 'string' && allowed.includes(value as T) ? (value as T) : fallback;
 }
 
+function requiredEnumValue<T extends string>(value: unknown, allowed: readonly T[]): T {
+  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+    throw new IntegrationApiError('INVALID_RESPONSE', false, 'Статус изменения сервера повреждён.');
+  }
+  return value as T;
+}
+
+function optionalEnumValue<T extends string>(value: unknown, allowed: readonly T[]): T | null {
+  if (value === null || value === undefined || value === '') return null;
+  return requiredEnumValue(value, allowed);
+}
+
+function positiveInteger(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Версия изменения сервера повреждена.',
+    );
+  }
+  return Number(value);
+}
+
 const INBOUND_ENTITY_TYPES = new Set<InboundChange['entityType']>([
   'BRANCH',
   'ROOM',
@@ -513,6 +538,7 @@ const INBOUND_ENTITY_TYPES = new Set<InboundChange['entityType']>([
   'SUBSCRIPTION',
   'SUBSCRIPTION_LEDGER',
   'ATTENDANCE',
+  'TRIAL_APPOINTMENT',
   'STUDENT_NOTE',
   'PUBLICATION',
 ]);
@@ -1379,15 +1405,23 @@ export class IntegrationApiClient {
     baseUrl: string,
     deviceId: string,
     token: string,
-    input: { after: number; conflictCount: number; pendingCount: number },
+    input: {
+      after: number;
+      conflictCount: number;
+      entityTypes?: readonly InboundChange['entityType'][];
+      pendingCount: number;
+      snapshot?: boolean;
+    },
   ): Promise<InboundPage> {
     const query = new URLSearchParams({
       after: String(input.after),
       conflictCount: String(input.conflictCount),
       deviceName: hostname(),
+      entityTypes: (input.entityTypes ?? [...INBOUND_ENTITY_TYPES]).join(','),
       limit: '100',
       pendingCount: String(input.pendingCount),
     });
+    if (input.snapshot) query.set('snapshot', 'canonical');
     const payload = await this.request(
       baseUrl,
       `changes?${query.toString()}`,
@@ -2174,6 +2208,7 @@ const ENTITY_PRIORITY: Record<SyncEntityType, number> = {
   SUBSCRIPTION: 120,
   ATTENDANCE: 130,
   SUBSCRIPTION_LEDGER: 140,
+  TRIAL_APPOINTMENT: 145,
   STUDENT_NOTE: 150,
   CHAT_MESSAGE: 5,
   PUBLICATION: 160,
@@ -2191,6 +2226,7 @@ export class IntegrationService {
     private readonly api = new IntegrationApiClient(),
     private readonly now: () => Date = () => new Date(),
     private readonly createRecoveryBackup?: (token: string) => Promise<BackupEntry>,
+    private readonly onInboundApplied?: (entityType: SyncEntityType) => void,
   ) {
     this.finance = new FinanceService(database, application);
     this.studio = new StudioService(database, application);
@@ -3749,6 +3785,7 @@ export class IntegrationService {
       await transaction.studentNote.deleteMany();
       await transaction.studentContact.deleteMany();
       await transaction.enrollment.deleteMany();
+      await transaction.trialAppointment.deleteMany();
       await transaction.lesson.deleteMany();
       await transaction.weeklySchedule.deleteMany();
       await transaction.subscription.deleteMany();
@@ -3804,6 +3841,7 @@ export class IntegrationService {
         [SETTINGS.lastInboundSync, completedAt],
         [SETTINGS.lastSuccessfulSync, completedAt],
         [SETTINGS.lastState, 'CONNECTED'],
+        [SETTINGS.trialSnapshotImported, 'true'],
         ['integration.applyingRemote', 'false'],
       ] as const) {
         await transaction.appSetting.upsert({
@@ -3825,6 +3863,9 @@ export class IntegrationService {
       undefined,
       `Получено изменений: ${String(changes.length)}. Позиция журнала: ${String(cursor)}.`,
     );
+    if (changes.some(({ entityType }) => entityType === 'TRIAL_APPOINTMENT')) {
+      this.onInboundApplied?.('TRIAL_APPOINTMENT');
+    }
     return {
       backup,
       completedAt: this.now().toISOString(),
@@ -3851,6 +3892,7 @@ export class IntegrationService {
           after: cursor,
           conflictCount: 0,
           pendingCount: 0,
+          snapshot: true,
         },
       );
       changes.push(...page.changes);
@@ -3862,7 +3904,14 @@ export class IntegrationService {
         );
       }
       cursor = page.cursor;
-      if (!page.hasMore) return { changes, cursor };
+      if (!page.hasMore) {
+        changes.sort(
+          (left, right) =>
+            ENTITY_PRIORITY[left.entityType] - ENTITY_PRIORITY[right.entityType] ||
+            left.sequence - right.sequence,
+        );
+        return { changes, cursor };
+      }
     }
     throw new IntegrationApiError(
       'INVALID_RESPONSE',
@@ -3872,6 +3921,15 @@ export class IntegrationService {
   }
 
   private async assertRecoveryDoesNotOrphanLocalOnlyData(): Promise<void> {
+    const unsynced = await this.database.syncOutbox.count({
+      where: { status: { in: ['PENDING', 'PROCESSING', 'FAILED'] } },
+    });
+    if (unsynced > 0) {
+      throw new DomainError(
+        'CONFLICT',
+        'На этом компьютере есть неотправленные изменения. Сначала завершите синхронизацию.',
+      );
+    }
     const checks = await Promise.all([
       this.database.payment.count(),
       this.database.paymentOperation.count(),
@@ -3887,7 +3945,6 @@ export class IntegrationService {
       this.database.roomClosure.count(),
       this.database.calendarException.count(),
       this.database.webAction.count(),
-      this.database.trialAppointment.count(),
     ]);
     if (checks.some((count) => count > 0)) {
       throw new DomainError(
@@ -4068,6 +4125,7 @@ export class IntegrationService {
       subscriptions,
       ledgers,
       attendance,
+      trials,
       notes,
       publications,
     ] = await Promise.all([
@@ -4089,6 +4147,7 @@ export class IntegrationService {
       this.database.subscription.findMany({ select: { id: true } }),
       this.database.subscriptionLedger.findMany({ select: { id: true } }),
       this.database.attendance.findMany({ select: { lessonId: true, studentId: true } }),
+      this.database.trialAppointment.findMany({ select: { id: true } }),
       this.database.studentNote.findMany({ select: { id: true } }),
       this.database.publication.findMany({ select: { id: true } }),
     ]);
@@ -4113,6 +4172,7 @@ export class IntegrationService {
         entityId: `${lessonId}:${studentId}`,
         entityType: 'ATTENDANCE' as const,
       })),
+      ...map(trials, 'TRIAL_APPOINTMENT'),
       ...map(notes, 'STUDENT_NOTE'),
       ...map(publications, 'PUBLICATION'),
     ];
@@ -4136,6 +4196,7 @@ export class IntegrationService {
       subscriptions,
       ledgers,
       attendance,
+      trials,
       notes,
     ] = await Promise.all([
       this.database.branch.findMany({ select: { id: true } }),
@@ -4156,6 +4217,7 @@ export class IntegrationService {
       this.database.subscription.findMany({ select: { id: true } }),
       this.database.subscriptionLedger.findMany({ select: { id: true } }),
       this.database.attendance.findMany({ select: { lessonId: true, studentId: true } }),
+      this.database.trialAppointment.findMany({ select: { id: true } }),
       this.database.studentNote.findMany({ select: { id: true } }),
     ]);
     const rows: { entityId: string; entityType: SyncEntityType }[] = [
@@ -4177,6 +4239,7 @@ export class IntegrationService {
         entityId: `${lessonId}:${studentId}`,
         entityType: 'ATTENDANCE' as const,
       })),
+      ...trials.map(({ id }) => ({ entityId: id, entityType: 'TRIAL_APPOINTMENT' as const })),
       ...notes.map(({ id }) => ({ entityId: id, entityType: 'STUDENT_NOTE' as const })),
     ];
     const timestamp = this.now().toISOString();
@@ -4245,6 +4308,7 @@ export class IntegrationService {
       await this.processClientProfileUpdateActions();
       await this.processAdminStudentUpdateActions();
       await this.processAdminTrainerUpdateActions();
+      await this.queueLegacyTrialBootstrap();
       const acknowledgements = await this.database.webAction.findMany({
         select: { id: true },
         where: {
@@ -4335,6 +4399,47 @@ export class IntegrationService {
     } finally {
       this.processing = false;
     }
+  }
+
+  private async queueLegacyTrialBootstrap(): Promise<void> {
+    const trials = await this.database.trialAppointment.findMany({ select: { id: true } });
+    if (trials.length === 0) return;
+    const trialIds = trials.map(({ id }) => id);
+    const [states, existing] = await Promise.all([
+      this.database.syncEntityState.findMany({
+        select: { entityId: true },
+        where: { entityId: { in: trialIds }, entityType: 'TRIAL_APPOINTMENT' },
+      }),
+      this.database.syncOutbox.findMany({
+        select: { entityId: true },
+        where: { entityId: { in: trialIds }, entityType: 'TRIAL_APPOINTMENT' },
+      }),
+    ]);
+    const known = new Set([
+      ...states.map(({ entityId }) => entityId),
+      ...existing.map(({ entityId }) => entityId),
+    ]);
+    const missing = trials.filter(({ id }) => !known.has(id));
+    if (missing.length === 0) return;
+    await this.database.syncOutbox.createMany({
+      data: missing.map(({ id }) => ({
+        entityId: id,
+        entityType: 'TRIAL_APPOINTMENT',
+        idempotencyKey: `trial-bootstrap:${id}`,
+        nextAttemptAt: this.now(),
+        operation: 'UPSERT' as const,
+        payloadJson: '{}',
+        updatedAt: this.now(),
+      })),
+    });
+    await this.log(
+      undefined,
+      'TRIAL_BOOTSTRAP',
+      'QUEUED',
+      0,
+      undefined,
+      `Подготовлено записей пробных занятий: ${String(missing.length)}.`,
+    );
   }
 
   private async pullWebActions(baseUrl: string, deviceId: string, token: string): Promise<void> {
@@ -4804,25 +4909,27 @@ export class IntegrationService {
           },
           where: { id: item.id },
         });
-        await transaction.syncEntityState.upsert({
-          create: {
-            entityId: item.entityId,
-            entityType: item.entityType,
-            revision: acknowledgement.revision,
-            serverSequence: acknowledgement.serverSequence,
-            serverUpdatedAt: syncedAt,
-            sourceDeviceId: deviceId,
-          },
-          update: {
-            revision: acknowledgement.revision,
-            serverSequence: acknowledgement.serverSequence,
-            serverUpdatedAt: syncedAt,
-            sourceDeviceId: deviceId,
-          },
-          where: {
-            entityType_entityId: { entityId: item.entityId, entityType: item.entityType },
-          },
-        });
+        if (acknowledgement.canonicalPayload.id === item.entityId) {
+          await transaction.syncEntityState.upsert({
+            create: {
+              entityId: item.entityId,
+              entityType: item.entityType,
+              revision: acknowledgement.revision,
+              serverSequence: acknowledgement.serverSequence,
+              serverUpdatedAt: syncedAt,
+              sourceDeviceId: deviceId,
+            },
+            update: {
+              revision: acknowledgement.revision,
+              serverSequence: acknowledgement.serverSequence,
+              serverUpdatedAt: syncedAt,
+              sourceDeviceId: deviceId,
+            },
+            where: {
+              entityType_entityId: { entityId: item.entityId, entityType: item.entityType },
+            },
+          });
+        }
         if (acknowledgement.status === 'CONFLICT') {
           if (!acknowledgement.conflictId)
             throw new IntegrationApiError(
@@ -4927,6 +5034,53 @@ export class IntegrationService {
       ]);
       if (!page.hasMore) break;
     }
+    await this.importLegacyTrialSnapshot(baseUrl, deviceId, token);
+  }
+
+  private async importLegacyTrialSnapshot(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+  ): Promise<void> {
+    if ((await this.setting(SETTINGS.trialSnapshotImported)) === 'true') return;
+    let cursor = 0;
+    let imported = 0;
+    for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+      const page = await this.api.fetchChanges(baseUrl, deviceId, token, {
+        after: cursor,
+        conflictCount: 0,
+        entityTypes: ['TRIAL_APPOINTMENT'],
+        pendingCount: 0,
+        snapshot: true,
+      });
+      for (const change of page.changes) await this.applyInboundChange(change);
+      imported += page.changes.length;
+      if (page.cursor < cursor || (page.hasMore && page.cursor === cursor)) {
+        throw new IntegrationApiError(
+          'INVALID_RESPONSE',
+          false,
+          'Сервер вернул некорректный снимок пробных занятий.',
+        );
+      }
+      cursor = page.cursor;
+      if (!page.hasMore) break;
+      if (pageNumber === 249) {
+        throw new IntegrationApiError(
+          'INVALID_RESPONSE',
+          false,
+          'Снимок пробных занятий слишком велик для одного запуска.',
+        );
+      }
+    }
+    await this.setSetting(SETTINGS.trialSnapshotImported, 'true');
+    await this.log(
+      undefined,
+      'TRIAL_SNAPSHOT',
+      'SUCCESS',
+      1,
+      undefined,
+      `Восстановлено записей пробных занятий: ${String(imported)}.`,
+    );
   }
 
   private async countLocalOperationalEntities(): Promise<number> {
@@ -5014,6 +5168,7 @@ export class IntegrationService {
         });
       }
     });
+    this.onInboundApplied?.(change.entityType);
   }
 
   private async applyReplica(
@@ -5454,6 +5609,48 @@ export class IntegrationService {
           create: { lessonId, studentId, ...data },
           update: data,
           where: { lessonId_studentId: { lessonId, studentId } },
+        });
+        break;
+      }
+      case 'TRIAL_APPOINTMENT': {
+        if (archived) {
+          await transaction.trialAppointment.updateMany({
+            data: {
+              cancelledAt: this.now(),
+              status: 'CANCELLED',
+              supersededAt: this.now(),
+              version: { increment: 1 },
+            },
+            where: { id: change.entityId },
+          });
+          return;
+        }
+        const data = {
+          cancelledAt: optionalDate(payload.cancelledAt),
+          externalLeadId: requiredString(payload, 'externalLeadId'),
+          groupId: requiredString(payload, 'groupId'),
+          lessonId: requiredString(payload, 'lessonId'),
+          outcome: optionalEnumValue(payload.outcome, [
+            'PURCHASED',
+            'THINKING',
+            'DECLINED',
+            'NO_SHOW',
+          ] as const),
+          status: requiredEnumValue(payload.status, ['BOOKED', 'CANCELLED'] as const),
+          studentId: nullableString(payload.studentId),
+          supersededAt: optionalDate(payload.supersededAt),
+          updatedAt: requiredDate(payload, 'updatedAt'),
+          version: positiveInteger(payload.version),
+        };
+        await transaction.trialAppointment.upsert({
+          create: {
+            createdAt: requiredDate(payload, 'createdAt'),
+            createdByUserId: ownerId,
+            id: change.entityId,
+            ...data,
+          },
+          update: data,
+          where: { id: change.entityId },
         });
         break;
       }
@@ -5972,6 +6169,25 @@ export class IntegrationService {
               markedAt: row.markedAt.toISOString(),
               status: row.status,
               studentId: row.studentId,
+            }
+          : { id: entityId, missing: true };
+      }
+      case 'TRIAL_APPOINTMENT': {
+        const row = await this.database.trialAppointment.findUnique({ where: { id: entityId } });
+        return row
+          ? {
+              cancelledAt: iso(row.cancelledAt),
+              createdAt: row.createdAt.toISOString(),
+              externalLeadId: row.externalLeadId,
+              groupId: row.groupId,
+              id: row.id,
+              lessonId: row.lessonId,
+              outcome: row.outcome,
+              status: row.status,
+              studentId: row.studentId,
+              supersededAt: iso(row.supersededAt),
+              updatedAt: row.updatedAt.toISOString(),
+              version: row.version,
             }
           : { id: entityId, missing: true };
       }

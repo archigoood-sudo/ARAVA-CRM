@@ -69,6 +69,8 @@ async function bootstrap(): Promise<void> {
       undefined,
       undefined,
       (token) => backups.createManualBackup(token),
+      (entityType) =>
+        getMainWindow()?.webContents.send(IPC_CHANNELS.integrationDataChanged, entityType),
     ),
   );
   await integration.initialize();

@@ -9,6 +9,7 @@ import { GlobalSearch } from '../components/global-search';
 import { IntegrationStatusIndicator } from '../components/integration-status-indicator';
 import { t } from '@arava/shared';
 import { getDesktopApi } from '../lib/desktop-api';
+import { invalidateTrialCaches } from '../lib/operational-cache';
 import { getSessionToken, useAuthStore } from '../stores/auth-store';
 
 const pageTitles: Record<string, { eyebrow: string; title: string }> = {
@@ -37,6 +38,12 @@ export function AppLayout() {
       : location.pathname.startsWith('/trainers/')
         ? { eyebrow: 'Команда ARAVA', title: 'Профиль тренера' }
         : (pageTitles[location.pathname] ?? pageTitles['/dashboard']);
+
+  useEffect(() => {
+    return getDesktopApi().integration.onDataChanged((entityType) => {
+      if (entityType === 'TRIAL_APPOINTMENT') void invalidateTrialCaches(queryClient);
+    });
+  }, [queryClient]);
 
   useEffect(() => {
     if (!user || user.role === 'COACH') return;
