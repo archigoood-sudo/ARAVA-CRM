@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
-import type { AravaDesktopApi } from '@arava/shared';
+import type { AravaDesktopApi, ChatSummary } from '@arava/shared';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
 
@@ -76,7 +76,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
   let recoveryMode = false;
   const receivedChatMessages: string[] = [];
   const receivedChatImages: string[] = [];
-  const chat = {
+  const chat: ChatSummary = {
     branchId: null,
     crmGroupId: null,
     id: 'private-e2e',
@@ -214,6 +214,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       return;
     }
     if (request.url?.startsWith('/api/integration/v1/chats/private-e2e/read')) {
+      chat.unreadCount = 0;
       respond(response, { ok: true });
       return;
     }
@@ -554,9 +555,29 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     conflictGroupId = accessFixture.group.id;
     conflictLessonAId = accessFixture.lessonA.id;
     conflictLessonBId = accessFixture.lessonB.id;
+    chat.branchId = accessFixture.student.branchId;
+    chat.linkedStudents = [
+      {
+        branchId: accessFixture.student.branchId,
+        firstName: accessFixture.student.firstName,
+        lastName: accessFixture.student.lastName,
+        studentId: accessFixture.student.id,
+      },
+    ];
     await page.evaluate((studentId) => {
       window.location.hash = `#/students/${studentId}`;
     }, accessFixture.student.id);
+    const communication = page.getByTestId('student-communication');
+    await expect(communication.getByText('1 непрочитанное', { exact: true })).toBeVisible();
+    await expect(communication.getByText('Сообщение клиента', { exact: true })).toBeVisible();
+    await expect(communication.getByText(/Клиент/u)).toBeVisible();
+    await communication.getByRole('link', { name: 'Написать' }).click();
+    await expect(page).toHaveURL(/\/chats\?conversationId=private-e2e/u);
+    await expect(page.getByRole('heading', { level: 2, name: 'Чаты' })).toBeVisible();
+    await expect(page.getByText('Анна Клиент', { exact: true }).first()).toBeVisible();
+    await page.getByRole('link', { name: 'Вернуться к ученику' }).click();
+    await expect(page).toHaveURL(new RegExp(`/students/${accessFixture.student.id}$`, 'u'));
+    await expect(page.getByTestId('student-communication')).not.toContainText('непрочитанное');
     const accessCard = page.getByTestId('client-web-access');
     await expect(accessCard.getByText('Доступ не выдан', { exact: true })).toBeVisible();
     await accessCard.getByRole('button', { name: 'Выдать доступ' }).click();

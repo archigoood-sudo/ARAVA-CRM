@@ -6,6 +6,7 @@ import type {
   ChatMessagePage,
   ChatSendInput,
   ChatSummary,
+  StudentChatSummary,
 } from '@arava/shared';
 
 import type { DatabaseClient } from './index';
@@ -125,6 +126,68 @@ export class ChatService {
     };
   }
 
+  async studentSummary(token: string, studentId: string): Promise<StudentChatSummary> {
+    const actor = await this.application.authenticate(token);
+    await this.application.getStudent(token, studentId);
+    if (actor.role === 'COACH') return emptyStudentSummary('INACCESSIBLE');
+
+    let conversations: ChatSummary[];
+    try {
+      const remote = await this.integration.listRemoteChats(this.context(actor), {
+        filter: 'PRIVATE_ADMIN',
+      });
+      conversations = [];
+      for (const conversation of remote.conversations) {
+        if (
+          conversation.type === 'PRIVATE_ADMIN' &&
+          conversation.linkedStudents.some((student) => student.studentId === studentId) &&
+          (await this.canAccess(actor, conversation))
+        ) {
+          conversations.push(conversation);
+          this.remember(actor, conversation);
+        }
+      }
+    } catch {
+      return emptyStudentSummary('OFFLINE');
+    }
+
+    if (conversations.length === 0) return emptyStudentSummary('NO_CHAT');
+    if (conversations.length > 1) return emptyStudentSummary('AMBIGUOUS');
+
+    const conversation = conversations[0];
+    if (!conversation) return emptyStudentSummary('NO_CHAT');
+    let latest: ChatMessage | undefined;
+    try {
+      const page = await this.integration.getRemoteChatMessages(
+        this.context(actor),
+        conversation.id,
+      );
+      await this.assertAccess(actor, page.conversation);
+      latest = page.messages
+        .filter((message) => message.body.trim() || message.attachments.length)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+    } catch {
+      // The list summary remains useful if only message history is temporarily unavailable.
+    }
+
+    const fallbackPreview = safeMessagePreview(conversation.lastMessage ?? '');
+    return {
+      canOpen: true,
+      conversationId: conversation.id,
+      ...(latest?.createdAt || conversation.lastMessageAt
+        ? { lastMessageAt: latest?.createdAt ?? conversation.lastMessageAt ?? undefined }
+        : {}),
+      ...(latest ? { lastMessageAuthor: messageAuthor(latest.senderType) } : {}),
+      ...(latest
+        ? { lastMessagePreview: messagePreview(latest) }
+        : fallbackPreview
+          ? { lastMessagePreview: fallbackPreview }
+          : {}),
+      state: 'AVAILABLE',
+      unreadCount: conversation.unreadCount,
+    };
+  }
+
   private context(actor: AuthenticatedUser): CrmChatRequestContext {
     return {
       branchIds: actor.branchIds,
@@ -208,4 +271,31 @@ export class ChatService {
       }
     });
   }
+}
+
+function emptyStudentSummary(state: StudentChatSummary['state']): StudentChatSummary {
+  return { canOpen: false, state, unreadCount: 0 };
+}
+
+function messageAuthor(senderType: string): NonNullable<StudentChatSummary['lastMessageAuthor']> {
+  if (senderType === 'client') return 'CLIENT';
+  if (senderType === 'admin') return 'ADMIN';
+  if (senderType === 'trainer') return 'TRAINER';
+  return 'UNKNOWN';
+}
+
+function messagePreview(message: ChatMessage): string {
+  const text = safeMessagePreview(message.body);
+  if (text) return text;
+  if (message.attachments.length === 1) return 'Фото';
+  if (message.attachments.length > 1) return 'Вложения';
+  return '';
+}
+
+function safeMessagePreview(value: string): string {
+  const plain = value
+    .replace(/<[^>]*>/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return plain.length > 140 ? `${plain.slice(0, 137).trimEnd()}…` : plain;
 }

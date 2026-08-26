@@ -298,6 +298,7 @@ export const IPC_CHANNELS = {
   chatMessages: 'chat:messages',
   chatRead: 'chat:read',
   chatSend: 'chat:send',
+  chatStudentSummary: 'chat:student-summary',
   publicationArchive: 'publication:archive',
   publicationCreate: 'publication:create',
   publicationList: 'publication:list',
@@ -2687,6 +2688,19 @@ export interface ChatSummary {
   updatedAt: string;
 }
 
+export type StudentChatSummaryState =
+  'AMBIGUOUS' | 'AVAILABLE' | 'INACCESSIBLE' | 'NO_CHAT' | 'OFFLINE';
+
+export interface StudentChatSummary {
+  canOpen: boolean;
+  conversationId?: string | undefined;
+  lastMessageAt?: string | undefined;
+  lastMessageAuthor?: 'ADMIN' | 'CLIENT' | 'TRAINER' | 'UNKNOWN' | undefined;
+  lastMessagePreview?: string | undefined;
+  state: StudentChatSummaryState;
+  unreadCount: number;
+}
+
 export interface ChatListQuery {
   filter?: ChatFilter | undefined;
   search?: string | undefined;
@@ -2885,6 +2899,7 @@ export interface AravaDesktopApi {
     messages: (token: string, conversationId: string, before?: string) => Promise<ChatMessagePage>;
     read: (token: string, conversationId: string) => Promise<void>;
     send: (token: string, conversationId: string, input: ChatSendInput) => Promise<ChatMessage>;
+    studentSummary: (token: string, studentId: string) => Promise<StudentChatSummary>;
   };
   publications: {
     archive: (token: string, id: string) => Promise<PublicationSummary>;

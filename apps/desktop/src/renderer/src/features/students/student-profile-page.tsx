@@ -64,6 +64,7 @@ import { ContactDialog } from './contact-dialog';
 import { ClientWebAccessCard } from './client-web-access-card';
 import { StudentDialog } from './student-dialog';
 import { StudentBulkDialog } from './student-bulk-dialog';
+import { StudentCommunicationCard } from './student-communication-card';
 import { StudentFinance } from '../subscriptions/student-finance';
 import { StudentCard } from '../cards/student-card';
 
@@ -87,6 +88,7 @@ export function StudentProfilePage() {
   const openedByCard = searchParameters.get('openedByCard') === '1';
   const user = useAuthStore((state) => state.user);
   const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const accessKey = `${user?.id ?? ''}:${user?.role ?? ''}:${[...(user?.branchIds ?? [])].sort().join(',')}`;
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [studentDialog, setStudentDialog] = useState(false);
@@ -401,6 +403,14 @@ export function StudentProfilePage() {
             </div>
           </CardContent>
         </Card>
+      ) : null}
+
+      {profile.access === 'ADMIN' ? (
+        <StudentCommunicationCard
+          accessKey={accessKey}
+          attentionItems={profile.attentionItems}
+          studentId={studentId}
+        />
       ) : null}
 
       <section className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">

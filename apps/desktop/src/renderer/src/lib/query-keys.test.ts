@@ -26,5 +26,8 @@ describe('trainer profile query isolation', () => {
     expect(queryKeys.chatMessages(owner, 'private-a')).not.toEqual(
       queryKeys.chatMessages(admin, 'private-a'),
     );
+    expect(queryKeys.studentCommunication(owner, 'student-a')).not.toEqual(
+      queryKeys.studentCommunication(coach, 'student-a'),
+    );
   });
 });

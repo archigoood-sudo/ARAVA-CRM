@@ -538,13 +538,27 @@ describe('Electron IPC boundary', () => {
       currentPassword: INITIAL_OWNER_PASSWORD,
       newPassword: 'Owner!ChatIpc2026',
     });
+    const branch = await service.createBranch(owner.token, { name: 'Чат IPC' });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Чатова',
+      status: 'ACTIVE',
+    });
     const conversation = {
-      branchId: null,
+      branchId: branch.id,
       crmGroupId: null,
       id: 'private-ipc',
       lastMessage: 'Здравствуйте',
       lastMessageAt: '2026-08-18T12:00:00.000Z',
-      linkedStudents: [],
+      linkedStudents: [
+        {
+          branchId: branch.id,
+          firstName: student.firstName,
+          lastName: student.lastName,
+          studentId: student.id,
+        },
+      ],
       subtitle: 'Личный чат',
       title: 'Клиент',
       type: 'PRIVATE_ADMIN' as const,
@@ -597,6 +611,14 @@ describe('Electron IPC boundary', () => {
     await expect(
       handlers[IPC_CHANNELS.chatImage]?.(owner.token, conversation.id, 'image-one'),
     ).resolves.toEqual({ attachmentId: 'image-one', dataUrl: 'data:image/png;base64,AQID' });
+    await expect(
+      handlers[IPC_CHANNELS.chatStudentSummary]?.(owner.token, student.id),
+    ).resolves.toMatchObject({
+      canOpen: true,
+      conversationId: conversation.id,
+      state: 'AVAILABLE',
+      unreadCount: 1,
+    });
   });
 
   it('validates secure user, session, and owner recovery IPC operations', async () => {

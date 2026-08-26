@@ -129,7 +129,7 @@ export function ClientWebAccessCard({ student }: { student: StudentDetail }) {
   const busy = issue.isPending || reissue.isPending || link.isPending || revoke.isPending;
   return (
     <>
-      <Card className="mt-5" data-testid="client-web-access">
+      <Card className="mt-5" data-testid="client-web-access" id="client-web-access">
         <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
           <div>
             <CardTitle className="flex items-center gap-2">

@@ -20,6 +20,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
+import { safeChatReturn } from '../students/student-communication-model';
 
 const filters: { id: ChatFilter; label: string }[] = [
   { id: 'ALL', label: 'Все' },
@@ -36,6 +37,7 @@ export function ChatsPage() {
   const [search, setSearch] = useState('');
   const [searchParameters] = useSearchParams();
   const [selectedId, setSelectedId] = useState(searchParameters.get('conversationId') ?? '');
+  const returnTo = safeChatReturn(searchParameters.get('returnTo'));
   const query = useMemo(() => ({ filter, search: search.trim() || undefined }), [filter, search]);
   const chats = useQuery({
     queryFn: () => getDesktopApi().chats.list(getSessionToken(), query),
@@ -60,6 +62,10 @@ export function ChatsPage() {
     window.addEventListener('focus', refresh);
     return () => window.removeEventListener('focus', refresh);
   }, [accessKey, client]);
+  useEffect(() => {
+    if (chats.dataUpdatedAt)
+      void client.invalidateQueries({ queryKey: ['student-communication', accessKey] });
+  }, [accessKey, chats.dataUpdatedAt, client]);
 
   return (
     <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col p-9 pb-8">
@@ -68,6 +74,14 @@ export function ChatsPage() {
         eyebrow="ARAVA ECOSYSTEM"
         title="Чаты"
       />
+      {returnTo ? (
+        <Link
+          className="mt-3 inline-flex w-fit items-center text-sm font-semibold text-muted-foreground hover:text-foreground"
+          to={returnTo}
+        >
+          ← Вернуться к ученику
+        </Link>
+      ) : null}
       <Card className="mt-6 grid min-h-0 flex-1 grid-cols-[360px_minmax(0,1fr)] overflow-hidden p-0">
         <aside className="flex min-h-0 flex-col border-r border-border bg-muted/20">
           <div className="space-y-3 border-b border-border p-4">
@@ -196,7 +210,12 @@ function ConversationView({
   });
   const read = useMutation({
     mutationFn: () => getDesktopApi().chats.read(getSessionToken(), conversation.id),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['chats', accessKey] }),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['chats', accessKey] }),
+        client.invalidateQueries({ queryKey: ['student-communication', accessKey] }),
+      ]);
+    },
   });
   useEffect(() => {
     read.mutate();
@@ -217,6 +236,7 @@ function ConversationView({
         queryKey: queryKeys.chatMessages(accessKey, conversation.id),
       });
       void client.invalidateQueries({ queryKey: ['chats', accessKey] });
+      void client.invalidateQueries({ queryKey: ['student-communication', accessKey] });
     },
   });
   const allMessages = [...(messages.data?.pages ?? [])].reverse().flatMap((page) => page.messages);

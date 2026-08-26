@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatListResult, ChatMessagePage, ChatSummary } from '@arava/shared';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 import { ChatService } from './chat-service';
 import {
@@ -164,6 +164,170 @@ describe('ChatService', () => {
       expect.objectContaining({ body: 'Ожидает отправки', status: 'PENDING' }),
     ]);
   });
+
+  it('returns one exact, safe student private-chat summary without N+1 requests', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Связь' });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Связная',
+      status: 'ACTIVE',
+    });
+    const conversation = summary('private-student', 'PRIVATE_ADMIN', null, branch.id);
+    conversation.linkedStudents = [
+      {
+        branchId: branch.id,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        studentId: student.id,
+      },
+    ];
+    conversation.lastMessage = 'Старый preview';
+    conversation.lastMessageAt = '2026-08-18T12:00:00.000Z';
+    const integration = mockIntegration([conversation]);
+    integration.getRemoteChatMessages.mockResolvedValue({
+      conversation,
+      hasMore: false,
+      messages: [
+        {
+          attachments: [],
+          body: '',
+          createdAt: '2026-08-19T12:00:00.000Z',
+          id: 'deleted-message',
+          senderAccountId: 'client',
+          senderName: 'Клиент',
+          senderRole: 'CLIENT',
+          senderType: 'client',
+          status: 'SENT',
+        },
+        {
+          attachments: [],
+          body: '<b>Подскажите</b>   время занятия?',
+          createdAt: '2026-08-18T13:00:00.000Z',
+          id: 'visible-message',
+          senderAccountId: 'client',
+          senderName: 'Клиент',
+          senderRole: 'CLIENT',
+          senderType: 'client',
+          status: 'SENT',
+        },
+      ],
+      nextCursor: null,
+    });
+    const service = new ChatService(database, application, integration);
+
+    await expect(service.studentSummary(ownerToken, student.id)).resolves.toEqual({
+      canOpen: true,
+      conversationId: conversation.id,
+      lastMessageAt: '2026-08-18T13:00:00.000Z',
+      lastMessageAuthor: 'CLIENT',
+      lastMessagePreview: 'Подскажите время занятия?',
+      state: 'AVAILABLE',
+      unreadCount: 1,
+    });
+    expect(integration.listRemoteChats.mock.calls).toHaveLength(1);
+    expect(integration.getRemoteChatMessages.mock.calls).toHaveLength(1);
+  });
+
+  it('handles no chat, attachment preview, ambiguity, offline, and coach privacy safely', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Контекст' });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Ирина',
+      lastName: 'Контекстова',
+      status: 'ACTIVE',
+    });
+    const coach = await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'communication-coach@arava.local',
+      fullName: 'Тренер Контекст',
+      password: 'Coach!Communication2026',
+      role: 'COACH',
+    });
+    const coachSession = await application.login({
+      email: coach.email,
+      password: 'Coach!Communication2026',
+    });
+    await application.changePassword(coachSession.token, {
+      currentPassword: 'Coach!Communication2026',
+      newPassword: 'Coach!CommunicationChanged2026',
+    });
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 12,
+      coachId: coach.id,
+      direction: 'Хип-хоп',
+      name: 'Группа контекста',
+      status: 'ACTIVE',
+    });
+    await studio.addEnrollment(ownerToken, group.id, {
+      joinedAt: '2026-08-01',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: student.id,
+    });
+
+    const noChatIntegration = mockIntegration([]);
+    const noChat = new ChatService(database, application, noChatIntegration);
+    await expect(noChat.studentSummary(ownerToken, student.id)).resolves.toMatchObject({
+      state: 'NO_CHAT',
+    });
+    await expect(noChat.studentSummary(coachSession.token, student.id)).resolves.toEqual({
+      canOpen: false,
+      state: 'INACCESSIBLE',
+      unreadCount: 0,
+    });
+
+    const first = summary('private-first', 'PRIVATE_ADMIN', null, branch.id);
+    const second = summary('private-second', 'PRIVATE_ADMIN', null, branch.id);
+    for (const conversation of [first, second]) {
+      conversation.linkedStudents = [
+        {
+          branchId: branch.id,
+          firstName: student.firstName,
+          lastName: student.lastName,
+          studentId: student.id,
+        },
+      ];
+    }
+    const ambiguous = new ChatService(database, application, mockIntegration([first, second]));
+    await expect(ambiguous.studentSummary(ownerToken, student.id)).resolves.toMatchObject({
+      state: 'AMBIGUOUS',
+    });
+
+    const attachmentIntegration = mockIntegration([first]);
+    attachmentIntegration.getRemoteChatMessages.mockResolvedValue({
+      conversation: first,
+      hasMore: false,
+      messages: [
+        {
+          attachments: [{ id: 'photo', mimeType: 'image/jpeg' }],
+          body: '',
+          createdAt: '2026-08-20T12:00:00.000Z',
+          id: 'photo-message',
+          senderAccountId: null,
+          senderName: 'Администратор',
+          senderRole: 'ADMIN',
+          senderType: 'admin',
+          status: 'SENT',
+        },
+      ],
+      nextCursor: null,
+    });
+    await expect(
+      new ChatService(database, application, attachmentIntegration).studentSummary(
+        ownerToken,
+        student.id,
+      ),
+    ).resolves.toMatchObject({ lastMessageAuthor: 'ADMIN', lastMessagePreview: 'Фото' });
+
+    noChatIntegration.listRemoteChats.mockRejectedValue(new Error('offline'));
+    await expect(noChat.studentSummary(ownerToken, student.id)).resolves.toEqual({
+      canOpen: false,
+      state: 'OFFLINE',
+      unreadCount: 0,
+    });
+  });
 });
 
 function summary(
@@ -189,7 +353,12 @@ function summary(
   };
 }
 
-function mockIntegration(conversations: ChatSummary[]): IntegrationService {
+type MockChatIntegration = IntegrationService & {
+  getRemoteChatMessages: Mock;
+  listRemoteChats: Mock;
+};
+
+function mockIntegration(conversations: ChatSummary[]): MockChatIntegration {
   const list: ChatListResult = {
     conversations,
     serverTimestamp: '2026-08-18T12:00:00.000Z',
@@ -218,5 +387,5 @@ function mockIntegration(conversations: ChatSummary[]): IntegrationService {
     listRemoteChats: vi.fn(() => Promise.resolve(list)),
     markRemoteChatRead: vi.fn(() => Promise.resolve()),
     processPending: vi.fn(() => Promise.resolve()),
-  } as unknown as IntegrationService;
+  } as unknown as MockChatIntegration;
 }

@@ -51,6 +51,7 @@ const desktopApi: AravaDesktopApi = {
     },
     send: (token, conversationId, input) =>
       invoke(IPC_CHANNELS.chatSend, token, conversationId, input),
+    studentSummary: (token, studentId) => invoke(IPC_CHANNELS.chatStudentSummary, token, studentId),
   },
   leads: {
     assignGroup: (token, id, input) => invoke(IPC_CHANNELS.leadAssignGroup, token, id, input),

@@ -385,6 +385,11 @@ export function createIpcHandlers(
         identifierSchema.parse(unsafeConversationId),
         chatSendInputSchema.parse(unsafeInput),
       ),
+    [IPC_CHANNELS.chatStudentSummary]: (unsafeToken, unsafeStudentId) =>
+      requireChats().studentSummary(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+      ),
 
     [IPC_CHANNELS.leadList]: (unsafeToken, unsafeQuery) =>
       requireLeads().list(
