@@ -71,15 +71,16 @@ describe('Group roster workspace', () => {
       name: 'Целевая группа',
       status: 'RECRUITING',
     });
-    const students = await Promise.all(
-      [
-        ['Анна', 'Активная'],
-        ['Татьяна', 'Пробная'],
-        ['Фёдор', 'Замороженный'],
-        ['Буду', 'Позже'],
-        ['Бывшая', 'Участница'],
-      ].map(([firstName, lastName]) =>
-        application.createStudent(ownerToken, {
+    const students = [];
+    for (const [firstName, lastName] of [
+      ['Анна', 'Активная'],
+      ['Татьяна', 'Пробная'],
+      ['Фёдор', 'Замороженный'],
+      ['Буду', 'Позже'],
+      ['Бывшая', 'Участница'],
+    ])
+      students.push(
+        await application.createStudent(ownerToken, {
           birthDate: '2016-08-20',
           branchId: branch.id,
           firstName: firstName ?? '',
@@ -87,8 +88,7 @@ describe('Group roster workspace', () => {
           phone: '+79991112233',
           status: 'ACTIVE',
         }),
-      ),
-    );
+      );
     const [current, trial, frozen, future, former] = students;
     if (!current || !trial || !frozen || !future || !former)
       throw new Error('Не созданы тестовые ученики.');
