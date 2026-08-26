@@ -52,7 +52,10 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { localDateInputValue } from '../../lib/local-date';
-import { invalidateStudentIdentityCaches } from '../../lib/operational-cache';
+import {
+  invalidateStudentIdentityCaches,
+  invalidateTrialCaches,
+} from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { ContactDialog } from './contact-dialog';
@@ -164,19 +167,11 @@ export function StudentProfilePage() {
     onSuccess: async () => {
       setTrialDialog(false);
       setTrialStartsAt('');
-      await Promise.all([
-        trials.refetch(),
-        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-        queryClient.invalidateQueries({ queryKey: ['attention'] }),
-      ]);
+      await invalidateTrialCaches(queryClient);
     },
   });
   const refreshTrials = async () => {
-    await Promise.all([
-      trials.refetch(),
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-      queryClient.invalidateQueries({ queryKey: ['attention'] }),
-    ]);
+    await invalidateTrialCaches(queryClient);
   };
   const cancelTrial = useMutation({
     mutationFn: (trial: TrialAppointmentSummary) =>
@@ -472,6 +467,13 @@ export function StudentProfilePage() {
                           variant="ghost"
                         >
                           Отменить запись
+                        </Button>
+                      </div>
+                    ) : null}
+                    {trial.state === 'MISSED' || trial.state === 'CANCELLED' ? (
+                      <div className="mt-3">
+                        <Button onClick={() => setTrialDialog(true)} size="small" variant="outline">
+                          {trial.state === 'MISSED' ? 'Перенести пробное' : 'Выбрать новую дату'}
                         </Button>
                       </div>
                     ) : null}

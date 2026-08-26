@@ -2501,6 +2501,7 @@ export interface TrialOccurrenceSummary {
 export interface TrialListQuery {
   dateFrom?: string | undefined;
   dateTo?: string | undefined;
+  groupId?: string | undefined;
   includeFollowUp?: boolean | undefined;
   includeHistory?: boolean | undefined;
   leadId?: string | undefined;

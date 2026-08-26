@@ -293,6 +293,40 @@ test('записывает заявку на пробное и автомати�
     await page.getByRole('link', { name: 'Главная' }).click();
     await page.getByRole('button', { name: 'Обновить рабочий день' }).click();
     await expect(page.getByText('Связаться после пробного: Иванова Мария')).toHaveCount(0);
+    const completedFlow = await page.evaluate(
+      async ({ groupId: currentGroupId, studentId: currentStudentId }) => {
+        const stored = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+          state?: { token?: string };
+        };
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        const token = stored.state?.token ?? '';
+        const [profile, trials, roster] = await Promise.all([
+          api.students.getProfile(token, currentStudentId),
+          api.trials.list(token, { studentId: currentStudentId }),
+          api.groups.getRoster(token, currentGroupId, new Date().toISOString().slice(0, 10)),
+        ]);
+        return {
+          membershipCreatedByConfirmedConversion: roster.members.some(
+            ({ studentId }) => studentId === currentStudentId,
+          ),
+          studentStatus: profile.student.status,
+          trialState: trials[0]?.state,
+        };
+      },
+      { groupId: setup.group.id, studentId },
+    );
+    expect(completedFlow).toEqual({
+      membershipCreatedByConfirmedConversion: true,
+      studentStatus: 'ACTIVE',
+      trialState: 'SUBSCRIPTION_PURCHASED',
+    });
+    await page.getByRole('link', { name: 'Группы' }).click();
+    await page
+      .getByRole('article')
+      .filter({ hasText: 'Пробная группа E2E' })
+      .getByRole('button', { name: 'Действия' })
+      .click();
+    await expect(page.getByText('Иванова Мария', { exact: true })).toBeVisible();
   } finally {
     await closeApplication(application);
     server.closeAllConnections();

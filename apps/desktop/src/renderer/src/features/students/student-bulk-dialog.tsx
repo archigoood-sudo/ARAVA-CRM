@@ -17,6 +17,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { localDateInputValue } from '../../lib/local-date';
 import { getSessionToken } from '../../stores/auth-store';
+import { isStaleBulkPreviewError } from './student-bulk-model';
 
 const actionTitles: Record<StudentBulkAction, string> = {
   ADD_TO_GROUP: 'Добавить в группу',
@@ -189,12 +190,14 @@ export function StudentBulkDialog({
                 );
       onSuccess(result);
     } catch (caught) {
-      setError(
-        getErrorMessage(
-          caught,
-          `Не удалось выполнить действие «${actionTitles[action]}». Изменения не сохранены.`,
-        ),
+      const message = getErrorMessage(
+        caught,
+        `Не удалось выполнить действие «${actionTitles[action]}». Изменения не сохранены.`,
       );
+      if (isStaleBulkPreviewError(message)) {
+        setPreview(undefined);
+        setError('Данные изменились. Проверьте список ещё раз.');
+      } else setError(message);
     } finally {
       setPending(false);
     }

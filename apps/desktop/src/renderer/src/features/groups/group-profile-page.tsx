@@ -44,6 +44,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { StudentBulkDialog } from '../students/student-bulk-dialog';
 import { GroupAddStudentsDialog } from './group-add-students-dialog';
+import { activeTrialGuests } from './group-profile-model';
 
 type RosterFilter =
   | 'ACTIVE'
@@ -152,6 +153,7 @@ export function GroupProfilePage() {
       return getDesktopApi().trials.list(getSessionToken(), {
         dateFrom: from.toISOString(),
         dateTo: to.toISOString(),
+        groupId,
       });
     },
     queryKey: queryKeys.trials(accessKey, { groupId, upcoming: true }),
@@ -211,6 +213,7 @@ export function GroupProfilePage() {
     );
   const detail = group.data;
   const overview = roster.data;
+  const trialGuests = activeTrialGuests(upcomingTrials.data ?? [], overview.members);
   const selectedStudents = bulkAction === 'ADD_TO_GROUP' ? addStudentIds : [...selectedIds];
   const roomNames = [...new Set(detail.schedules.flatMap(({ room }) => (room ? [room] : [])))];
 
@@ -274,29 +277,25 @@ export function GroupProfilePage() {
         </div>
       ) : null}
 
-      {(upcomingTrials.data ?? []).some(
-        (trial) => trial.groupId === groupId && trial.state !== 'CANCELLED',
-      ) ? (
+      {trialGuests.length ? (
         <Card className="mb-5 p-5">
           <h2 className="text-lg font-semibold">Пробные / ближайшие</h2>
           <div className="mt-3 flex flex-wrap gap-2">
-            {(upcomingTrials.data ?? [])
-              .filter((trial) => trial.groupId === groupId && trial.state !== 'CANCELLED')
-              .map((trial) => (
-                <Link
-                  className="rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted"
-                  key={trial.id}
-                  to={`/attendance/${trial.lessonId}`}
-                >
-                  <b>{trial.leadName}</b> ·{' '}
-                  {formatDate(trial.startsAt, {
-                    day: '2-digit',
-                    month: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </Link>
-              ))}
+            {trialGuests.map((trial) => (
+              <Link
+                className="rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted"
+                key={trial.id}
+                to={`/attendance/${trial.lessonId}`}
+              >
+                <b>{trial.leadName}</b> ·{' '}
+                {formatDate(trial.startsAt, {
+                  day: '2-digit',
+                  month: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Link>
+            ))}
           </div>
         </Card>
       ) : null}
@@ -307,8 +306,8 @@ export function GroupProfilePage() {
             <div className="mr-auto">
               <h2 className="text-xl font-semibold">Состав</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Активных: {overview.activeCount} · пробных: {overview.trialCount} · заморожены:{' '}
-                {overview.frozenCount}
+                Активных: {overview.activeCount} · пробных:{' '}
+                {overview.trialCount + trialGuests.length} · заморожены: {overview.frozenCount}
               </p>
             </div>
             <Button

@@ -28,11 +28,25 @@ export async function invalidateAttendanceCaches(client: QueryClient): Promise<v
     client.invalidateQueries({ queryKey: ['students', 'finance'] }),
     client.invalidateQueries({ queryKey: ['student-profile'] }),
     client.invalidateQueries({ queryKey: ['groups', 'detail'] }),
+    client.invalidateQueries({ queryKey: ['groups', 'roster'] }),
     client.invalidateQueries({ queryKey: ['trainers', 'profile'] }),
     client.invalidateQueries({ queryKey: ['payroll'] }),
     client.invalidateQueries({ queryKey: ['dashboard'] }),
     client.invalidateQueries({ queryKey: ['attention'] }),
     client.invalidateQueries({ queryKey: ['trials'] }),
+  ]);
+}
+
+export async function invalidateTrialCaches(client: QueryClient): Promise<void> {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: ['trials'] }),
+    client.invalidateQueries({ queryKey: ['trial-occurrences'] }),
+    client.invalidateQueries({ queryKey: ['attendance'] }),
+    client.invalidateQueries({ queryKey: ['groups', 'detail'] }),
+    client.invalidateQueries({ queryKey: ['groups', 'roster'] }),
+    client.invalidateQueries({ queryKey: ['student-profile'] }),
+    client.invalidateQueries({ queryKey: ['dashboard'] }),
+    client.invalidateQueries({ queryKey: ['attention'] }),
   ]);
 }
 

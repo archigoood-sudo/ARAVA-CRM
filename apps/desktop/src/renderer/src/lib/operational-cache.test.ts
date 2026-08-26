@@ -6,6 +6,7 @@ import {
   invalidateFinanceCaches,
   invalidateLessonCaches,
   invalidateStudentIdentityCaches,
+  invalidateTrialCaches,
 } from './operational-cache';
 
 function clientWith(keys: readonly (readonly unknown[])[]): QueryClient {
@@ -47,6 +48,7 @@ describe('operational cache invalidation', () => {
       ['attendance', 'today', '2026-08-23'],
       ['student-profile', 'owner', 'student-1'],
       ['groups', 'detail', 'group-1'],
+      ['groups', 'roster', 'group-1'],
       ['trainers', 'profile', 'coach-1'],
       ['payroll', 'period'],
       ['dashboard', 'stats'],
@@ -55,6 +57,24 @@ describe('operational cache invalidation', () => {
     const client = clientWith(keys);
 
     await invalidateAttendanceCaches(client);
+
+    for (const key of keys) expect(invalidated(client, key)).toBe(true);
+  });
+
+  it('refreshes every trial consumer after scheduling, cancellation, or an outcome', async () => {
+    const keys = [
+      ['trials', 'student-1'],
+      ['trial-occurrences', 'group-1'],
+      ['attendance', 'lesson-1'],
+      ['groups', 'detail', 'group-1'],
+      ['groups', 'roster', 'group-1'],
+      ['student-profile', 'owner', 'student-1'],
+      ['dashboard', 'workspace'],
+      ['attention', 'summary'],
+    ] as const;
+    const client = clientWith(keys);
+
+    await invalidateTrialCaches(client);
 
     for (const key of keys) expect(invalidated(client, key)).toBe(true);
   });

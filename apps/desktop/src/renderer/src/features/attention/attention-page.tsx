@@ -41,6 +41,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { WebActionsSection } from './web-actions-section';
+import { combinedAttentionCount } from './attention-model';
 import { leadAttentionKey } from '../leads/lead-model';
 
 const categories: { icon: typeof BellRing; label: string; value: AttentionCategory }[] = [
@@ -128,6 +129,10 @@ export function AttentionPage() {
   const overdueLeads = useMemo(
     () => newLeads.data?.leads.filter((lead) => isLeadResponseOverdue(lead)) ?? [],
     [newLeads.data?.leads],
+  );
+  const allTaskCount = combinedAttentionCount(
+    summary.data?.total ?? items.data?.length ?? 0,
+    overdueLeads.length,
   );
 
   if (user?.role === 'COACH') return <Navigate replace to="/dashboard" />;
@@ -260,7 +265,7 @@ export function AttentionPage() {
         </Card>
       ) : null}
 
-      {items.data?.length ? (
+      {items.data?.length || overdueLeads.length ? (
         <div className="mt-5 grid gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="h-fit rounded-3xl border border-border bg-surface p-3 shadow-subtle">
             <button
@@ -270,7 +275,7 @@ export function AttentionPage() {
             >
               Все задачи{' '}
               <Badge className={category === '' ? 'bg-white/10 text-white' : ''}>
-                {summary.data?.total ?? items.data.length}
+                {allTaskCount}
               </Badge>
             </button>
             {categories.map(({ icon: Icon, label, value }) => {
@@ -294,7 +299,7 @@ export function AttentionPage() {
             })}
           </aside>
           <section aria-label="Список задач" className="space-y-3">
-            {items.data.map((item) => (
+            {(items.data ?? []).map((item) => (
               <AttentionCard
                 action={
                   <Button

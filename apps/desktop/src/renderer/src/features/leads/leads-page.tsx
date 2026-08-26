@@ -40,6 +40,7 @@ import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
+import { invalidateTrialCaches } from '../../lib/operational-cache';
 import { getErrorMessage } from '../../lib/errors';
 import { invalidateStudentIdentityCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
@@ -151,8 +152,7 @@ export function LeadsPage() {
   });
   const invalidate = async (id?: string) => {
     await client.invalidateQueries({ queryKey: ['leads', accessKey] });
-    await client.invalidateQueries({ queryKey: ['trials'] });
-    await client.invalidateQueries({ queryKey: ['dashboard'] });
+    await invalidateTrialCaches(client);
     if (id) await client.invalidateQueries({ queryKey: queryKeys.lead(id, accessKey) });
   };
   const updateStatus = useMutation({
@@ -187,10 +187,7 @@ export function LeadsPage() {
       setSelectedLessonId('');
       await Promise.all([
         saved.leadId ? invalidate(saved.leadId) : Promise.resolve(),
-        client.invalidateQueries({ queryKey: ['trials'] }),
-        client.invalidateQueries({ queryKey: ['trial-occurrences'] }),
-        client.invalidateQueries({ queryKey: ['dashboard'] }),
-        client.invalidateQueries({ queryKey: ['attention'] }),
+        invalidateTrialCaches(client),
       ]);
     },
   });

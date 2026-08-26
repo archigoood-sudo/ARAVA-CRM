@@ -852,4 +852,120 @@ describe('LeadService safe conversion', () => {
       }),
     ).toBeGreaterThan(0);
   });
+
+  it('derives overdue and no-show states locally without loading unrelated website leads', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Локальные пробные' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 10,
+      direction: 'Джаз',
+      name: 'Локальная группа',
+      status: 'RECRUITING',
+    });
+    const otherGroup = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 10,
+      direction: 'Балет',
+      name: 'Другая группа',
+      status: 'ACTIVE',
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Локальная',
+      status: 'TRIAL',
+    });
+    const startsAt = new Date(Date.now() + 3_600_000);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(startsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    const listRemoteLeads = vi.fn(() => Promise.reject(new Error('offline')));
+    const service = new LeadService(
+      database,
+      application,
+      { listRemoteLeads } as unknown as IntegrationService,
+      studio,
+    );
+    const booked = await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      startsAt: lesson.startsAt,
+      studentId: student.id,
+    });
+    await database.lesson.update({
+      data: {
+        endsAt: new Date(Date.now() - 60_000),
+        startsAt: new Date(Date.now() - 3_660_000),
+      },
+      where: { id: lesson.id },
+    });
+
+    expect(
+      await service.listTrials(ownerToken, { groupId: group.id, studentId: student.id }),
+    ).toEqual([expect.objectContaining({ id: booked.id, state: 'FOLLOW_UP' })]);
+    expect(await service.listTrials(ownerToken, { groupId: otherGroup.id })).toEqual([]);
+    expect(listRemoteLeads).not.toHaveBeenCalled();
+
+    await service.setTrialOutcome(ownerToken, booked.id, {
+      expectedVersion: booked.version ?? 1,
+      outcome: 'NO_SHOW',
+    });
+    expect((await service.listTrials(ownerToken, { studentId: student.id }))[0]?.state).toBe(
+      'MISSED',
+    );
+  });
+
+  it('does not count an enrolled trial subject twice when checking lesson capacity', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Вместимость пробных' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 2,
+      direction: 'Хип-хоп',
+      name: 'Два места',
+      status: 'RECRUITING',
+    });
+    const member = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Участник',
+      lastName: 'Группы',
+      status: 'ACTIVE',
+    });
+    const guest = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Пробный',
+      lastName: 'Гость',
+      status: 'TRIAL',
+    });
+    await database.enrollment.create({
+      data: { groupId: group.id, joinedAt: new Date(), status: 'ACTIVE', studentId: member.id },
+    });
+    const startsAt = new Date(Date.now() + 3_600_000);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(startsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    const service = new LeadService(
+      database,
+      application,
+      { listRemoteLeads: vi.fn() } as unknown as IntegrationService,
+      studio,
+    );
+
+    await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      startsAt: lesson.startsAt,
+      studentId: member.id,
+    });
+    await expect(
+      service.scheduleTrial(ownerToken, {
+        groupId: group.id,
+        startsAt: lesson.startsAt,
+        studentId: guest.id,
+      }),
+    ).resolves.toMatchObject({ studentId: guest.id });
+  });
 });

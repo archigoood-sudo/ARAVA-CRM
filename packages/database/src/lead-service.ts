@@ -230,14 +230,22 @@ export class LeadService {
     }
 
     const subjectKey = lead?.id ?? `student:${student?.id ?? ''}`;
-    const [occupied, trialGuests] = await Promise.all([
-      this.database.enrollment.count({
+    const [occupiedEnrollments, bookedTrials] = await Promise.all([
+      this.database.enrollment.findMany({
+        select: { studentId: true },
         where: { groupId: group.id, leftAt: null, status: { in: ['ACTIVE', 'TRIAL', 'FROZEN'] } },
       }),
-      this.database.trialAppointment.count({
+      this.database.trialAppointment.findMany({
+        select: { externalLeadId: true, studentId: true },
         where: { groupId: group.id, lessonId: lesson.id, status: 'BOOKED', supersededAt: null },
       }),
     ]);
+    const enrolledStudentIds = new Set(occupiedEnrollments.map(({ studentId }) => studentId));
+    const trialGuests = new Set(
+      bookedTrials.flatMap(({ externalLeadId, studentId }) =>
+        studentId && enrolledStudentIds.has(studentId) ? [] : [studentId ?? externalLeadId],
+      ),
+    ).size;
     const alreadyBooked = await this.database.trialAppointment.findUnique({
       where: { externalLeadId_lessonId: { externalLeadId: subjectKey, lessonId: lesson.id } },
     });
@@ -253,7 +261,11 @@ export class LeadService {
           },
         })
       : null;
-    if (!alreadyBooked && !subjectEnrolled && occupied + trialGuests >= group.capacity)
+    if (
+      !alreadyBooked &&
+      !subjectEnrolled &&
+      occupiedEnrollments.length + trialGuests >= group.capacity
+    )
       throw new DomainError('CONFLICT', 'В группе нет свободных мест для пробного занятия.');
 
     const appointment = await this.database.$transaction(async (transaction) => {
@@ -428,7 +440,9 @@ export class LeadService {
       orderBy: { lesson: { startsAt: 'asc' } },
       where: {
         ...(query.includeHistory ? {} : { supersededAt: null }),
+        ...(query.groupId ? { groupId: query.groupId } : {}),
         ...(query.leadId ? { externalLeadId: query.leadId } : {}),
+        ...(query.studentId ? { studentId: query.studentId } : {}),
         ...(branchIds ? { group: { branchId: { in: branchIds } } } : {}),
       },
     });
@@ -449,65 +463,92 @@ export class LeadService {
     const now = new Date();
     const from = query.dateFrom ? new Date(query.dateFrom) : undefined;
     const to = query.dateTo ? new Date(query.dateTo) : undefined;
-    const summaries = await Promise.all(
-      appointments.map(async (appointment): Promise<TrialAppointmentSummary | undefined> => {
-        const lead = leads.get(appointment.externalLeadId);
-        const studentId = appointment.studentId ?? lead?.convertedStudentCrmId;
-        if (!lead && !appointment.student) return undefined;
-        if (query.studentId && studentId !== query.studentId) return undefined;
-        const attendance = studentId
-          ? await this.database.attendance.findUnique({
-              where: { lessonId_studentId: { lessonId: appointment.lessonId, studentId } },
-            })
-          : null;
-        const purchased = studentId
-          ? await this.database.subscription.findFirst({
-              where: {
-                purchasedAt: { gte: appointment.lesson.startsAt },
-                status: { not: 'CANCELLED' },
-                studentId,
-              },
-            })
-          : null;
-        const state = this.trialState({
-          attendanceStatus: attendance?.status,
-          endsAt: appointment.lesson.endsAt,
-          leadStatus: lead?.status,
-          lessonStatus: appointment.lesson.status,
-          now,
-          outcome: appointment.outcome,
-          purchased: Boolean(purchased),
-          status: appointment.status,
-          startsAt: appointment.lesson.startsAt,
-        });
-        const inRange =
-          (!from || appointment.lesson.startsAt >= from) &&
-          (!to || appointment.lesson.startsAt <= to);
-        if (!inRange && !(query.includeFollowUp && state === 'FOLLOW_UP')) return undefined;
-        return {
-          ...(attendance ? { attendanceStatus: attendance.status } : {}),
-          branchId: appointment.group.branchId,
-          branchName: appointment.group.branch.name,
-          endsAt: appointment.lesson.endsAt.toISOString(),
-          groupId: appointment.groupId,
-          groupName: appointment.group.name,
-          id: appointment.id,
-          ...(lead ? { leadId: lead.id } : {}),
-          leadName:
-            lead?.childName ??
-            [appointment.student?.firstName, appointment.student?.lastName]
-              .filter(Boolean)
-              .join(' '),
-          lessonId: appointment.lessonId,
-          lessonStatus: appointment.lesson.status,
-          startsAt: appointment.lesson.startsAt.toISOString(),
-          state,
-          ...(appointment.outcome ? { outcome: appointment.outcome } : {}),
-          version: appointment.version,
-          ...(studentId ? { studentId } : {}),
-        };
+    const studentIds = [
+      ...new Set(
+        appointments.flatMap((appointment) => {
+          const studentId =
+            appointment.studentId ?? leads.get(appointment.externalLeadId)?.convertedStudentCrmId;
+          return studentId ? [studentId] : [];
+        }),
+      ),
+    ];
+    const [attendances, subscriptions] = await Promise.all([
+      this.database.attendance.findMany({
+        where: {
+          OR: appointments.flatMap((appointment) => {
+            const studentId =
+              appointment.studentId ?? leads.get(appointment.externalLeadId)?.convertedStudentCrmId;
+            return studentId ? [{ lessonId: appointment.lessonId, studentId }] : [];
+          }),
+        },
       }),
+      studentIds.length
+        ? this.database.subscription.findMany({
+            select: { purchasedAt: true, studentId: true },
+            where: { status: { not: 'CANCELLED' }, studentId: { in: studentIds } },
+          })
+        : [],
+    ]);
+    const attendanceBySubject = new Map(
+      attendances.map((attendance) => [
+        `${attendance.lessonId}:${attendance.studentId}`,
+        attendance,
+      ]),
     );
+    const subscriptionsByStudent = new Map<string, Date[]>();
+    for (const subscription of subscriptions) {
+      const dates = subscriptionsByStudent.get(subscription.studentId) ?? [];
+      dates.push(subscription.purchasedAt);
+      subscriptionsByStudent.set(subscription.studentId, dates);
+    }
+    const summaries = appointments.map((appointment): TrialAppointmentSummary | undefined => {
+      const lead = leads.get(appointment.externalLeadId);
+      const studentId = appointment.studentId ?? lead?.convertedStudentCrmId;
+      if (!lead && !appointment.student) return undefined;
+      const attendance = studentId
+        ? attendanceBySubject.get(`${appointment.lessonId}:${studentId}`)
+        : undefined;
+      const purchased = studentId
+        ? subscriptionsByStudent
+            .get(studentId)
+            ?.some((purchasedAt) => purchasedAt >= appointment.lesson.startsAt)
+        : false;
+      const state = this.trialState({
+        attendanceStatus: attendance?.status,
+        endsAt: appointment.lesson.endsAt,
+        leadStatus: lead?.status,
+        lessonStatus: appointment.lesson.status,
+        now,
+        outcome: appointment.outcome,
+        purchased: Boolean(purchased),
+        status: appointment.status,
+        startsAt: appointment.lesson.startsAt,
+      });
+      const inRange =
+        (!from || appointment.lesson.startsAt >= from) &&
+        (!to || appointment.lesson.startsAt <= to);
+      if (!inRange && !(query.includeFollowUp && state === 'FOLLOW_UP')) return undefined;
+      return {
+        ...(attendance ? { attendanceStatus: attendance.status } : {}),
+        branchId: appointment.group.branchId,
+        branchName: appointment.group.branch.name,
+        endsAt: appointment.lesson.endsAt.toISOString(),
+        groupId: appointment.groupId,
+        groupName: appointment.group.name,
+        id: appointment.id,
+        ...(lead ? { leadId: lead.id } : {}),
+        leadName:
+          lead?.childName ??
+          [appointment.student?.firstName, appointment.student?.lastName].filter(Boolean).join(' '),
+        lessonId: appointment.lessonId,
+        lessonStatus: appointment.lesson.status,
+        startsAt: appointment.lesson.startsAt.toISOString(),
+        state,
+        ...(appointment.outcome ? { outcome: appointment.outcome } : {}),
+        version: appointment.version,
+        ...(studentId ? { studentId } : {}),
+      };
+    });
     return summaries.filter((item): item is TrialAppointmentSummary => Boolean(item));
   }
 
@@ -524,7 +565,8 @@ export class LeadService {
   }): TrialAppointmentSummary['state'] {
     if (input.status === 'CANCELLED') return 'CANCELLED';
     if (input.outcome === 'PURCHASED') return 'SUBSCRIPTION_PURCHASED';
-    if (input.outcome === 'DECLINED' || input.outcome === 'NO_SHOW') return 'CLOSED';
+    if (input.outcome === 'DECLINED') return 'CLOSED';
+    if (input.outcome === 'NO_SHOW') return 'MISSED';
     if (input.outcome === 'THINKING') return 'FOLLOW_UP';
     if (input.leadStatus === 'REJECTED' || input.leadStatus === 'NOT_RELEVANT') return 'CLOSED';
     if (input.lessonStatus === 'CANCELLED') return 'CANCELLED';
@@ -535,6 +577,7 @@ export class LeadService {
     if (attended) return 'FOLLOW_UP';
     if (['ABSENT', 'EXCUSED'].includes(input.attendanceStatus ?? '')) return 'MISSED';
     if (input.leadStatus === 'NO_ANSWER' && input.startsAt <= input.now) return 'MISSED';
+    if (input.endsAt < input.now) return 'FOLLOW_UP';
     const start = new Date(input.startsAt);
     const today = new Date(input.now);
     start.setHours(0, 0, 0, 0);

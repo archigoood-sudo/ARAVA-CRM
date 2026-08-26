@@ -951,6 +951,7 @@ export const trialOccurrenceQuerySchema: z.ZodType<TrialOccurrenceQuery> = z
 export const trialListQuerySchema: z.ZodType<TrialListQuery> = z.object({
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
+  groupId: optionalIdentifier,
   includeFollowUp: z.boolean().optional(),
   includeHistory: z.boolean().optional(),
   leadId: optionalIdentifier,
