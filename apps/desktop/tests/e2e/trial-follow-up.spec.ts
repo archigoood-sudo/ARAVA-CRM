@@ -251,8 +251,19 @@ test('записывает заявку на пробное и автомати�
       },
       { lessonId: materialized.lessonId, studentId },
     );
+    const trialFinance = await page.evaluate(async (currentStudentId) => {
+      const stored = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      return api.subscriptions.listStudent(stored.state?.token ?? '', currentStudentId);
+    }, studentId);
+    expect(trialFinance.uncoveredDebt).toBe(0);
+    expect(trialFinance.uncoveredAttendances).toEqual([]);
     await page.getByRole('link', { name: 'Главная' }).click();
     await expect(page.getByText('Связаться после пробного: Иванова Мария')).toBeVisible();
+    await page.getByRole('button', { name: 'Оформить абонемент' }).first().click();
+    await expect(page.getByText('Пробные занятия', { exact: true })).toBeVisible();
     await page.evaluate(
       async ({ branchId, studentId: currentStudentId }) => {
         const stored = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
@@ -278,6 +289,8 @@ test('записывает заявку на пробное и автомати�
       },
       { branchId: setup.branch.id, studentId },
     );
+    await page.getByLabel('Закрыть окно').last().click();
+    await page.getByRole('link', { name: 'Главная' }).click();
     await page.getByRole('button', { name: 'Обновить рабочий день' }).click();
     await expect(page.getByText('Связаться после пробного: Иванова Мария')).toHaveCount(0);
   } finally {

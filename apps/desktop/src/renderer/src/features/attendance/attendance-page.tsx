@@ -268,6 +268,9 @@ export function AttendancePage() {
                   {participant.addedToGroupLater ? (
                     <Badge className="mt-2 bg-sky-50 text-sky-700">Добавлен в группу позже</Badge>
                   ) : null}
+                  {participant.isTrial ? (
+                    <Badge className="ml-2 bg-amber-50 text-amber-700">Пробное</Badge>
+                  ) : null}
                 </div>
                 <div className="grid grid-cols-4 gap-2">
                   {operationalStatuses.map(({ active, icon: Icon, label, status }) => (

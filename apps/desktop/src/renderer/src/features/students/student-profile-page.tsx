@@ -8,6 +8,8 @@ import {
   type StudentNoteInput,
   type StudentProfileNote,
   type StudentStatus,
+  type TrialAppointmentSummary,
+  type TrialOutcome,
 } from '@arava/shared';
 import {
   Avatar,
@@ -44,7 +46,7 @@ import {
   UsersRound,
   WalletCards,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -102,6 +104,9 @@ export function StudentProfilePage() {
   );
   const [cardAction, setCardAction] = useState(searchParameters.get('action') === 'card');
   const [error, setError] = useState<string>();
+  const [trialDialog, setTrialDialog] = useState(false);
+  const [trialGroupId, setTrialGroupId] = useState('');
+  const [trialStartsAt, setTrialStartsAt] = useState('');
   const student = useQuery({
     enabled: Boolean(studentId),
     queryFn: () => getDesktopApi().students.getProfile(getSessionToken(), studentId),
@@ -116,6 +121,80 @@ export function StudentProfilePage() {
     enabled: canManage && Boolean(student.data?.student.id),
     queryFn: () => getDesktopApi().groups.listEligibleGroups(getSessionToken(), studentId),
     queryKey: ['groups', 'eligible-for-student', studentId],
+  });
+  const trials = useQuery({
+    enabled: canManage && Boolean(studentId),
+    queryFn: () =>
+      getDesktopApi().trials.list(getSessionToken(), { includeHistory: true, studentId }),
+    queryKey: queryKeys.trials(`${user?.id ?? ''}:${user?.role ?? ''}`, {
+      includeHistory: true,
+      studentId,
+    }),
+  });
+  const trialGroups = useQuery({
+    enabled: canManage && trialDialog,
+    queryFn: () => getDesktopApi().groups.list(getSessionToken(), {}),
+    queryKey: [...queryKeys.groups({}), 'trial-picker'],
+  });
+  const trialRange = useMemo(() => {
+    const from = new Date();
+    const to = new Date(from);
+    to.setDate(to.getDate() + 60);
+    return { dateFrom: from.toISOString(), dateTo: to.toISOString() };
+  }, []);
+  const trialOccurrences = useQuery({
+    enabled: trialDialog && Boolean(trialGroupId),
+    queryFn: () =>
+      getDesktopApi().trials.occurrences(getSessionToken(), {
+        ...trialRange,
+        groupId: trialGroupId,
+      }),
+    queryKey: queryKeys.trialOccurrences(user?.id ?? '', {
+      ...trialRange,
+      groupId: trialGroupId,
+    }),
+  });
+  const scheduleTrial = useMutation({
+    mutationFn: () =>
+      getDesktopApi().trials.schedule(getSessionToken(), {
+        groupId: trialGroupId,
+        startsAt: trialStartsAt,
+        studentId,
+      }),
+    onSuccess: async () => {
+      setTrialDialog(false);
+      setTrialStartsAt('');
+      await Promise.all([
+        trials.refetch(),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['attention'] }),
+      ]);
+    },
+  });
+  const refreshTrials = async () => {
+    await Promise.all([
+      trials.refetch(),
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      queryClient.invalidateQueries({ queryKey: ['attention'] }),
+    ]);
+  };
+  const cancelTrial = useMutation({
+    mutationFn: (trial: TrialAppointmentSummary) =>
+      getDesktopApi().trials.cancel(getSessionToken(), trial.id, {
+        expectedVersion: trial.version ?? 1,
+      }),
+    onError: (caught) => setError(getErrorMessage(caught, 'Не удалось отменить пробное занятие.')),
+    onSuccess: refreshTrials,
+  });
+  const setTrialOutcome = useMutation({
+    mutationFn: ({ outcome, trial }: { outcome: TrialOutcome; trial: TrialAppointmentSummary }) =>
+      getDesktopApi().trials.setOutcome(getSessionToken(), trial.id, {
+        expectedVersion: trial.version ?? 1,
+        outcome,
+      }),
+    onError: (caught) =>
+      setError(getErrorMessage(caught, 'Не удалось сохранить результат пробного занятия.')),
+    onSuccess: refreshTrials,
   });
   const updateStudent = useMutation({
     mutationFn: (input: StudentInput) =>
@@ -308,6 +387,100 @@ export function StudentProfilePage() {
                 ))}
               </div>
             </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {profile.access === 'ADMIN' ? (
+        <Card className="mb-5">
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Пробные занятия</CardTitle>
+            <Button onClick={() => setTrialDialog(true)} size="small" variant="outline">
+              Записать на пробное
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {trials.data?.length ? (
+              <div className="space-y-2">
+                {trials.data.slice(0, 6).map((trial) => (
+                  <div className="rounded-xl border border-border p-3" key={trial.id}>
+                    <Link
+                      className="flex items-center justify-between gap-3 hover:text-primary"
+                      to={`/attendance/${trial.lessonId}`}
+                    >
+                      <span>
+                        <b>{trial.groupName}</b>
+                        <br />
+                        <span className="text-sm text-muted-foreground">
+                          {formatDate(trial.startsAt, { dateStyle: 'medium', timeStyle: 'short' })}
+                        </span>
+                      </span>
+                      <Badge>
+                        {trial.state === 'CANCELLED'
+                          ? 'Отменено'
+                          : trial.outcome === 'THINKING'
+                            ? 'Думает'
+                            : trial.outcome === 'DECLINED'
+                              ? 'Отказался'
+                              : trial.outcome === 'PURCHASED'
+                                ? 'Купил абонемент'
+                                : trial.state === 'MISSED'
+                                  ? 'Не пришёл'
+                                  : trial.state === 'FOLLOW_UP'
+                                    ? 'Требует результата'
+                                    : 'Записан'}
+                      </Badge>
+                    </Link>
+                    {trial.state === 'FOLLOW_UP' || trial.state === 'MISSED' ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button
+                          onClick={() => setTrialOutcome.mutate({ outcome: 'THINKING', trial })}
+                          size="small"
+                          variant="outline"
+                        >
+                          Думает
+                        </Button>
+                        <Button
+                          onClick={() => setTrialOutcome.mutate({ outcome: 'DECLINED', trial })}
+                          size="small"
+                          variant="outline"
+                        >
+                          Отказался
+                        </Button>
+                        {trial.state === 'MISSED' ? (
+                          <Button
+                            onClick={() => setTrialOutcome.mutate({ outcome: 'NO_SHOW', trial })}
+                            size="small"
+                            variant="outline"
+                          >
+                            Не пришёл
+                          </Button>
+                        ) : null}
+                        <Button onClick={() => setFinanceAction('subscription')} size="small">
+                          Оформить абонемент
+                        </Button>
+                      </div>
+                    ) : null}
+                    {trial.state === 'SCHEDULED' ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button onClick={() => setTrialDialog(true)} size="small" variant="outline">
+                          Перенести
+                        </Button>
+                        <Button
+                          onClick={() => cancelTrial.mutate(trial)}
+                          size="small"
+                          variant="ghost"
+                        >
+                          Отменить запись
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Пробных занятий пока нет.</p>
+            )}
           </CardContent>
         </Card>
       ) : null}
@@ -788,6 +961,70 @@ export function StudentProfilePage() {
           </div>
         </>
       ) : null}
+
+      <Dialog
+        closeLabel="Закрыть"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setTrialDialog(false)} variant="outline">
+              Отмена
+            </Button>
+            <Button
+              disabled={!trialGroupId || !trialStartsAt || scheduleTrial.isPending}
+              onClick={() => scheduleTrial.mutate()}
+            >
+              Подтвердить запись
+            </Button>
+          </div>
+        }
+        onClose={() => setTrialDialog(false)}
+        open={trialDialog}
+        title="Записать на пробное"
+      >
+        <div className="space-y-4">
+          <div>
+            <Label>Группа</Label>
+            <Select
+              className="mt-2"
+              onChange={(event) => {
+                setTrialGroupId(event.target.value);
+                setTrialStartsAt('');
+              }}
+              value={trialGroupId}
+            >
+              <option value="">Выберите группу</option>
+              {(trialGroups.data ?? [])
+                .filter((group) => group.status === 'ACTIVE' || group.status === 'RECRUITING')
+                .map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name} · {group.branchName}
+                  </option>
+                ))}
+            </Select>
+          </div>
+          <div>
+            <Label>Конкретное занятие</Label>
+            <Select
+              className="mt-2"
+              disabled={!trialGroupId}
+              onChange={(event) => setTrialStartsAt(event.target.value)}
+              value={trialStartsAt}
+            >
+              <option value="">Выберите дату и время</option>
+              {(trialOccurrences.data ?? []).map((occurrence) => (
+                <option key={occurrence.startsAt} value={occurrence.startsAt}>
+                  {formatDate(occurrence.startsAt, { dateStyle: 'medium', timeStyle: 'short' })}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {scheduleTrial.error ? (
+            <p className="text-sm text-red-600">
+              {getErrorMessage(scheduleTrial.error, 'Не удалось записать на пробное.')}
+            </p>
+          ) : null}
+        </div>
+      </Dialog>
 
       <Dialog
         closeLabel="Закрыть"

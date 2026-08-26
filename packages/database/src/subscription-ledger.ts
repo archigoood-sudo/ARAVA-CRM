@@ -133,6 +133,17 @@ export async function applyAttendanceWriteOff(
   const consumesTrial = input.attendanceStatus === 'TRIAL';
   if (!consumesPaid && !consumesTrial) return null;
 
+  const freeTrial = await client.trialAppointment.findFirst({
+    select: { id: true },
+    where: {
+      lessonId: input.lessonId,
+      status: 'BOOKED',
+      studentId: input.studentId,
+      supersededAt: null,
+    },
+  });
+  if (freeTrial) return null;
+
   const attendance = await client.attendance.findUnique({
     select: { directPaymentId: true, directPaymentOperationId: true },
     where: { lessonId_studentId: { lessonId: input.lessonId, studentId: input.studentId } },

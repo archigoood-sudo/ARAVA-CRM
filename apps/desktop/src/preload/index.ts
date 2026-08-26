@@ -62,8 +62,10 @@ const desktopApi: AravaDesktopApi = {
     updateStatus: (token, id, status) => invoke(IPC_CHANNELS.leadUpdateStatus, token, id, status),
   },
   trials: {
+    cancel: (token, id, input) => invoke(IPC_CHANNELS.trialCancel, token, id, input),
     list: (token, query) => invoke(IPC_CHANNELS.trialList, token, query),
     occurrences: (token, query) => invoke(IPC_CHANNELS.trialOccurrences, token, query),
+    setOutcome: (token, id, input) => invoke(IPC_CHANNELS.trialOutcome, token, id, input),
     schedule: (token, input) => invoke(IPC_CHANNELS.trialSchedule, token, input),
   },
   publications: {

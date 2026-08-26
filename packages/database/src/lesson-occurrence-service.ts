@@ -186,21 +186,45 @@ export class LessonOccurrenceService {
         new Set(lesson.attendance.map(({ studentId }) => studentId)),
       ]),
     );
+    const trialAppointments = materialized.length
+      ? await this.database.trialAppointment.findMany({
+          select: { lessonId: true, studentId: true },
+          where: {
+            lessonId: { in: materialized.map(({ id }) => id) },
+            status: 'BOOKED',
+            studentId: { not: null },
+            supersededAt: null,
+          },
+        })
+      : [];
+    const trialsByLesson = new Map<string, string[]>();
+    for (const trial of trialAppointments) {
+      if (!trial.studentId) continue;
+      const ids = trialsByLesson.get(trial.lessonId) ?? [];
+      ids.push(trial.studentId);
+      trialsByLesson.set(trial.lessonId, ids);
+    }
     return unresolved
       .map((lesson) => {
         const expectedStudentIds = new Set(
           lesson.lessonId ? attendanceByLesson.get(lesson.lessonId) : undefined,
         );
-        let trialStudents = 0;
+        const trialStudentIds = new Set<string>();
+        for (const studentId of lesson.lessonId
+          ? (trialsByLesson.get(lesson.lessonId) ?? [])
+          : []) {
+          expectedStudentIds.add(studentId);
+          trialStudentIds.add(studentId);
+        }
         for (const enrollment of enrollmentsByGroup.get(lesson.groupId) ?? []) {
           if (!membershipValidAt(enrollment, lesson.startsAt)) continue;
           expectedStudentIds.add(enrollment.studentId);
-          if (enrollment.status === 'TRIAL') trialStudents += 1;
+          if (enrollment.status === 'TRIAL') trialStudentIds.add(enrollment.studentId);
         }
         return {
           ...lesson,
           expectedStudents: expectedStudentIds.size,
-          trialStudents,
+          trialStudents: trialStudentIds.size,
         };
       })
       .sort((left, right) => left.startsAt.getTime() - right.startsAt.getTime());

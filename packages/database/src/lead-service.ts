@@ -9,9 +9,11 @@ import type {
   LeadStudentConversionResult,
   LeadStatus,
   TrialAppointmentSummary,
+  TrialCancelInput,
   TrialListQuery,
   TrialOccurrenceQuery,
   TrialOccurrenceSummary,
+  TrialOutcomeInput,
   TrialScheduleInput,
 } from '@arava/shared';
 import { randomUUID } from 'node:crypto';
@@ -73,12 +75,17 @@ export class LeadService {
   async convert(token: string, id: string, crmStudentId: string): Promise<LeadDetail> {
     const actor = await this.actor(token);
     await this.application.getStudent(token, crmStudentId);
-    return this.integration.convertRemoteLead(
+    const converted = await this.integration.convertRemoteLead(
       this.context(actor),
       id,
       crmStudentId,
       `lead-convert:${id}:${crmStudentId}`,
     );
+    await this.database.trialAppointment.updateMany({
+      data: { studentId: crmStudentId, version: { increment: 1 } },
+      where: { externalLeadId: id, studentId: null },
+    });
+    return converted;
   }
 
   async assignGroup(
@@ -173,15 +180,27 @@ export class LeadService {
       created.student.id,
       `lead-convert:${id}:${created.student.id}`,
     );
+    await this.database.trialAppointment.updateMany({
+      data: { studentId: created.student.id, version: { increment: 1 } },
+      where: { externalLeadId: id, studentId: null },
+    });
     return { lead: converted, membershipCreated, student: created.student };
   }
 
   async scheduleTrial(token: string, input: TrialScheduleInput): Promise<TrialAppointmentSummary> {
     const actor = await this.actor(token);
-    const [lead, group] = await Promise.all([
-      this.integration.getRemoteLead(this.context(actor), input.leadId),
+    const [lead, student, group] = await Promise.all([
+      input.leadId
+        ? this.integration.getRemoteLead(this.context(actor), input.leadId)
+        : Promise.resolve(undefined),
+      input.studentId
+        ? this.application.getStudent(token, input.studentId)
+        : Promise.resolve(undefined),
       this.studio.getGroup(token, input.groupId),
     ]);
+    const linkedStudentId = student?.id ?? lead?.convertedStudentCrmId;
+    if (student && student.branchId !== group.branchId)
+      throw new DomainError('VALIDATION', 'Ученик и группа должны находиться в одном филиале.');
     if (group.archivedAt || !['ACTIVE', 'RECRUITING'].includes(group.status))
       throw new DomainError('VALIDATION', 'Для пробного доступна только действующая группа.');
     const lesson = await this.studio.materializeLessonOccurrence(token, {
@@ -195,38 +214,81 @@ export class LeadService {
     if (new Date(lesson.endsAt) <= new Date())
       throw new DomainError('VALIDATION', 'Выберите текущее или предстоящее занятие.');
 
-    await this.integration.updateRemoteLeadGroup(
-      this.context(actor),
-      lead.id,
-      group.id,
-      `trial-group:${lead.id}:${lesson.id}`,
-    );
-    await this.integration.updateRemoteLeadStatus(
-      this.context(actor),
-      lead.id,
-      'TRIAL_BOOKED',
-      `trial-status:${lead.id}:${lesson.id}`,
-    );
+    if (lead) {
+      await this.integration.updateRemoteLeadGroup(
+        this.context(actor),
+        lead.id,
+        group.id,
+        `trial-group:${lead.id}:${lesson.id}`,
+      );
+      await this.integration.updateRemoteLeadStatus(
+        this.context(actor),
+        lead.id,
+        'TRIAL_BOOKED',
+        `trial-status:${lead.id}:${lesson.id}`,
+      );
+    }
+
+    const subjectKey = lead?.id ?? `student:${student?.id ?? ''}`;
+    const [occupied, trialGuests] = await Promise.all([
+      this.database.enrollment.count({
+        where: { groupId: group.id, leftAt: null, status: { in: ['ACTIVE', 'TRIAL', 'FROZEN'] } },
+      }),
+      this.database.trialAppointment.count({
+        where: { groupId: group.id, lessonId: lesson.id, status: 'BOOKED', supersededAt: null },
+      }),
+    ]);
+    const alreadyBooked = await this.database.trialAppointment.findUnique({
+      where: { externalLeadId_lessonId: { externalLeadId: subjectKey, lessonId: lesson.id } },
+    });
+    if (alreadyBooked?.status === 'BOOKED' && !alreadyBooked.supersededAt)
+      return this.summaryById(token, alreadyBooked.id);
+    const subjectEnrolled = linkedStudentId
+      ? await this.database.enrollment.findFirst({
+          where: {
+            groupId: group.id,
+            leftAt: null,
+            status: { in: ['ACTIVE', 'TRIAL', 'FROZEN'] },
+            studentId: linkedStudentId,
+          },
+        })
+      : null;
+    if (!alreadyBooked && !subjectEnrolled && occupied + trialGuests >= group.capacity)
+      throw new DomainError('CONFLICT', 'В группе нет свободных мест для пробного занятия.');
 
     const appointment = await this.database.$transaction(async (transaction) => {
       const now = new Date();
       await transaction.trialAppointment.updateMany({
-        data: { supersededAt: now },
-        where: { externalLeadId: lead.id, supersededAt: null, lessonId: { not: lesson.id } },
+        data: {
+          status: 'CANCELLED',
+          supersededAt: now,
+          cancelledAt: now,
+          version: { increment: 1 },
+        },
+        where: { externalLeadId: subjectKey, supersededAt: null, lessonId: { not: lesson.id } },
       });
       const saved = await transaction.trialAppointment.upsert({
         create: {
           createdByUserId: actor.id,
-          externalLeadId: lead.id,
+          externalLeadId: subjectKey,
           groupId: group.id,
           lessonId: lesson.id,
+          studentId: linkedStudentId ?? null,
         },
-        update: { groupId: group.id, supersededAt: null },
-        where: { externalLeadId_lessonId: { externalLeadId: lead.id, lessonId: lesson.id } },
+        update: {
+          cancelledAt: null,
+          groupId: group.id,
+          outcome: null,
+          status: 'BOOKED',
+          studentId: linkedStudentId ?? null,
+          supersededAt: null,
+          version: { increment: 1 },
+        },
+        where: { externalLeadId_lessonId: { externalLeadId: subjectKey, lessonId: lesson.id } },
       });
       await transaction.auditLog.create({
         data: {
-          action: 'TRIAL_SCHEDULED',
+          action: alreadyBooked ? 'TRIAL_RESCHEDULED' : 'TRIAL_SCHEDULED',
           actorUserId: actor.id,
           detail: JSON.stringify({ groupId: group.id, lessonId: lesson.id }),
           entityId: saved.id,
@@ -235,9 +297,94 @@ export class LeadService {
       });
       return saved;
     });
-    const [result] = await this.listTrials(token, { leadId: lead.id });
+    const results = await this.listTrials(
+      token,
+      lead ? { leadId: lead.id } : { studentId: student?.id },
+    );
+    const result = results.find(({ id }) => id === appointment.id);
     if (result?.id !== appointment.id)
       throw new DomainError('NOT_FOUND', 'Запись на пробное не найдена после сохранения.');
+    return result;
+  }
+
+  async cancelTrial(
+    token: string,
+    id: string,
+    input: TrialCancelInput,
+  ): Promise<TrialAppointmentSummary> {
+    const actor = await this.actor(token);
+    const appointment = await this.database.trialAppointment.findUnique({
+      include: { group: true },
+      where: { id },
+    });
+    if (!appointment) throw new DomainError('NOT_FOUND', 'Пробное занятие не найдено.');
+    if (actor.role !== 'OWNER' && !actor.branchIds.includes(appointment.group.branchId))
+      throw new DomainError('AUTHORIZATION', 'Пробное относится к недоступному филиалу.');
+    const updated = await this.database.$transaction(async (transaction) => {
+      const result = await transaction.trialAppointment.updateMany({
+        data: { cancelledAt: new Date(), status: 'CANCELLED', version: { increment: 1 } },
+        where: { id, status: 'BOOKED', version: input.expectedVersion },
+      });
+      if (result.count !== 1)
+        throw new DomainError('CONFLICT', 'Запись уже изменена. Обновите данные.');
+      await transaction.auditLog.create({
+        data: {
+          action: 'TRIAL_CANCELLED',
+          actorUserId: actor.id,
+          entityId: id,
+          entityType: 'TrialAppointment',
+        },
+      });
+      return transaction.trialAppointment.findUniqueOrThrow({ where: { id } });
+    });
+    return this.summaryById(token, updated.id);
+  }
+
+  async setTrialOutcome(
+    token: string,
+    id: string,
+    input: TrialOutcomeInput,
+  ): Promise<TrialAppointmentSummary> {
+    const actor = await this.actor(token);
+    const appointment = await this.database.trialAppointment.findUnique({
+      include: { group: true },
+      where: { id },
+    });
+    if (!appointment) throw new DomainError('NOT_FOUND', 'Пробное занятие не найдено.');
+    if (actor.role !== 'OWNER' && !actor.branchIds.includes(appointment.group.branchId))
+      throw new DomainError('AUTHORIZATION', 'Пробное относится к недоступному филиалу.');
+    const result = await this.database.$transaction(async (transaction) => {
+      const changed = await transaction.trialAppointment.updateMany({
+        data: { outcome: input.outcome, version: { increment: 1 } },
+        where: { id, version: input.expectedVersion },
+      });
+      if (changed.count !== 1)
+        throw new DomainError('CONFLICT', 'Результат уже изменён. Обновите данные.');
+      await transaction.auditLog.create({
+        data: {
+          action: 'TRIAL_OUTCOME_SET',
+          actorUserId: actor.id,
+          detail: JSON.stringify({ outcome: input.outcome }),
+          entityId: id,
+          entityType: 'TrialAppointment',
+        },
+      });
+      return transaction.trialAppointment.findUniqueOrThrow({ where: { id } });
+    });
+    return this.summaryById(token, result.id);
+  }
+
+  private async summaryById(token: string, id: string): Promise<TrialAppointmentSummary> {
+    const appointment = await this.database.trialAppointment.findUnique({ where: { id } });
+    if (!appointment) throw new DomainError('NOT_FOUND', 'Пробное занятие не найдено.');
+    const rows = await this.listTrials(
+      token,
+      appointment.studentId
+        ? { studentId: appointment.studentId }
+        : { leadId: appointment.externalLeadId },
+    );
+    const result = rows.find((row) => row.id === id);
+    if (!result) throw new DomainError('NOT_FOUND', 'Пробное занятие недоступно.');
     return result;
   }
 
@@ -276,18 +423,28 @@ export class LeadService {
       include: {
         group: { include: { branch: { select: { name: true } } } },
         lesson: true,
+        student: { select: { firstName: true, lastName: true } },
       },
       orderBy: { lesson: { startsAt: 'asc' } },
       where: {
-        supersededAt: null,
+        ...(query.includeHistory ? {} : { supersededAt: null }),
         ...(query.leadId ? { externalLeadId: query.leadId } : {}),
         ...(branchIds ? { group: { branchId: { in: branchIds } } } : {}),
       },
     });
     if (!appointments.length) return [];
+    const remoteIds = [
+      ...new Set(
+        appointments
+          .map(({ externalLeadId }) => externalLeadId)
+          .filter((id) => !id.startsWith('student:')),
+      ),
+    ];
     const remote = query.leadId
       ? [await this.integration.getRemoteLead(this.context(actor), query.leadId)]
-      : (await this.integration.listRemoteLeads(this.context(actor), {})).leads;
+      : remoteIds.length
+        ? (await this.integration.listRemoteLeads(this.context(actor), {})).leads
+        : [];
     const leads = new Map(remote.map((lead) => [lead.id, lead]));
     const now = new Date();
     const from = query.dateFrom ? new Date(query.dateFrom) : undefined;
@@ -295,8 +452,8 @@ export class LeadService {
     const summaries = await Promise.all(
       appointments.map(async (appointment): Promise<TrialAppointmentSummary | undefined> => {
         const lead = leads.get(appointment.externalLeadId);
-        if (!lead) return undefined;
-        const studentId = lead.convertedStudentCrmId;
+        const studentId = appointment.studentId ?? lead?.convertedStudentCrmId;
+        if (!lead && !appointment.student) return undefined;
         if (query.studentId && studentId !== query.studentId) return undefined;
         const attendance = studentId
           ? await this.database.attendance.findUnique({
@@ -315,10 +472,12 @@ export class LeadService {
         const state = this.trialState({
           attendanceStatus: attendance?.status,
           endsAt: appointment.lesson.endsAt,
-          leadStatus: lead.status,
+          leadStatus: lead?.status,
           lessonStatus: appointment.lesson.status,
           now,
+          outcome: appointment.outcome,
           purchased: Boolean(purchased),
+          status: appointment.status,
           startsAt: appointment.lesson.startsAt,
         });
         const inRange =
@@ -333,12 +492,18 @@ export class LeadService {
           groupId: appointment.groupId,
           groupName: appointment.group.name,
           id: appointment.id,
-          leadId: lead.id,
-          leadName: lead.childName,
+          ...(lead ? { leadId: lead.id } : {}),
+          leadName:
+            lead?.childName ??
+            [appointment.student?.firstName, appointment.student?.lastName]
+              .filter(Boolean)
+              .join(' '),
           lessonId: appointment.lessonId,
           lessonStatus: appointment.lesson.status,
           startsAt: appointment.lesson.startsAt.toISOString(),
           state,
+          ...(appointment.outcome ? { outcome: appointment.outcome } : {}),
+          version: appointment.version,
           ...(studentId ? { studentId } : {}),
         };
       }),
@@ -349,12 +514,18 @@ export class LeadService {
   private trialState(input: {
     attendanceStatus?: string | undefined;
     endsAt: Date;
-    leadStatus: LeadStatus;
+    leadStatus?: LeadStatus | undefined;
     lessonStatus: string;
     now: Date;
+    outcome?: string | null | undefined;
     purchased: boolean;
+    status: string;
     startsAt: Date;
   }): TrialAppointmentSummary['state'] {
+    if (input.status === 'CANCELLED') return 'CANCELLED';
+    if (input.outcome === 'PURCHASED') return 'SUBSCRIPTION_PURCHASED';
+    if (input.outcome === 'DECLINED' || input.outcome === 'NO_SHOW') return 'CLOSED';
+    if (input.outcome === 'THINKING') return 'FOLLOW_UP';
     if (input.leadStatus === 'REJECTED' || input.leadStatus === 'NOT_RELEVANT') return 'CLOSED';
     if (input.lessonStatus === 'CANCELLED') return 'CANCELLED';
     if (input.purchased) return 'SUBSCRIPTION_PURCHASED';

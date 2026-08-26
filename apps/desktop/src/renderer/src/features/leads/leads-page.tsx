@@ -186,13 +186,34 @@ export function LeadsPage() {
     onSuccess: async (saved) => {
       setSelectedLessonId('');
       await Promise.all([
-        invalidate(saved.leadId),
+        saved.leadId ? invalidate(saved.leadId) : Promise.resolve(),
         client.invalidateQueries({ queryKey: ['trials'] }),
         client.invalidateQueries({ queryKey: ['trial-occurrences'] }),
         client.invalidateQueries({ queryKey: ['dashboard'] }),
         client.invalidateQueries({ queryKey: ['attention'] }),
       ]);
     },
+  });
+  const cancelTrial = useMutation({
+    mutationFn: (trial: TrialAppointmentSummary) =>
+      getDesktopApi().trials.cancel(getSessionToken(), trial.id, {
+        expectedVersion: trial.version ?? 1,
+      }),
+    onSuccess: () => invalidate(selectedId),
+  });
+  const setTrialOutcome = useMutation({
+    mutationFn: ({
+      outcome,
+      trial,
+    }: {
+      outcome: 'PURCHASED' | 'THINKING' | 'DECLINED' | 'NO_SHOW';
+      trial: TrialAppointmentSummary;
+    }) =>
+      getDesktopApi().trials.setOutcome(getSessionToken(), trial.id, {
+        expectedVersion: trial.version ?? 1,
+        outcome,
+      }),
+    onSuccess: () => invalidate(selectedId),
   });
 
   const current = detail.data;
@@ -365,7 +386,9 @@ export function LeadsPage() {
                 updateStatus.error ??
                 assignGroup.error ??
                 convert.error ??
-                scheduleTrial.error
+                scheduleTrial.error ??
+                cancelTrial.error ??
+                setTrialOutcome.error
               }
               allowDuplicate={allowDuplicate}
               canCreateStudent={!branches.isLoading && (branches.data?.length ?? 0) > 0}
@@ -383,6 +406,10 @@ export function LeadsPage() {
               }}
               onLink={(studentId) => convert.mutate({ id: current.id, studentId })}
               onStatus={(value) => updateStatus.mutate({ id: current.id, value })}
+              onCancelTrial={() => trial.data?.[0] && cancelTrial.mutate(trial.data[0])}
+              onTrialOutcome={(outcome) =>
+                trial.data?.[0] && setTrialOutcome.mutate({ outcome, trial: trial.data[0] })
+              }
               onScheduleTrial={() => {
                 if (!selectedGroupId || !selectedLessonId) return;
                 scheduleTrial.mutate({
@@ -474,6 +501,8 @@ function LeadDetailView({
   onGroup,
   onLink,
   onStatus,
+  onCancelTrial,
+  onTrialOutcome,
   onScheduleTrial,
   onTrialLesson,
   scheduledTrial,
@@ -500,6 +529,8 @@ function LeadDetailView({
   onGroup: (groupId: string) => void;
   onLink: (studentId: string) => void;
   onStatus: (status: LeadStatus) => void;
+  onCancelTrial: () => void;
+  onTrialOutcome: (outcome: 'PURCHASED' | 'THINKING' | 'DECLINED' | 'NO_SHOW') => void;
   onScheduleTrial: () => void;
   onTrialLesson: (lessonId: string) => void;
   scheduledTrial?: TrialAppointmentSummary | undefined;
@@ -632,6 +663,30 @@ function LeadDetailView({
                 >
                   Оформить абонемент
                 </Link>
+              ) : null}
+              {scheduledTrial.state !== 'CANCELLED' ? (
+                <Button onClick={onCancelTrial} size="small" variant="ghost">
+                  Отменить запись
+                </Button>
+              ) : null}
+              {['FOLLOW_UP', 'MISSED'].includes(scheduledTrial.state) ? (
+                <>
+                  <Button onClick={() => onTrialOutcome('THINKING')} size="small" variant="outline">
+                    Думает
+                  </Button>
+                  <Button onClick={() => onTrialOutcome('DECLINED')} size="small" variant="outline">
+                    Отказался
+                  </Button>
+                  {scheduledTrial.state === 'MISSED' ? (
+                    <Button
+                      onClick={() => onTrialOutcome('NO_SHOW')}
+                      size="small"
+                      variant="outline"
+                    >
+                      Не пришёл
+                    </Button>
+                  ) : null}
+                </>
               ) : null}
             </div>
           </div>

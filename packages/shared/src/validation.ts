@@ -23,6 +23,7 @@ import {
   REPORT_KINDS,
   STUDENT_STATUSES,
   TARIFF_TYPES,
+  TRIAL_OUTCOMES,
   USER_ROLES,
   type BranchInput,
   type CalendarExceptionInput,
@@ -922,10 +923,20 @@ export const leadStudentConversionInputSchema = z.object({
   groupId: optionalIdentifier,
   student: studentInputSchema,
 });
-export const trialScheduleInputSchema: z.ZodType<TrialScheduleInput> = z.object({
-  groupId: identifierSchema,
-  leadId: identifierSchema,
-  startsAt: z.string().datetime(),
+export const trialScheduleInputSchema: z.ZodType<TrialScheduleInput> = z
+  .object({
+    groupId: identifierSchema,
+    leadId: identifierSchema.optional(),
+    studentId: identifierSchema.optional(),
+    startsAt: z.string().datetime(),
+  })
+  .refine((input) => Boolean(input.leadId) !== Boolean(input.studentId), {
+    message: 'Укажите заявку или ученика.',
+  });
+export const trialCancelInputSchema = z.object({ expectedVersion: z.number().int().positive() });
+export const trialOutcomeInputSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  outcome: z.enum(TRIAL_OUTCOMES),
 });
 export const trialOccurrenceQuerySchema: z.ZodType<TrialOccurrenceQuery> = z
   .object({
@@ -941,6 +952,7 @@ export const trialListQuerySchema: z.ZodType<TrialListQuery> = z.object({
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
   includeFollowUp: z.boolean().optional(),
+  includeHistory: z.boolean().optional(),
   leadId: optionalIdentifier,
   studentId: optionalIdentifier,
 });

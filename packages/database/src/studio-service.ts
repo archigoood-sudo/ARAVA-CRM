@@ -853,7 +853,7 @@ export class StudioService {
     this.assertLessonRead(actor, lesson);
     if (lesson.status === 'CANCELLED')
       throw new DomainError('VALIDATION', t('domain.validation.attendanceCancelled'));
-    const [enrollments, marks] = await Promise.all([
+    const [enrollments, marks, trialAppointments] = await Promise.all([
       this.database.enrollment.findMany({
         include: {
           student: {
@@ -874,6 +874,10 @@ export class StudioService {
           student: { select: { firstName: true, lastName: true, middleName: true } },
         },
         where: { lessonId },
+      }),
+      this.database.trialAppointment.findMany({
+        include: { student: { select: { firstName: true, lastName: true, middleName: true } } },
+        where: { lessonId, status: 'BOOKED', studentId: { not: null }, supersededAt: null },
       }),
     ]);
     const markByStudent = new Map(marks.map((mark) => [mark.studentId, mark]));
@@ -905,6 +909,21 @@ export class StudioService {
       },
     );
     const participantIds = new Set(participants.map(({ studentId }) => studentId));
+    for (const trial of trialAppointments) {
+      if (!trial.studentId || !trial.student || participantIds.has(trial.studentId)) continue;
+      const mark = markByStudent.get(trial.studentId);
+      participants.push({
+        comment: mark?.comment ?? undefined,
+        isTrial: true,
+        markedAt: mark?.markedAt.toISOString(),
+        status: mark?.status,
+        studentId: trial.studentId,
+        studentName: [trial.student.lastName, trial.student.firstName, trial.student.middleName]
+          .filter(Boolean)
+          .join(' '),
+      });
+      participantIds.add(trial.studentId);
+    }
     for (const mark of marks) {
       if (participantIds.has(mark.studentId)) continue;
       participants.push({
@@ -1020,7 +1039,7 @@ export class StudioService {
   }
 
   private async attendanceStudentIds(lesson: LessonRecord): Promise<Set<string>> {
-    const [enrollments, existingMarks] = await Promise.all([
+    const [enrollments, existingMarks, trialAppointments] = await Promise.all([
       this.database.enrollment.findMany({
         include: { student: { select: { archivedAt: true, status: true } } },
         where: { groupId: lesson.groupId },
@@ -1029,9 +1048,19 @@ export class StudioService {
         select: { studentId: true },
         where: { lessonId: lesson.id },
       }),
+      this.database.trialAppointment.findMany({
+        select: { studentId: true },
+        where: {
+          lessonId: lesson.id,
+          status: 'BOOKED',
+          studentId: { not: null },
+          supersededAt: null,
+        },
+      }),
     ]);
     return new Set([
       ...existingMarks.map(({ studentId }) => studentId),
+      ...trialAppointments.flatMap(({ studentId }) => (studentId ? [studentId] : [])),
       ...enrollments
         .filter((enrollment) => Boolean(attendanceEnrollmentScope(enrollment, lesson.startsAt)))
         .map(({ studentId }) => studentId),

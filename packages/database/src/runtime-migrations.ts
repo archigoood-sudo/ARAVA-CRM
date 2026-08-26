@@ -770,4 +770,15 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'CREATE UNIQUE INDEX "Subscription_saleIdempotencyKey_key" ON "Subscription"("saleIdempotencyKey")',
     ],
   },
+  {
+    id: '20260826000000_trial_workflow',
+    statements: [
+      'ALTER TABLE "TrialAppointment" ADD COLUMN "studentId" TEXT',
+      'ALTER TABLE "TrialAppointment" ADD COLUMN "status" TEXT NOT NULL DEFAULT \'BOOKED\'',
+      'ALTER TABLE "TrialAppointment" ADD COLUMN "outcome" TEXT',
+      'ALTER TABLE "TrialAppointment" ADD COLUMN "cancelledAt" DATETIME',
+      'ALTER TABLE "TrialAppointment" ADD COLUMN "version" INTEGER NOT NULL DEFAULT 1',
+      'CREATE INDEX "TrialAppointment_studentId_supersededAt_idx" ON "TrialAppointment"("studentId", "supersededAt")',
+    ],
+  },
 ];

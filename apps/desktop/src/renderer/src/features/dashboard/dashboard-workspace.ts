@@ -121,7 +121,7 @@ export function buildDashboardWorkspace({
       actionLabel: trial.studentId ? 'Открыть посещения' : 'Открыть заявку',
       actionRoute: trial.studentId
         ? `/attendance/${trial.lessonId}`
-        : `/leads?leadId=${encodeURIComponent(trial.leadId)}`,
+        : `/leads?leadId=${encodeURIComponent(trial.leadId ?? '')}`,
       description: `${trial.groupName} · ${new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(trial.startsAt))}`,
       id: `trial:today:${trial.id}`,
       meta: trial.branchName,
@@ -134,7 +134,7 @@ export function buildDashboardWorkspace({
       actionLabel: trial.studentId ? 'Оформить абонемент' : 'Открыть заявку',
       actionRoute: trial.studentId
         ? `/students/${trial.studentId}?action=subscription`
-        : `/leads?leadId=${encodeURIComponent(trial.leadId)}`,
+        : `/leads?leadId=${encodeURIComponent(trial.leadId ?? '')}`,
       description: `${trial.groupName} · пробное ${new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(new Date(trial.startsAt))}`,
       id: `trial:follow-up:${trial.id}`,
       meta: trial.branchName,

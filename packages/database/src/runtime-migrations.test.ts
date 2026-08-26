@@ -27,6 +27,7 @@ describe('runtime migrations', () => {
       '20260824000000_trial_lessons',
       '20260825000000_uncovered_attendance_payments',
       '20260825010000_unified_subscription_sale',
+      '20260826000000_trial_workflow',
     ]);
   });
 });

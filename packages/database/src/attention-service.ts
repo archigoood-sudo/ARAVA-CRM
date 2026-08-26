@@ -226,12 +226,29 @@ export class AttentionService {
         updatedAt: { gte: historyStart },
       },
     });
+    const trialAttention = await this.database.trialAppointment.findMany({
+      include: {
+        group: { include: { branch: { select: { name: true } } } },
+        lesson: {
+          include: { attendance: { select: { status: true, studentId: true } } },
+        },
+        student: { select: { firstName: true, lastName: true } },
+      },
+      where: {
+        outcome: null,
+        status: 'BOOKED',
+        supersededAt: null,
+        group: branchIds ? { branchId: { in: branchIds } } : {},
+        OR: [{ lesson: { endsAt: { lte: now } } }, { lesson: { status: 'CANCELLED' } }],
+      },
+    });
     const uncoveredAttendanceCandidates = await this.database.attendance.findMany({
       include: {
         lesson: {
           include: {
             branch: { select: { name: true } },
             group: { select: { name: true } },
+            trialAppointments: { select: { status: true, studentId: true, supersededAt: true } },
           },
         },
         student: { select: { firstName: true, lastName: true, middleName: true } },
@@ -265,6 +282,34 @@ export class AttentionService {
 
     const items: AttentionItem[] = [];
     const add = (item: AttentionItem) => items.push(item);
+
+    for (const trial of trialAttention) {
+      const attendance = trial.studentId
+        ? trial.lesson.attendance.find(({ studentId }) => studentId === trial.studentId)
+        : null;
+      const missed = attendance?.status === 'ABSENT' || attendance?.status === 'EXCUSED';
+      const cancelled = trial.lesson.status === 'CANCELLED';
+      add({
+        actionLabel: trial.studentId ? 'Открыть ученика' : 'Открыть заявку',
+        actionRoute: trial.studentId
+          ? `/students/${trial.studentId}`
+          : `/leads?leadId=${encodeURIComponent(trial.externalLeadId)}`,
+        branchId: trial.group.branchId,
+        branchName: trial.group.branch.name,
+        category: 'STUDENTS',
+        description: `${trial.group.name} · ${trial.lesson.startsAt.toLocaleString('ru-RU')}`,
+        entityId: trial.id,
+        entityType: 'TrialAppointment',
+        id: `trial:${cancelled ? 'reschedule' : missed ? 'missed' : 'outcome'}:${trial.id}`,
+        occurredAt: trial.lesson.endsAt.toISOString(),
+        severity: cancelled || missed ? 'CRITICAL' : 'WARNING',
+        title: cancelled
+          ? 'Пробное занятие отменено — выберите новую дату'
+          : missed
+            ? `${trial.student ? `${trial.student.firstName} ${trial.student.lastName}` : 'Клиент'} не пришёл на пробное`
+            : 'Укажите результат пробного',
+      });
+    }
 
     for (const student of students) {
       const name = fullName(student);
@@ -469,6 +514,15 @@ export class AttentionService {
 
     for (const attendance of uncoveredAttendanceCandidates) {
       const attendanceId = `${attendance.lessonId}:${attendance.studentId}`;
+      if (
+        attendance.lesson.trialAppointments.some(
+          (trial) =>
+            trial.status === 'BOOKED' &&
+            !trial.supersededAt &&
+            trial.studentId === attendance.studentId,
+        )
+      )
+        continue;
       if (subscriptionCoveredAttendanceIds.has(attendanceId)) continue;
       add({
         actionLabel: 'Оплатить посещение',

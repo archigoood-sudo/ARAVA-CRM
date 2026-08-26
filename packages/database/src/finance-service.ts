@@ -496,6 +496,12 @@ export async function createCanonicalSubscription(
     actorUserId: actor.id,
     studentId: input.studentId,
   });
+  if (student.status === 'TRIAL')
+    await client.student.update({ data: { status: 'ACTIVE' }, where: { id: student.id } });
+  await client.trialAppointment.updateMany({
+    data: { outcome: 'PURCHASED', version: { increment: 1 } },
+    where: { outcome: null, status: 'BOOKED', studentId: student.id, supersededAt: null },
+  });
   return subscription;
 }
 
@@ -510,7 +516,7 @@ export async function assertDirectAttendancePayment(
     tariffId: string;
   },
 ): Promise<void> {
-  const [attendance, tariff, writeOffs] = await Promise.all([
+  const [attendance, tariff, writeOffs, trialAppointment] = await Promise.all([
     client.attendance.findUnique({
       include: { lesson: { select: { branchId: true, status: true } } },
       where: { lessonId_studentId: { lessonId: input.lessonId, studentId: input.studentId } },
@@ -523,10 +529,20 @@ export async function assertDirectAttendancePayment(
         type: 'LESSON_WRITE_OFF',
       },
     }),
+    client.trialAppointment.findFirst({
+      select: { id: true },
+      where: {
+        lessonId: input.lessonId,
+        status: 'BOOKED',
+        studentId: input.studentId,
+        supersededAt: null,
+      },
+    }),
   ]);
   if (!attendance) throw new DomainError('NOT_FOUND', 'Посещение не найдено.');
   if (!['PRESENT', 'LATE'].includes(attendance.status) || attendance.lesson.status === 'CANCELLED')
     throw new DomainError('VALIDATION', 'Оплатить можно только состоявшееся посещение.');
+  if (trialAppointment) throw new DomainError('VALIDATION', 'Пробное занятие не требует оплаты.');
   if (attendance.lesson.branchId !== input.branchId)
     throw new DomainError('VALIDATION', 'Посещение относится к другому филиалу.');
   if (
@@ -1197,7 +1213,7 @@ export class FinanceService {
   }
 
   private async uncoveredDebtByStudent(studentIds: string[]): Promise<Map<string, number>> {
-    const [attendances, writeOffs, tariffs] = await Promise.all([
+    const [attendances, writeOffs, tariffs, trialAppointments] = await Promise.all([
       this.database.attendance.findMany({
         select: {
           directPaymentId: true,
@@ -1218,7 +1234,14 @@ export class FinanceService {
       this.database.tariff.findMany({
         where: { archivedAt: null, isActive: true, type: 'SINGLE_LESSON' },
       }),
+      this.database.trialAppointment.findMany({
+        select: { lessonId: true, studentId: true },
+        where: { status: 'BOOKED', studentId: { in: studentIds }, supersededAt: null },
+      }),
     ]);
+    const freeTrials = new Set(
+      trialAppointments.map(({ lessonId, studentId }) => `${lessonId}:${studentId ?? ''}`),
+    );
     const covered = new Set(
       writeOffs.flatMap(({ attendanceId, reversals }) =>
         attendanceId && reversals.length === 0 ? [attendanceId] : [],
@@ -1228,6 +1251,7 @@ export class FinanceService {
     for (const attendance of attendances) {
       if (
         attendance.directPaymentId ||
+        freeTrials.has(`${attendance.lessonId}:${attendance.studentId}`) ||
         covered.has(`${attendance.lessonId}:${attendance.studentId}`)
       )
         continue;
@@ -1244,7 +1268,7 @@ export class FinanceService {
   }
 
   private async uncoveredAttendances(studentId: string) {
-    const [attendances, writeOffs, tariffs] = await Promise.all([
+    const [attendances, writeOffs, tariffs, trialAppointments] = await Promise.all([
       this.database.attendance.findMany({
         include: {
           lesson: {
@@ -1272,7 +1296,12 @@ export class FinanceService {
       this.database.tariff.findMany({
         where: { archivedAt: null, isActive: true, type: 'SINGLE_LESSON' },
       }),
+      this.database.trialAppointment.findMany({
+        select: { lessonId: true },
+        where: { status: 'BOOKED', studentId, supersededAt: null },
+      }),
     ]);
+    const freeTrialLessonIds = new Set(trialAppointments.map(({ lessonId }) => lessonId));
     const covered = new Set(
       writeOffs.flatMap(({ attendanceId, reversals }) =>
         attendanceId && reversals.length === 0 ? [attendanceId] : [],
@@ -1280,6 +1309,7 @@ export class FinanceService {
     );
     return attendances.flatMap((attendance) => {
       if (
+        freeTrialLessonIds.has(attendance.lessonId) ||
         covered.has(`${attendance.lessonId}:${attendance.studentId}`) ||
         attendance.directPaymentId
       )

@@ -44,6 +44,7 @@ import {
   type BackupEntry,
   type BackupRestoreSelection,
   type BackupStatus,
+  type TrialAppointmentSummary,
 } from '@arava/shared';
 
 vi.mock('electron', () => ({
@@ -393,16 +394,39 @@ describe('Electron IPC boundary', () => {
         groupId: group.id,
       }),
     ).resolves.toMatchObject([{ lessonId: trialLesson.id, source: 'LESSON' }]);
-    await expect(
-      handlers[IPC_CHANNELS.trialSchedule]?.(owner.token, {
-        groupId: group.id,
-        leadId: lead.id,
-        startsAt: trialLesson.startsAt,
-      }),
-    ).resolves.toMatchObject({ groupId: group.id, leadId: lead.id, lessonId: trialLesson.id });
+    const scheduledTrial = (await handlers[IPC_CHANNELS.trialSchedule]?.(owner.token, {
+      groupId: group.id,
+      leadId: lead.id,
+      startsAt: trialLesson.startsAt,
+    })) as TrialAppointmentSummary | undefined;
+    expect(scheduledTrial).toBeDefined();
+    if (!scheduledTrial) throw new Error('Пробное занятие не создано');
+    expect(scheduledTrial).toMatchObject({
+      groupId: group.id,
+      leadId: lead.id,
+      lessonId: trialLesson.id,
+    });
     await expect(
       handlers[IPC_CHANNELS.trialList]?.(owner.token, { leadId: lead.id }),
     ).resolves.toHaveLength(1);
+    const thinking = (await handlers[IPC_CHANNELS.trialOutcome]?.(owner.token, scheduledTrial.id, {
+      expectedVersion: scheduledTrial.version,
+      outcome: 'THINKING',
+    })) as TrialAppointmentSummary | undefined;
+    expect(thinking).toBeDefined();
+    if (!thinking) throw new Error('Результат пробного занятия не сохранён');
+    expect(thinking).toMatchObject({ outcome: 'THINKING' });
+    await expect(
+      handlers[IPC_CHANNELS.trialCancel]?.(owner.token, thinking.id, {
+        expectedVersion: thinking.version,
+      }),
+    ).resolves.toMatchObject({ state: 'CANCELLED' });
+    expect(() =>
+      handlers[IPC_CHANNELS.trialOutcome]?.(owner.token, thinking.id, {
+        expectedVersion: 1,
+        outcome: 'INVALID',
+      }),
+    ).toThrow();
     expect(() =>
       handlers[IPC_CHANNELS.leadCreateStudent]?.(owner.token, lead.id, {
         addToGroup: true,

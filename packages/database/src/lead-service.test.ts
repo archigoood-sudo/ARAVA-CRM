@@ -18,6 +18,7 @@ import {
   type IntegrationService,
 } from './integration-service';
 import { LeadService } from './lead-service';
+import { FinanceService } from './finance-service';
 import { CalendarService } from './calendar-service';
 import { endOfLocalDay, isoWeekday, startOfLocalDay } from './schedule';
 import { ApplicationService } from './services';
@@ -688,5 +689,167 @@ describe('LeadService safe conversion', () => {
       newPassword: 'Admin!TrialChanged2026',
     });
     await expect(service.listTrials(adminSession.token, {})).resolves.toEqual([]);
+  });
+
+  it('manages a student trial, attendance exemption, outcome, cancellation and optimistic updates', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Пробный процесс 2.0' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 3,
+      direction: 'Contemporary',
+      name: 'Пробная группа 2.0',
+      status: 'RECRUITING',
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Ирина',
+      lastName: 'Пробная',
+      status: 'TRIAL',
+    });
+    const startsAt = new Date(Date.now() + 3_600_000);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(startsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    const integration = {
+      listRemoteLeads: vi.fn(() =>
+        Promise.resolve({
+          leads: [],
+          newCount: 0,
+          serverTimestamp: new Date().toISOString(),
+          summary: {},
+        }),
+      ),
+    } as unknown as IntegrationService;
+    const service = new LeadService(database, application, integration, studio);
+
+    const booked = await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      startsAt: lesson.startsAt,
+      studentId: student.id,
+    });
+    const repeated = await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      startsAt: lesson.startsAt,
+      studentId: student.id,
+    });
+    expect(repeated.id).toBe(booked.id);
+    expect(await database.trialAppointment.count()).toBe(1);
+    expect((await studio.getAttendance(ownerToken, lesson.id)).participants).toEqual(
+      expect.arrayContaining([expect.objectContaining({ isTrial: true, studentId: student.id })]),
+    );
+
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    expect(
+      await database.subscriptionLedger.count({
+        where: { attendanceId: `${lesson.id}:${student.id}`, type: 'LESSON_WRITE_OFF' },
+      }),
+    ).toBe(0);
+    await studio.saveAttendance(ownerToken, lesson.id, [{ status: 'LATE', studentId: student.id }]);
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'ABSENT', studentId: student.id },
+    ]);
+    expect(
+      await database.subscriptionLedger.count({
+        where: { attendanceId: `${lesson.id}:${student.id}`, type: 'LESSON_WRITE_OFF' },
+      }),
+    ).toBe(0);
+    const tariff = await database.tariff.create({
+      data: {
+        branchId: branch.id,
+        currency: 'RUB',
+        isActive: true,
+        lessonCount: 1,
+        name: 'Разовое',
+        price: 900,
+        type: 'SINGLE_LESSON',
+      },
+    });
+    expect(
+      (
+        await new FinanceService(database, application).listStudentSubscriptions(
+          ownerToken,
+          student.id,
+        )
+      ).uncoveredDebt,
+    ).toBe(0);
+
+    await database.enrollment.create({
+      data: { groupId: group.id, joinedAt: new Date(), status: 'ACTIVE', studentId: student.id },
+    });
+    const regularStartsAt = new Date(startsAt.getTime() + 24 * 60 * 60 * 1000);
+    const regularLesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(regularStartsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: regularStartsAt.toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, regularLesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    expect(
+      (
+        await new FinanceService(database, application).listStudentSubscriptions(
+          ownerToken,
+          student.id,
+        )
+      ).uncoveredDebt,
+    ).toBe(900);
+
+    const thinking = await service.setTrialOutcome(ownerToken, booked.id, {
+      expectedVersion: repeated.version ?? 2,
+      outcome: 'THINKING',
+    });
+    expect(thinking.outcome).toBe('THINKING');
+    await expect(
+      service.setTrialOutcome(ownerToken, booked.id, {
+        expectedVersion: repeated.version ?? 2,
+        outcome: 'DECLINED',
+      }),
+    ).rejects.toThrow('уже изменён');
+    const cancelled = await service.cancelTrial(ownerToken, booked.id, {
+      expectedVersion: thinking.version ?? 3,
+    });
+    expect(cancelled.state).toBe('CANCELLED');
+    expect((await studio.getAttendance(ownerToken, lesson.id)).participants).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({ isTrial: true, studentId: student.id }),
+      ]),
+    );
+    expect(
+      await database.auditLog.count({ where: { entityId: booked.id } }),
+    ).toBeGreaterThanOrEqual(3);
+
+    const buyer = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Ольга',
+      lastName: 'Покупатель',
+      status: 'TRIAL',
+    });
+    const buyerTrial = await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      startsAt: lesson.startsAt,
+      studentId: buyer.id,
+    });
+    await new FinanceService(database, application).createSubscription(ownerToken, {
+      salePrice: tariff.price,
+      startsAt: new Date().toISOString().slice(0, 10),
+      studentId: buyer.id,
+      tariffId: tariff.id,
+    });
+    expect(await database.student.findUniqueOrThrow({ where: { id: buyer.id } })).toMatchObject({
+      status: 'ACTIVE',
+    });
+    expect(
+      await database.trialAppointment.findUniqueOrThrow({ where: { id: buyerTrial.id } }),
+    ).toMatchObject({ outcome: 'PURCHASED', status: 'BOOKED' });
+    expect(
+      await database.syncOutbox.count({
+        where: { entityId: buyer.id, entityType: 'STUDENT_IDENTITY' },
+      }),
+    ).toBeGreaterThan(0);
   });
 });

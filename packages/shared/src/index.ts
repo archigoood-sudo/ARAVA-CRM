@@ -51,6 +51,8 @@ export {
   trialListQuerySchema,
   trialOccurrenceQuerySchema,
   trialScheduleInputSchema,
+  trialCancelInputSchema,
+  trialOutcomeInputSchema,
   leadStudentConversionInputSchema,
   leadSourceSchema,
   leadStatusSchema,

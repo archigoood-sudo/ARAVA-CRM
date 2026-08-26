@@ -70,7 +70,9 @@ import {
   leadStudentConversionInputSchema,
   leadStatusSchema,
   trialListQuerySchema,
+  trialCancelInputSchema,
   trialOccurrenceQuerySchema,
+  trialOutcomeInputSchema,
   trialScheduleInputSchema,
   passwordChangeSchema,
   paymentInputSchema,
@@ -425,6 +427,12 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         trialListQuerySchema.parse(unsafeQuery),
       ),
+    [IPC_CHANNELS.trialCancel]: (unsafeToken, unsafeId, unsafeInput) =>
+      requireLeads().cancelTrial(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        trialCancelInputSchema.parse(unsafeInput),
+      ),
     [IPC_CHANNELS.trialOccurrences]: (unsafeToken, unsafeQuery) =>
       requireLeads().listTrialOccurrences(
         sessionTokenSchema.parse(unsafeToken),
@@ -434,6 +442,12 @@ export function createIpcHandlers(
       requireLeads().scheduleTrial(
         sessionTokenSchema.parse(unsafeToken),
         trialScheduleInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.trialOutcome]: (unsafeToken, unsafeId, unsafeInput) =>
+      requireLeads().setTrialOutcome(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        trialOutcomeInputSchema.parse(unsafeInput),
       ),
 
     [IPC_CHANNELS.publicationList]: (unsafeToken) =>

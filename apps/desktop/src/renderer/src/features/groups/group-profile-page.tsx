@@ -143,6 +143,19 @@ export function GroupProfilePage() {
     queryFn: () => getDesktopApi().groups.list(getSessionToken(), {}),
     queryKey: queryKeys.groups({}),
   });
+  const upcomingTrials = useQuery({
+    enabled: Boolean(groupId) && canManage,
+    queryFn: () => {
+      const from = new Date();
+      const to = new Date(from);
+      to.setDate(to.getDate() + 30);
+      return getDesktopApi().trials.list(getSessionToken(), {
+        dateFrom: from.toISOString(),
+        dateTo: to.toISOString(),
+      });
+    },
+    queryKey: queryKeys.trials(accessKey, { groupId, upcoming: true }),
+  });
   const members = useMemo(() => {
     const term = search.trim().toLocaleLowerCase('ru-RU');
     return (roster.data?.members ?? []).filter(
@@ -259,6 +272,33 @@ export function GroupProfilePage() {
         <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
           {result}
         </div>
+      ) : null}
+
+      {(upcomingTrials.data ?? []).some(
+        (trial) => trial.groupId === groupId && trial.state !== 'CANCELLED',
+      ) ? (
+        <Card className="mb-5 p-5">
+          <h2 className="text-lg font-semibold">Пробные / ближайшие</h2>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(upcomingTrials.data ?? [])
+              .filter((trial) => trial.groupId === groupId && trial.state !== 'CANCELLED')
+              .map((trial) => (
+                <Link
+                  className="rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted"
+                  key={trial.id}
+                  to={`/attendance/${trial.lessonId}`}
+                >
+                  <b>{trial.leadName}</b> ·{' '}
+                  {formatDate(trial.startsAt, {
+                    day: '2-digit',
+                    month: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </Link>
+              ))}
+          </div>
+        </Card>
       ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">

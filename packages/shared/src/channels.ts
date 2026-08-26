@@ -171,6 +171,8 @@ export const LEAD_STATUSES = [
 export type LeadStatus = (typeof LEAD_STATUSES)[number];
 export const LEAD_SOURCES = ['WEBSITE', 'VK', 'PHONE', 'MANUAL', 'OTHER'] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
+export const TRIAL_OUTCOMES = ['PURCHASED', 'THINKING', 'DECLINED', 'NO_SHOW'] as const;
+export type TrialOutcome = (typeof TRIAL_OUTCOMES)[number];
 
 export const IPC_CHANNELS = {
   activityList: 'activity:list',
@@ -283,6 +285,8 @@ export const IPC_CHANNELS = {
   trialList: 'trial:list',
   trialOccurrences: 'trial:occurrences',
   trialSchedule: 'trial:schedule',
+  trialCancel: 'trial:cancel',
+  trialOutcome: 'trial:outcome',
   leadUpdateStatus: 'lead:update-status',
   webActionApprove: 'web-action:approve',
   webActionList: 'web-action:list',
@@ -1932,6 +1936,7 @@ export interface AttendanceEntryInput {
 
 export interface AttendanceParticipant {
   addedToGroupLater?: boolean | undefined;
+  isTrial?: boolean | undefined;
   comment?: string | undefined;
   markedAt?: string | undefined;
   status?: AttendanceStatus | undefined;
@@ -2460,8 +2465,18 @@ export type TrialWorkflowState =
 
 export interface TrialScheduleInput {
   groupId: string;
-  leadId: string;
+  leadId?: string | undefined;
+  studentId?: string | undefined;
   startsAt: string;
+}
+
+export interface TrialCancelInput {
+  expectedVersion: number;
+}
+
+export interface TrialOutcomeInput {
+  expectedVersion: number;
+  outcome: TrialOutcome;
 }
 
 export interface TrialOccurrenceQuery {
@@ -2485,6 +2500,7 @@ export interface TrialListQuery {
   dateFrom?: string | undefined;
   dateTo?: string | undefined;
   includeFollowUp?: boolean | undefined;
+  includeHistory?: boolean | undefined;
   leadId?: string | undefined;
   studentId?: string | undefined;
 }
@@ -2497,12 +2513,14 @@ export interface TrialAppointmentSummary {
   groupId: string;
   groupName: string;
   id: string;
-  leadId: string;
+  leadId?: string | undefined;
   leadName: string;
   lessonId: string;
   lessonStatus: LessonStatus;
   startsAt: string;
   state: TrialWorkflowState;
+  outcome?: TrialOutcome | undefined;
+  version?: number | undefined;
   studentId?: string | undefined;
 }
 
@@ -2794,8 +2812,18 @@ export interface AravaDesktopApi {
     updateStatus: (token: string, id: string, status: LeadStatus) => Promise<LeadDetail>;
   };
   trials: {
+    cancel: (
+      token: string,
+      id: string,
+      input: TrialCancelInput,
+    ) => Promise<TrialAppointmentSummary>;
     list: (token: string, query: TrialListQuery) => Promise<TrialAppointmentSummary[]>;
     occurrences: (token: string, query: TrialOccurrenceQuery) => Promise<TrialOccurrenceSummary[]>;
+    setOutcome: (
+      token: string,
+      id: string,
+      input: TrialOutcomeInput,
+    ) => Promise<TrialAppointmentSummary>;
     schedule: (token: string, input: TrialScheduleInput) => Promise<TrialAppointmentSummary>;
   };
   chats: {
