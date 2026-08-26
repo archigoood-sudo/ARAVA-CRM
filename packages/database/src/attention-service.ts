@@ -775,16 +775,18 @@ export class AttentionService {
           title: 'Не удаётся создать автоматическую копию',
         });
 
-      const [integrationSettings, failedSync, oldestPending, pendingCount] = await Promise.all([
-        this.database.appSetting.findMany({ where: { key: { startsWith: 'integration.' } } }),
-        this.database.syncOutbox.count({ where: { status: 'FAILED' } }),
-        this.database.syncOutbox.findFirst({
-          orderBy: { createdAt: 'asc' },
-          select: { createdAt: true },
-          where: { status: { in: ['PENDING', 'PROCESSING'] } },
-        }),
-        this.database.syncOutbox.count({ where: { status: { in: ['PENDING', 'PROCESSING'] } } }),
-      ]);
+      const [integrationSettings, failedSync, oldestPending, pendingCount, conflictCount] =
+        await Promise.all([
+          this.database.appSetting.findMany({ where: { key: { startsWith: 'integration.' } } }),
+          this.database.syncOutbox.count({ where: { status: 'FAILED' } }),
+          this.database.syncOutbox.findFirst({
+            orderBy: { createdAt: 'asc' },
+            select: { createdAt: true },
+            where: { status: { in: ['PENDING', 'PROCESSING'] } },
+          }),
+          this.database.syncOutbox.count({ where: { status: { in: ['PENDING', 'PROCESSING'] } } }),
+          this.database.syncConflict.count({ where: { status: 'OPEN' } }),
+        ]);
       const integrationSetting = new Map(integrationSettings.map(({ key, value }) => [key, value]));
       if (integrationSetting.get('integration.enabled') === 'true') {
         const state = integrationSetting.get('integration.lastState');
@@ -808,6 +810,18 @@ export class AttentionService {
               state === 'AUTH_ERROR'
                 ? 'Интеграция отключена сервером'
                 : 'Требуется обновление интеграции',
+          });
+        else if (conflictCount > 0)
+          add({
+            actionLabel: 'Разрешить конфликты',
+            actionRoute: '/settings#integration',
+            category: 'INTEGRATION',
+            description: `Требуют выбора: ${String(conflictCount)}. Данные не будут перезаписаны автоматически.`,
+            entityId: 'integration-conflicts',
+            entityType: 'Integration',
+            id: 'integration:conflicts',
+            severity: 'CRITICAL',
+            title: 'Конфликт синхронизации',
           });
         else if (failedSync >= 3 || pendingCount >= 100 || oldestHours >= 24)
           add({

@@ -14,6 +14,7 @@ import type {
   ClientWebAccessResult,
   ClientWebAccessStatus,
   IntegrationInitialSyncPreview,
+  IntegrationConflictDisplay,
   IntegrationConflictResolutionInput,
   IntegrationConflictSummary,
   IntegrationDiagnosticCheck,
@@ -601,6 +602,7 @@ function parseManagedConflict(value: unknown): IntegrationConflictSummary {
     canonicalRevision: value.canonicalRevision,
     createdAt: value.createdAt,
     differences,
+    display: fallbackConflictDisplay(value.entityType, value.sourceDeviceName),
     entityId: value.entityId,
     entityType: value.entityType,
     id: value.id,
@@ -610,6 +612,123 @@ function parseManagedConflict(value: unknown): IntegrationConflictSummary {
       : {}),
     status: value.status,
   };
+}
+
+const SYNC_ENTITY_LABELS: Record<string, string> = {
+  ATTENDANCE: 'Посещение',
+  BRANCH: 'Филиал',
+  CARD: 'Карта',
+  GROUP: 'Группа',
+  GROUP_MEMBERSHIP: 'Состав группы',
+  LESSON: 'Занятие',
+  ROOM: 'Зал',
+  SCHEDULE: 'Расписание',
+  STUDENT_CONTACT: 'Контакт ученика',
+  STUDENT_IDENTITY: 'Ученик',
+  STUDENT_NOTE: 'Заметка ученика',
+  SUBSCRIPTION: 'Абонемент',
+  SUBSCRIPTION_LEDGER: 'Операция абонемента',
+  SUBSTITUTION: 'Замена тренера',
+  TARIFF: 'Тариф',
+  TRAINER: 'Тренер',
+  TRIAL_APPOINTMENT: 'Пробное занятие',
+};
+
+const RETRYABLE_SYNC_ERROR_CODES = new Set([
+  'HTTP_429',
+  'HTTP_500',
+  'HTTP_502',
+  'HTTP_503',
+  'HTTP_504',
+  'NETWORK_UNAVAILABLE',
+  'RATE_LIMITED',
+  'TEMPORARY_ERROR',
+  'TIMEOUT',
+]);
+
+function fallbackConflictDisplay(
+  entityType: string,
+  sourceDeviceName?: unknown,
+): IntegrationConflictDisplay {
+  const category = SYNC_ENTITY_LABELS[entityType] ?? 'Данные';
+  return {
+    candidateLabel:
+      typeof sourceDeviceName === 'string' && sourceDeviceName.trim()
+        ? `На устройстве «${sourceDeviceName.trim()}»`
+        : 'На другом устройстве',
+    candidateLines: ['Изменённая версия данных'],
+    canonicalLabel: 'На сервере',
+    canonicalLines: ['Текущая версия на сервере'],
+    category,
+    title: `${category}: данные изменены одновременно`,
+  };
+}
+
+function dateForConflict(value: unknown): string {
+  if (typeof value !== 'string') return 'Не указана';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Не указана';
+  return new Intl.DateTimeFormat('ru-RU', {
+    dateStyle: 'long',
+    timeZone: 'Europe/Moscow',
+  }).format(date);
+}
+
+function dateTimeForConflict(value: unknown): string {
+  if (typeof value !== 'string') return 'Не указано';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Не указано';
+  return new Intl.DateTimeFormat('ru-RU', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Europe/Moscow',
+  }).format(date);
+}
+
+function humanConflictField(field: string): string {
+  const labels: Record<string, string> = {
+    address: 'Адрес',
+    branchId: 'Филиал',
+    capacity: 'Вместимость',
+    description: 'Описание',
+    displayName: 'Имя',
+    email: 'Электронная почта',
+    firstName: 'Имя',
+    isActive: 'Активность',
+    lastName: 'Фамилия',
+    name: 'Название',
+    phone: 'Телефон',
+    status: 'Статус',
+    updatedAt: 'Обновлено',
+  };
+  return labels[field] ?? 'Изменённое значение';
+}
+
+function humanConflictValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return 'Не указано';
+  if (typeof value === 'boolean') return value ? 'Да' : 'Нет';
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.map(humanConflictValue).join(', ');
+  return 'Данные изменены';
+}
+
+function safeSyncErrorMessage(errorCode: string | null): string {
+  const messages: Record<string, string> = {
+    AUTH_REQUIRED: 'Устройство требует повторного подключения.',
+    DEVICE_REVOKED: 'Доступ этого устройства отозван.',
+    HTTP_429: 'Сервер временно ограничил частоту запросов.',
+    HTTP_500: 'Сервер временно не смог обработать изменение.',
+    HTTP_502: 'Сервер синхронизации временно недоступен.',
+    HTTP_503: 'Сервер синхронизации временно недоступен.',
+    HTTP_504: 'Сервер не ответил вовремя.',
+    INVALID_PAYLOAD: 'Данные изменения требуют проверки.',
+    NETWORK_UNAVAILABLE: 'Сервер синхронизации недоступен.',
+    RATE_LIMITED: 'Сервер временно ограничил частоту запросов.',
+    TEMPORARY_ERROR: 'Изменение временно не удалось отправить.',
+    TIMEOUT: 'Сервер не ответил вовремя.',
+    VERSION_UNSUPPORTED: 'Для синхронизации требуется обновить приложение.',
+  };
+  return messages[errorCode ?? ''] ?? 'Изменение не удалось отправить.';
 }
 
 function parseReconciliationPreview(value: unknown): IntegrationReconciliationPreview {
@@ -2240,6 +2359,17 @@ export class IntegrationService {
     return actor;
   }
 
+  private async assertSyncObserver(token: string): Promise<AuthenticatedUser> {
+    const actor = await this.application.authenticate(token);
+    if (actor.role !== 'OWNER' && actor.role !== 'ADMIN') {
+      throw new DomainError(
+        'AUTHORIZATION',
+        'Состояние синхронизации доступно владельцу и администратору.',
+      );
+    }
+    return actor;
+  }
+
   private ownerContext(actor: AuthenticatedUser): CrmChatRequestContext {
     return {
       branchIds: actor.branchIds,
@@ -3068,7 +3198,7 @@ export class IntegrationService {
   }
 
   async getStatus(token: string): Promise<IntegrationStatus> {
-    await this.assertOwner(token);
+    await this.assertSyncObserver(token);
     return this.systemStatus();
   }
 
@@ -3086,6 +3216,7 @@ export class IntegrationService {
       inboundCursor,
       lastInboundSync,
       lastOutboundSync,
+      failedItems,
     ] = await Promise.all([
       this.credentials.getDeviceId(),
       this.credentials.getToken(),
@@ -3103,10 +3234,23 @@ export class IntegrationService {
       this.setting(SETTINGS.inboundCursor),
       this.setting(SETTINGS.lastInboundSync),
       this.setting(SETTINGS.lastOutboundSync),
+      this.database.syncOutbox.findMany({
+        orderBy: { updatedAt: 'desc' },
+        select: {
+          createdAt: true,
+          entityType: true,
+          id: true,
+          lastAttemptAt: true,
+          lastErrorCode: true,
+        },
+        take: 20,
+        where: { status: 'FAILED' },
+      }),
     ]);
     const count = (status: 'PENDING' | 'PROCESSING' | 'FAILED') =>
       counts.find((entry) => entry.status === status)?._count ?? 0;
-    const pendingCount = count('PENDING') + count('PROCESSING');
+    const pendingCount = count('PENDING');
+    const processingCount = count('PROCESSING');
     const failedCount = count('FAILED');
     const enabled = enabledValue === 'true';
     let connectionState: IntegrationStatus['connectionState'];
@@ -3118,7 +3262,7 @@ export class IntegrationService {
     else if (conflictCount > 0) connectionState = 'CONFLICT';
     else if (lastState === 'OFFLINE') connectionState = 'OFFLINE';
     else if (failedCount > 0) connectionState = 'SYNC_ERROR';
-    else if (pendingCount > 0 || failedCount > 0) connectionState = 'PENDING_CHANGES';
+    else if (pendingCount > 0 || processingCount > 0) connectionState = 'PENDING_CHANGES';
     else connectionState = 'CONNECTED';
     let devices: IntegrationDeviceSummary[] = [];
     if (enabled && token && baseUrl) {
@@ -3128,14 +3272,28 @@ export class IntegrationService {
         // Status stays available from durable local state while offline.
       }
     }
+    const currentDevice = devices.find((device) => device.deviceId === deviceId);
+    const safeFailedItems = failedItems.map((item) => ({
+      createdAt: item.createdAt.toISOString(),
+      entityLabel: SYNC_ENTITY_LABELS[item.entityType] ?? 'Данные',
+      entityType: item.entityType,
+      id: item.id,
+      ...(item.lastAttemptAt ? { lastAttemptAt: item.lastAttemptAt.toISOString() } : {}),
+      reason: safeSyncErrorMessage(item.lastErrorCode),
+      retryable: RETRYABLE_SYNC_ERROR_CODES.has(item.lastErrorCode ?? ''),
+    }));
     return {
       baseUrl: baseUrl ?? '',
       connectionState,
       conflictCount,
+      ...(currentDevice?.displayName || currentDevice?.name
+        ? { currentDeviceName: currentDevice.displayName ?? currentDevice.name }
+        : {}),
       devices,
       deviceId,
       enabled,
       failedCount,
+      failedItems: safeFailedItems,
       isPaired: Boolean(token),
       ...(lastError ? { lastError } : {}),
       ...(lastInboundSync ? { lastInboundSync } : {}),
@@ -3143,6 +3301,9 @@ export class IntegrationService {
       ...(lastSuccessfulSync ? { lastSuccessfulSync } : {}),
       inboundCursor: Number(inboundCursor ?? 0),
       pendingCount,
+      processingCount,
+      recoveryBlocked: pendingCount + processingCount + failedCount > 0,
+      retryableFailedCount: safeFailedItems.filter(({ retryable }) => retryable).length,
       syncInProgress: this.processing,
     };
   }
@@ -3679,15 +3840,180 @@ export class IntegrationService {
     return this.systemStatus();
   }
 
+  private async humanizeConflicts(
+    conflicts: IntegrationConflictSummary[],
+  ): Promise<IntegrationConflictSummary[]> {
+    const payloads = conflicts.flatMap(({ candidate, canonical }) => [candidate, canonical]);
+    const collectIds = (key: string) => [
+      ...new Set(
+        payloads
+          .map((payload) => payload[key])
+          .filter((value): value is string => typeof value === 'string' && value.length > 0),
+      ),
+    ];
+    const studentIds = collectIds('studentId');
+    const groupIds = collectIds('groupId');
+    const lessonIds = collectIds('lessonId');
+    for (const conflict of conflicts) {
+      if (conflict.entityType === 'STUDENT_IDENTITY') studentIds.push(conflict.entityId);
+      if (conflict.entityType === 'GROUP') groupIds.push(conflict.entityId);
+    }
+    const [students, groups, lessons] = await Promise.all([
+      this.database.student.findMany({
+        select: { firstName: true, id: true, lastName: true },
+        where: { id: { in: [...new Set(studentIds)] } },
+      }),
+      this.database.danceGroup.findMany({
+        select: { id: true, name: true },
+        where: { id: { in: [...new Set(groupIds)] } },
+      }),
+      this.database.lesson.findMany({
+        select: { groupId: true, id: true, startsAt: true },
+        where: { id: { in: lessonIds } },
+      }),
+    ]);
+    const studentNames = new Map(
+      students.map(({ firstName, id, lastName }) => [id, `${lastName} ${firstName}`.trim()]),
+    );
+    const groupNames = new Map(groups.map(({ id, name }) => [id, name]));
+    const lessonDetails = new Map(
+      lessons.map(({ groupId, id, startsAt }) => [
+        id,
+        {
+          groupId,
+          startsAt: new Intl.DateTimeFormat('ru-RU', {
+            dateStyle: 'long',
+            timeStyle: 'short',
+            timeZone: 'Europe/Moscow',
+          }).format(startsAt),
+        },
+      ]),
+    );
+    const statusLabel = (value: unknown) => {
+      const labels: Record<string, string> = {
+        ABSENT: 'Отсутствовал',
+        ACTIVE: 'Активно',
+        BOOKED: 'Запланировано',
+        CANCELLED: 'Отменено',
+        EXCUSED: 'По уважительной причине',
+        FROZEN: 'Заморожено',
+        ILL: 'Болел',
+        LEFT: 'Завершено',
+        PRESENT: 'Присутствовал',
+        TRIAL: 'Пробное',
+      };
+      return typeof value === 'string' ? (labels[value] ?? value) : 'Не указано';
+    };
+    const outcomeLabel = (value: unknown) => {
+      const labels: Record<string, string> = {
+        DECLINED: 'Отказался',
+        NO_SHOW: 'Не пришёл',
+        PURCHASED: 'Купил абонемент',
+        THINKING: 'Думает',
+      };
+      return typeof value === 'string' ? (labels[value] ?? value) : 'Не указан';
+    };
+    const payloadName = (payload: Record<string, unknown>) => {
+      const studentId = optionalString(payload.studentId);
+      if (studentId && studentNames.has(studentId)) return studentNames.get(studentId);
+      const firstName = optionalString(payload.firstName);
+      const lastName = optionalString(payload.lastName);
+      return [lastName, firstName].filter(Boolean).join(' ') || undefined;
+    };
+    const conflictLines = (
+      conflict: IntegrationConflictSummary,
+      payload: Record<string, unknown>,
+      operation: 'UPSERT' | 'ARCHIVE',
+    ): string[] => {
+      if (conflict.entityType === 'TRIAL_APPOINTMENT') {
+        const lesson = lessonDetails.get(optionalString(payload.lessonId) ?? '');
+        const groupId = optionalString(payload.groupId) ?? lesson?.groupId;
+        return [
+          lesson?.startsAt ? `Дата и время: ${lesson.startsAt}` : 'Дата и время не найдены',
+          `Группа: ${groupNames.get(groupId ?? '') ?? 'Группа недоступна'}`,
+          `Состояние: ${operation === 'ARCHIVE' ? 'Отменено' : statusLabel(payload.status)}`,
+          `Результат: ${outcomeLabel(payload.outcome)}`,
+          ...(payload.supersededAt ? ['Запись заменена переносом'] : []),
+          ...(payload.updatedAt ? [`Изменено: ${dateTimeForConflict(payload.updatedAt)}`] : []),
+        ];
+      }
+      if (conflict.entityType === 'STUDENT_IDENTITY') {
+        return [
+          `Ученик: ${payloadName(payload) ?? 'Данные ученика недоступны'}`,
+          `Телефон: ${optionalString(payload.phone) ?? 'Не указан'}`,
+          `Статус: ${operation === 'ARCHIVE' ? 'Архив' : statusLabel(payload.status)}`,
+          ...(payload.updatedAt ? [`Изменено: ${dateTimeForConflict(payload.updatedAt)}`] : []),
+        ];
+      }
+      if (conflict.entityType === 'GROUP_MEMBERSHIP') {
+        const studentId = optionalString(payload.studentId);
+        const groupId = optionalString(payload.groupId);
+        return [
+          `Ученик: ${studentNames.get(studentId ?? '') ?? 'Ученик недоступен'}`,
+          `Группа: ${groupNames.get(groupId ?? '') ?? 'Группа недоступна'}`,
+          `Статус: ${operation === 'ARCHIVE' ? 'Завершено' : statusLabel(payload.status)}`,
+          ...(optionalString(payload.joinedAt)
+            ? [`Дата вступления: ${dateForConflict(payload.joinedAt)}`]
+            : []),
+          ...(optionalString(payload.leftAt)
+            ? [`Дата выхода: ${dateForConflict(payload.leftAt)}`]
+            : []),
+          ...(payload.updatedAt ? [`Изменено: ${dateTimeForConflict(payload.updatedAt)}`] : []),
+        ];
+      }
+      if (conflict.entityType === 'ATTENDANCE') {
+        const lesson = lessonDetails.get(optionalString(payload.lessonId) ?? '');
+        const studentId = optionalString(payload.studentId);
+        return [
+          `Ученик: ${studentNames.get(studentId ?? '') ?? 'Ученик недоступен'}`,
+          `Группа: ${groupNames.get(lesson?.groupId ?? '') ?? 'Группа недоступна'}`,
+          lesson?.startsAt ? `Занятие: ${lesson.startsAt}` : 'Занятие недоступно',
+          `Посещение: ${statusLabel(payload.status)}`,
+          ...(payload.updatedAt ? [`Изменено: ${dateTimeForConflict(payload.updatedAt)}`] : []),
+        ];
+      }
+      return conflict.differences.slice(0, 6).map(({ candidate, canonical, field }) => {
+        const value = payload === conflict.canonical ? canonical : candidate;
+        return `${humanConflictField(field)}: ${humanConflictValue(value)}`;
+      });
+    };
+    return conflicts.map((conflict) => {
+      const fallback = fallbackConflictDisplay(conflict.entityType, conflict.sourceDeviceName);
+      const subject =
+        payloadName(conflict.canonical) ??
+        payloadName(conflict.candidate) ??
+        (conflict.entityType === 'GROUP'
+          ? (optionalString(conflict.canonical.name) ?? optionalString(conflict.candidate.name))
+          : undefined);
+      const titles: Record<string, string> = {
+        ATTENDANCE: 'Посещение изменено одновременно',
+        GROUP_MEMBERSHIP: 'Состав группы изменён на двух устройствах',
+        STUDENT_IDENTITY: 'Данные ученика изменены одновременно',
+        TRIAL_APPOINTMENT: 'Пробное занятие изменено на другом устройстве',
+      };
+      return {
+        ...conflict,
+        display: {
+          ...fallback,
+          candidateLines: conflictLines(conflict, conflict.candidate, conflict.candidateOperation),
+          canonicalLines: conflictLines(conflict, conflict.canonical, conflict.canonicalOperation),
+          ...(subject ? { subject } : {}),
+          title: titles[conflict.entityType] ?? fallback.title,
+        },
+      };
+    });
+  }
+
   async listConflicts(token: string): Promise<IntegrationConflictSummary[]> {
     const actor = await this.assertOwner(token);
     const connection = await this.integrationConnection();
-    return this.api.listConflicts(
+    const conflicts = await this.api.listConflicts(
       connection.baseUrl,
       connection.deviceId,
       connection.token,
       this.ownerContext(actor),
     );
+    return this.humanizeConflicts(conflicts);
   }
 
   async resolveConflict(
@@ -3697,6 +4023,26 @@ export class IntegrationService {
   ): Promise<IntegrationConflictSummary> {
     const actor = await this.assertOwner(token);
     const connection = await this.integrationConnection();
+    const openConflict = (
+      await this.api.listConflicts(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        this.ownerContext(actor),
+      )
+    ).find((conflict) => conflict.id === conflictId && conflict.status === 'OPEN');
+    if (!openConflict) {
+      throw new DomainError('CONFLICT', 'Конфликт уже разрешён или больше не существует.');
+    }
+    if (
+      openConflict.entityType === 'SUBSCRIPTION' ||
+      openConflict.entityType === 'SUBSCRIPTION_LEDGER'
+    ) {
+      throw new DomainError(
+        'AUTHORIZATION',
+        'Финансовый конфликт нельзя разрешить обычным перезаписыванием.',
+      );
+    }
     const resolved = await this.api.resolveConflict(
       connection.baseUrl,
       connection.deviceId,
@@ -3709,6 +4055,10 @@ export class IntegrationService {
       data: { resolvedAt: this.now(), status: 'RESOLVED' },
       where: { serverConflictId: conflictId },
     });
+    await this.processPending();
+    if (INBOUND_ENTITY_TYPES.has(resolved.entityType as InboundChange['entityType'])) {
+      this.onInboundApplied?.(resolved.entityType as SyncEntityType);
+    }
     return resolved;
   }
 

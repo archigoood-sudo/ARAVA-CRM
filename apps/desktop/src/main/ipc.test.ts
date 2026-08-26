@@ -165,7 +165,7 @@ describe('Electron IPC boundary', () => {
     });
   });
 
-  it('keeps integration IPC OWNER-only and never returns device credentials', async () => {
+  it('exposes safe sync health to ADMIN but keeps diagnostics and management OWNER-only', async () => {
     const initial = await service.login({
       email: INITIAL_OWNER_EMAIL,
       password: INITIAL_OWNER_PASSWORD,
@@ -202,9 +202,9 @@ describe('Electron IPC boundary', () => {
     expect(JSON.stringify(ownerStatus)).not.toContain(credentials.token);
     const ownerDiagnostics = await handlers[IPC_CHANNELS.integrationDiagnose]?.(initial.token);
     expect(JSON.stringify(ownerDiagnostics)).not.toContain(credentials.token);
-    await expect(handlers[IPC_CHANNELS.integrationGetStatus]?.(admin.token)).rejects.toThrow(
-      'только владелец',
-    );
+    const adminStatus = await handlers[IPC_CHANNELS.integrationGetStatus]?.(admin.token);
+    expect(JSON.stringify(adminStatus)).not.toContain(credentials.token);
+    expect(adminStatus).toMatchObject({ failedItems: [], processingCount: 0 });
     await expect(handlers[IPC_CHANNELS.integrationDiagnose]?.(admin.token)).rejects.toThrow(
       'только владелец',
     );

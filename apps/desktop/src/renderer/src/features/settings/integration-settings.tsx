@@ -48,7 +48,7 @@ const stateLabels: Record<IntegrationConnectionState, string> = {
   CONNECTED: 'Подключено',
   DISABLED: 'Выключено',
   NOT_PAIRED: 'Не подключено',
-  OFFLINE: 'Нет соединения',
+  OFFLINE: 'Сервер временно недоступен',
   PENDING_CHANGES: 'Есть несинхронизированные изменения',
   RECONCILIATION_REQUIRED: 'Требуется первичное согласование',
   SYNC_ERROR: 'Ошибка синхронизации',
@@ -90,21 +90,6 @@ const diagnosticLevelLabels: Record<IntegrationDiagnosticLevel, string> = {
   WARNING: 'Предупреждение',
   WORKING: 'Работает',
 };
-const fieldLabels: Record<string, string> = {
-  address: 'Адрес',
-  branchId: 'Филиал',
-  capacity: 'Вместимость',
-  description: 'Описание',
-  displayName: 'Имя',
-  email: 'Электронная почта',
-  firstName: 'Имя',
-  isActive: 'Активность',
-  lastName: 'Фамилия',
-  name: 'Название',
-  phone: 'Телефон',
-  status: 'Статус',
-  updatedAt: 'Обновлено',
-};
 
 function errorMessage(error: unknown): string {
   return error instanceof Error
@@ -120,21 +105,30 @@ function dateTime(value?: string): string {
     : 'Ещё не выполнялась';
 }
 
-function readableValue(value: unknown): string {
-  if (value === null || value === undefined || value === '') return 'Не указано';
-  if (typeof value === 'boolean') return value ? 'Да' : 'Нет';
-  if (typeof value === 'string' || typeof value === 'number') return String(value);
-  if (Array.isArray(value)) return value.map(readableValue).join(', ');
-  return 'Составные данные';
+function relativeSyncTime(value?: string): string {
+  if (!value) return 'Ещё не выполнялась';
+  const date = new Date(value);
+  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return 'Только что';
+  if (seconds < 3600) return `${String(Math.floor(seconds / 60))} мин. назад`;
+  return dateTime(value);
 }
 
-function conflictIdentity(conflict: IntegrationConflictSummary): string {
-  const payload = conflict.canonical;
-  const direct = payload.displayName ?? payload.name;
-  if (typeof direct === 'string' && direct.trim()) return direct;
-  const firstName = typeof payload.firstName === 'string' ? payload.firstName : '';
-  const lastName = typeof payload.lastName === 'string' ? payload.lastName : '';
-  return `${lastName} ${firstName}`.trim() || conflict.entityId.slice(0, 12);
+function statusExplanation(state: IntegrationConnectionState): string {
+  const explanations: Record<IntegrationConnectionState, string> = {
+    AUTH_ERROR: 'Это устройство больше не авторизовано для синхронизации.',
+    CONFLICT: 'Некоторые данные изменены одновременно и требуют вашего выбора.',
+    CONNECTED: 'Все изменения синхронизированы.',
+    DISABLED: 'Синхронизация выключена в настройках.',
+    NOT_PAIRED: 'Подключите устройство к ARAVA-WEB.',
+    OFFLINE:
+      'Сервер синхронизации временно недоступен. Изменения сохранены локально и будут отправлены позже.',
+    PENDING_CHANGES: 'Локальные изменения безопасно ожидают отправки.',
+    RECONCILIATION_REQUIRED: 'Требуется безопасно согласовать локальные и серверные данные.',
+    SYNC_ERROR: 'Часть изменений не удалось отправить. Можно повторить безопасно.',
+    VERSION_UNSUPPORTED: 'Обновите приложение, чтобы продолжить синхронизацию.',
+  };
+  return explanations[state];
 }
 
 export function IntegrationSettings() {
@@ -271,7 +265,7 @@ export function IntegrationSettings() {
     mutationFn: ({ conflict, resolution }: NonNullable<typeof resolving>) =>
       getDesktopApi().integration.resolveConflict(getSessionToken(), conflict.id, {
         expectedCanonicalRevision: conflict.canonicalRevision,
-        idempotencyKey: `resolve:${conflict.id}:${crypto.randomUUID()}`,
+        idempotencyKey: `resolve:${conflict.id}:${String(conflict.canonicalRevision)}:${resolution}`,
         resolution,
       }),
     onError: (error) => setNotice(errorMessage(error)),
@@ -343,6 +337,11 @@ export function IntegrationSettings() {
             <p className="mt-1 text-sm text-muted-foreground">
               Безопасная фоновая передача изменений. CRM продолжает работать без интернета.
             </p>
+            {status.data ? (
+              <p className="mt-2 text-sm font-medium">
+                {statusExplanation(status.data.connectionState)}
+              </p>
+            ) : null}
           </div>
           <Badge>{status.data ? stateLabels[status.data.connectionState] : 'Проверка…'}</Badge>
         </div>
@@ -374,14 +373,23 @@ export function IntegrationSettings() {
           </Button>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6" data-testid="sync-health">
           <div className="rounded-2xl bg-muted p-4">
             <p className="text-xs text-muted-foreground">Устройство</p>
-            <p className="mt-1 truncate font-mono text-xs">{status.data?.deviceId ?? '—'}</p>
+            <p className="mt-1 truncate font-semibold">
+              {status.data?.currentDeviceName ?? 'Это устройство'}
+            </p>
+            <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+              {status.data ? formatShortDeviceId(status.data.deviceId) : '—'}
+            </p>
           </div>
           <div className="rounded-2xl bg-muted p-4">
             <p className="text-xs text-muted-foreground">Ожидают отправки</p>
             <p className="mt-1 text-xl font-semibold">{status.data?.pendingCount ?? 0}</p>
+          </div>
+          <div className="rounded-2xl bg-muted p-4">
+            <p className="text-xs text-muted-foreground">Отправляются</p>
+            <p className="mt-1 text-xl font-semibold">{status.data?.processingCount ?? 0}</p>
           </div>
           <div className="rounded-2xl bg-muted p-4">
             <p className="text-xs text-muted-foreground">Ошибки</p>
@@ -394,10 +402,51 @@ export function IntegrationSettings() {
           <div className="rounded-2xl bg-muted p-4">
             <p className="text-xs text-muted-foreground">Последняя синхронизация</p>
             <p className="mt-1 text-sm font-semibold">
-              {dateTime(status.data?.lastSuccessfulSync)}
+              {relativeSyncTime(status.data?.lastSuccessfulSync)}
             </p>
           </div>
         </div>
+
+        {status.data?.failedCount ? (
+          <div className="space-y-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-semibold">
+                  Не удалось отправить {String(status.data.failedCount)} изменений
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Данные сохранены локально. Временные ошибки можно безопасно повторить.
+                </p>
+              </div>
+              <Button
+                disabled={action.isPending || status.data.retryableFailedCount === 0}
+                onClick={() => action.mutate('sync')}
+                size="small"
+                variant="outline"
+              >
+                <RefreshCw className="mr-2 size-4" /> Повторить отправку
+              </Button>
+            </div>
+            {status.data.failedItems.map((item) => (
+              <div className="rounded-xl bg-background px-4 py-3 text-sm" key={item.id}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium">{item.entityLabel}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {dateTime(item.lastAttemptAt ?? item.createdAt)}
+                  </span>
+                </div>
+                <p className="mt-1 text-muted-foreground">{item.reason}</p>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {status.data?.recoveryBlocked ? (
+          <p className="rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning-foreground">
+            Восстановление с сервера недоступно, пока на этом устройстве есть неотправленные
+            изменения или ошибки отправки.
+          </p>
+        ) : null}
 
         {status.data?.devices.length ? (
           <div className="overflow-hidden rounded-2xl border border-border">
@@ -690,7 +739,7 @@ export function IntegrationSettings() {
           </Button>
           <Button
             className="border-destructive text-destructive hover:bg-destructive/10"
-            disabled={!status.data?.isPaired || recover.isPending}
+            disabled={!status.data?.isPaired || status.data.recoveryBlocked || recover.isPending}
             onClick={() => {
               setNotice(undefined);
               setRecoveryConfirmationOpen(true);
@@ -743,67 +792,93 @@ export function IntegrationSettings() {
             <div>
               <h3 className="text-lg font-semibold">Конфликты синхронизации</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Выберите версию осознанно. Решение создаст новую каноническую ревизию для всех
-                устройств.
+                Эти данные были изменены одновременно. Выберите правильную версию целиком.
               </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {Object.entries(
+                  conflicts.data.reduce<Record<string, number>>((groups, conflict) => {
+                    groups[conflict.display.category] =
+                      (groups[conflict.display.category] ?? 0) + 1;
+                    return groups;
+                  }, {}),
+                ).map(([category, count]) => (
+                  <Badge key={category}>
+                    {category} — {String(count)}
+                  </Badge>
+                ))}
+              </div>
             </div>
             {conflicts.data.map((conflict) => (
               <div className="rounded-xl border border-border bg-background p-4" key={conflict.id}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="font-semibold">
-                      {entityLabels[conflict.entityType] ?? conflict.entityType}
-                      <span className="ml-2 font-normal">{conflictIdentity(conflict)}</span>
+                      {conflict.display.title}
+                      {conflict.display.subject ? (
+                        <span className="ml-2 font-normal">{conflict.display.subject}</span>
+                      ) : null}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {conflict.entityId.slice(0, 12)} ·{' '}
-                      {conflict.sourceDeviceName ?? formatShortDeviceId(conflict.sourceDeviceId)} ·{' '}
+                      {conflict.sourceDeviceName ?? 'Другое устройство'} ·{' '}
                       {dateTime(conflict.createdAt)}
                     </p>
                   </div>
                   <Badge>Требует решения</Badge>
                 </div>
-                <div className="mt-3 overflow-hidden rounded-lg border border-border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Поле</TableHead>
-                        <TableHead>Текущая версия</TableHead>
-                        <TableHead>Версия устройства</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {conflict.differences.map((difference) => (
-                        <TableRow key={difference.field}>
-                          <TableCell>{fieldLabels[difference.field] ?? difference.field}</TableCell>
-                          <TableCell>{readableValue(difference.canonical)}</TableCell>
-                          <TableCell>{readableValue(difference.candidate)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {[
+                    {
+                      label: conflict.display.canonicalLabel,
+                      lines: conflict.display.canonicalLines,
+                    },
+                    {
+                      label: conflict.display.candidateLabel,
+                      lines: conflict.display.candidateLines,
+                    },
+                  ].map(({ label, lines }) => (
+                    <div className="rounded-xl border border-border bg-muted/40 p-4" key={label}>
+                      <p className="font-semibold">{label}</p>
+                      <div className="mt-2 space-y-1 text-sm text-muted-foreground">
+                        {lines.map((line) => (
+                          <p key={line}>{line}</p>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
                 <details className="mt-3 text-xs text-muted-foreground">
-                  <summary>Технические сведения</summary>
-                  <p className="mt-2 font-mono">
-                    Ревизия {conflict.canonicalRevision} · ID {conflict.id}
-                  </p>
+                  <summary>Техническая информация</summary>
+                  <div className="mt-2 space-y-1 font-mono">
+                    <p>Тип: {conflict.entityType}</p>
+                    <p>Ревизия: {conflict.canonicalRevision}</p>
+                    <p>Базовая ревизия: {conflict.baseRevision}</p>
+                    <p>ID конфликта: {conflict.id}</p>
+                    <p>ID устройства: {formatShortDeviceId(conflict.sourceDeviceId)}</p>
+                  </div>
                 </details>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button
-                    onClick={() => setResolving({ conflict, resolution: 'KEEP_CANONICAL' })}
-                    size="small"
-                    variant="outline"
-                  >
-                    Оставить текущую версию
-                  </Button>
-                  <Button
-                    onClick={() => setResolving({ conflict, resolution: 'ACCEPT_CANDIDATE' })}
-                    size="small"
-                  >
-                    Принять версию устройства
-                  </Button>
-                </div>
+                {conflict.entityType === 'SUBSCRIPTION' ||
+                conflict.entityType === 'SUBSCRIPTION_LEDGER' ? (
+                  <p className="mt-3 rounded-xl bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                    Финансовый конфликт нельзя перезаписать обычным выбором. Проверьте данные и
+                    обратитесь к владельцу системы.
+                  </p>
+                ) : (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      onClick={() => setResolving({ conflict, resolution: 'KEEP_CANONICAL' })}
+                      size="small"
+                      variant="outline"
+                    >
+                      Использовать изменения с сервера
+                    </Button>
+                    <Button
+                      onClick={() => setResolving({ conflict, resolution: 'ACCEPT_CANDIDATE' })}
+                      size="small"
+                    >
+                      Оставить изменения этого устройства
+                    </Button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -831,8 +906,10 @@ export function IntegrationSettings() {
         >
           <p className="text-sm text-muted-foreground">
             {resolving?.resolution === 'KEEP_CANONICAL'
-              ? 'Будет сохранена текущая серверная версия.'
-              : 'Будет принята версия с указанного устройства.'}
+              ? 'Будут использованы изменения с сервера.'
+              : 'Будут сохранены изменения выбранного устройства.'}{' '}
+            После разрешения выбранная версия станет основной и синхронизируется на другие
+            устройства.
           </p>
         </Dialog>
 

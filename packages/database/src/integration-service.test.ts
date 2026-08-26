@@ -942,6 +942,158 @@ describe('Sprint 4.5A multi-device integration', () => {
     ).toHaveLength(1);
   });
 
+  it('humanizes trial conflicts without exposing relation ids in the primary presentation', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Конфликт пробного' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 12,
+      direction: 'Хип-хоп',
+      name: 'KDS BABY',
+      status: 'RECRUITING',
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Дамир',
+      lastName: 'Саидов',
+      status: 'TRIAL',
+    });
+    const lessonA = await studio.createLesson(ownerToken, {
+      endsAt: '2030-08-27T16:00:00.000Z',
+      groupId: group.id,
+      startsAt: '2030-08-27T15:00:00.000Z',
+    });
+    const lessonB = await studio.createLesson(ownerToken, {
+      endsAt: '2030-08-28T17:00:00.000Z',
+      groupId: group.id,
+      startsAt: '2030-08-28T16:00:00.000Z',
+    });
+    managedConflicts = [
+      {
+        baseRevision: 3,
+        candidate: {
+          groupId: group.id,
+          lessonId: lessonA.id,
+          outcome: 'THINKING',
+          status: 'BOOKED',
+          studentId: student.id,
+        },
+        candidateOperation: 'UPSERT',
+        canonical: {
+          groupId: group.id,
+          lessonId: lessonB.id,
+          outcome: 'DECLINED',
+          status: 'BOOKED',
+          studentId: student.id,
+        },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 4,
+        createdAt: now.toISOString(),
+        differences: [
+          { candidate: lessonA.id, canonical: lessonB.id, field: 'lessonId' },
+          { candidate: 'THINKING', canonical: 'DECLINED', field: 'outcome' },
+        ],
+        entityId: 'trial-conflict',
+        entityType: 'TRIAL_APPOINTMENT',
+        id: 'trial-humanized',
+        sourceDeviceId: 'device-b',
+        sourceDeviceName: 'Ресепшен',
+        status: 'OPEN',
+      },
+    ];
+
+    const conflict = (await integration.listConflicts(ownerToken))[0];
+    expect(conflict?.display).toMatchObject({
+      candidateLabel: 'На устройстве «Ресепшен»',
+      category: 'Пробное занятие',
+      subject: 'Саидов Дамир',
+      title: 'Пробное занятие изменено на другом устройстве',
+    });
+    expect(conflict?.display.candidateLines).toEqual(
+      expect.arrayContaining(['Группа: KDS BABY', 'Результат: Думает']),
+    );
+    expect(conflict?.display.canonicalLines).toEqual(
+      expect.arrayContaining(['Группа: KDS BABY', 'Результат: Отказался']),
+    );
+    expect(JSON.stringify(conflict?.display)).not.toContain(student.id);
+    expect(JSON.stringify(conflict?.display)).not.toContain(group.id);
+    expect(JSON.stringify(conflict?.display)).not.toContain(lessonA.id);
+
+    managedConflicts = [
+      {
+        baseRevision: 1,
+        candidate: { firstName: 'Дамир', lastName: 'Саидов', status: 'ACTIVE' },
+        candidateOperation: 'UPSERT',
+        canonical: { firstName: 'Данил', lastName: 'Саидов', status: 'ACTIVE' },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 2,
+        createdAt: now.toISOString(),
+        differences: [{ candidate: 'Дамир', canonical: 'Данил', field: 'firstName' }],
+        entityId: student.id,
+        entityType: 'STUDENT_IDENTITY',
+        id: 'student-humanized',
+        sourceDeviceId: 'device-b',
+        status: 'OPEN',
+      },
+      {
+        baseRevision: 1,
+        candidate: { groupId: group.id, status: 'ACTIVE', studentId: student.id },
+        candidateOperation: 'UPSERT',
+        canonical: { groupId: group.id, status: 'LEFT', studentId: student.id },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 2,
+        createdAt: now.toISOString(),
+        differences: [{ candidate: 'ACTIVE', canonical: 'LEFT', field: 'status' }],
+        entityId: 'membership-humanized',
+        entityType: 'GROUP_MEMBERSHIP',
+        id: 'membership-humanized',
+        sourceDeviceId: 'device-b',
+        status: 'OPEN',
+      },
+      {
+        baseRevision: 1,
+        candidate: { lessonId: lessonA.id, status: 'PRESENT', studentId: student.id },
+        candidateOperation: 'UPSERT',
+        canonical: { lessonId: lessonA.id, status: 'ABSENT', studentId: student.id },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 2,
+        createdAt: now.toISOString(),
+        differences: [{ candidate: 'PRESENT', canonical: 'ABSENT', field: 'status' }],
+        entityId: `${lessonA.id}:${student.id}`,
+        entityType: 'ATTENDANCE',
+        id: 'attendance-humanized',
+        sourceDeviceId: 'device-b',
+        status: 'OPEN',
+      },
+      {
+        baseRevision: 1,
+        candidate: { changed: true },
+        candidateOperation: 'UPSERT',
+        canonical: { changed: false },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 2,
+        createdAt: now.toISOString(),
+        differences: [{ candidate: true, canonical: false, field: 'changed' }],
+        entityId: 'unknown-humanized',
+        entityType: 'FUTURE_ENTITY',
+        id: 'unknown-humanized',
+        sourceDeviceId: 'device-b',
+        status: 'OPEN',
+      },
+    ];
+    const humanized = await integration.listConflicts(ownerToken);
+    expect(humanized.map(({ display }) => display.title)).toEqual([
+      'Данные ученика изменены одновременно',
+      'Состав группы изменён на двух устройствах',
+      'Посещение изменено одновременно',
+      'Данные: данные изменены одновременно',
+    ]);
+    expect(humanized[1]?.display.candidateLines).toContain('Группа: KDS BABY');
+    expect(humanized[2]?.display.candidateLines).toContain('Посещение: Присутствовал');
+    expect(humanized[3]?.display.canonicalLines).toContain('Изменённое значение: Нет');
+  });
+
   it('creates a backup and replaces sync-managed local data from the server without pushing', async () => {
     await pair();
     const local = await application.createBranch(ownerToken, { name: 'Тестовый филиал' });
@@ -1100,6 +1252,37 @@ describe('Sprint 4.5A multi-device integration', () => {
     );
   });
 
+  it('does not expose unsafe generic overwrite for financial conflicts', async () => {
+    await pair();
+    managedConflicts = [
+      {
+        baseRevision: 1,
+        candidate: { lessonsUsed: 2 },
+        candidateOperation: 'UPSERT',
+        canonical: { lessonsUsed: 3 },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 2,
+        createdAt: now.toISOString(),
+        differences: [{ candidate: 2, canonical: 3, field: 'lessonsUsed' }],
+        entityId: 'subscription-financial-conflict',
+        entityType: 'SUBSCRIPTION',
+        id: 'financial-conflict',
+        sourceDeviceId: 'device-b',
+        status: 'OPEN',
+      },
+    ];
+    received = [];
+
+    await expect(
+      integration.resolveConflict(ownerToken, 'financial-conflict', {
+        expectedCanonicalRevision: 2,
+        idempotencyKey: 'financial-conflict-once',
+        resolution: 'ACCEPT_CANDIDATE',
+      }),
+    ).rejects.toThrow('Финансовый конфликт');
+    expect(received.some(({ method }) => method === 'POST')).toBe(false);
+  });
+
   it('aborts recovery before local mutation when the required backup fails', async () => {
     await pair();
     const local = await application.createBranch(ownerToken, { name: 'Сохранить локально' });
@@ -1217,6 +1400,53 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(unhealthy.checks.find(({ id }) => id === 'conflicts')).toMatchObject({
       status: 'WARNING',
     });
+  });
+
+  it('reports pending, processing and safe failed details separately with durable success time', async () => {
+    await pair();
+    const first = await application.createBranch(ownerToken, { name: 'Ожидает отправки' });
+    const second = await application.createBranch(ownerToken, { name: 'Отправляется' });
+    const rows = await database.syncOutbox.findMany({
+      orderBy: { createdAt: 'asc' },
+      where: { entityId: { in: [first.id, second.id] } },
+    });
+    await database.syncOutbox.update({
+      data: { status: 'PROCESSING' },
+      where: { id: rows[1]?.id ?? '' },
+    });
+    await database.syncOutbox.create({
+      data: {
+        entityId: 'failed-safe',
+        entityType: 'TRIAL_APPOINTMENT',
+        idempotencyKey: 'failed-safe-once',
+        lastAttemptAt: now,
+        lastErrorCode: 'TIMEOUT',
+        status: 'FAILED',
+      },
+    });
+    await database.appSetting.upsert({
+      create: { key: 'integration.lastSuccessfulSync', value: now.toISOString() },
+      update: { value: now.toISOString() },
+      where: { key: 'integration.lastSuccessfulSync' },
+    });
+
+    const status = await integration.getStatus(ownerToken);
+    expect(status).toMatchObject({
+      failedCount: 1,
+      lastSuccessfulSync: now.toISOString(),
+      pendingCount: 1,
+      processingCount: 1,
+      recoveryBlocked: true,
+      retryableFailedCount: 1,
+    });
+    expect(status.failedItems).toEqual([
+      expect.objectContaining({
+        entityLabel: 'Пробное занятие',
+        reason: 'Сервер не ответил вовремя.',
+        retryable: true,
+      }),
+    ]);
+    expect(JSON.stringify(status.failedItems)).not.toContain('failed-safe');
   });
 
   it('returns complete safe results for offline, timeout and revoked-device failures', async () => {
@@ -1854,7 +2084,7 @@ describe('Sprint 4.5A multi-device integration', () => {
     });
   });
 
-  it('denies configuration to ADMIN and COACH at the service boundary', async () => {
+  it('allows ADMIN to observe sync health but keeps configuration OWNER-only and denies COACH', async () => {
     const branch = await application.createBranch(ownerToken, { name: 'Доступ' });
     for (const role of ['ADMIN', 'COACH'] as const) {
       const password = `${role}!Integration2026`;
@@ -1873,7 +2103,16 @@ describe('Sprint 4.5A multi-device integration', () => {
         currentPassword: password,
         newPassword: `${role}!Changed2026`,
       });
-      await expect(integration.getStatus(session.token)).rejects.toThrow('только владелец');
+      if (role === 'ADMIN') {
+        await expect(integration.getStatus(session.token)).resolves.toMatchObject({
+          failedItems: [],
+          processingCount: 0,
+        });
+      } else {
+        await expect(integration.getStatus(session.token)).rejects.toThrow(
+          'владельцу и администратору',
+        );
+      }
       await expect(
         integration.updateSettings(session.token, { baseUrl: serverUrl, enabled: true }),
       ).rejects.toThrow('только владелец');

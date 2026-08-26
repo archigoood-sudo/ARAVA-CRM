@@ -69,6 +69,10 @@ test('OWNER подключает сайт, выполняет initial/offline sy
   const receivedPaymentPaths: string[] = [];
   let clientAccessState: 'ACTIVE' | 'INVITED' | 'NOT_ISSUED' = 'NOT_ISSUED';
   let conflictOpen = true;
+  let conflictStudentId = 'student-conflict-pending';
+  let conflictGroupId = 'group-conflict-pending';
+  let conflictLessonAId = 'lesson-conflict-a-pending';
+  let conflictLessonBId = 'lesson-conflict-b-pending';
   let recoveryMode = false;
   const receivedChatMessages: string[] = [];
   const receivedChatImages: string[] = [];
@@ -338,17 +342,34 @@ test('OWNER подключает сайт, выполняет initial/offline sy
           ? [
               {
                 baseRevision: 0,
-                candidate: { name: 'Филиал устройства' },
+                candidate: {
+                  groupId: conflictGroupId,
+                  lessonId: conflictLessonAId,
+                  outcome: 'THINKING',
+                  status: 'BOOKED',
+                  studentId: conflictStudentId,
+                },
                 candidateOperation: 'UPSERT',
-                canonical: { name: 'Филиал сервера' },
+                canonical: {
+                  groupId: conflictGroupId,
+                  lessonId: conflictLessonBId,
+                  outcome: 'DECLINED',
+                  status: 'BOOKED',
+                  studentId: conflictStudentId,
+                },
                 canonicalOperation: 'UPSERT',
                 canonicalRevision: 1,
                 createdAt: new Date().toISOString(),
                 differences: [
-                  { candidate: 'Филиал устройства', canonical: 'Филиал сервера', field: 'name' },
+                  {
+                    candidate: conflictLessonAId,
+                    canonical: conflictLessonBId,
+                    field: 'lessonId',
+                  },
+                  { candidate: 'THINKING', canonical: 'DECLINED', field: 'outcome' },
                 ],
-                entityId: 'branch-conflict',
-                entityType: 'BRANCH',
+                entityId: 'trial-conflict',
+                entityType: 'TRIAL_APPOINTMENT',
                 id: 'conflict-e2e',
                 sourceDeviceId: 'other-device',
                 sourceDeviceName: 'Второй компьютер',
@@ -365,17 +386,34 @@ test('OWNER подключает сайт, выполняет initial/offline sy
         apiVersion: 'v1',
         conflict: {
           baseRevision: 0,
-          candidate: { name: 'Филиал устройства' },
+          candidate: {
+            groupId: conflictGroupId,
+            lessonId: conflictLessonAId,
+            outcome: 'THINKING',
+            status: 'BOOKED',
+            studentId: conflictStudentId,
+          },
           candidateOperation: 'UPSERT',
-          canonical: { name: 'Филиал сервера' },
+          canonical: {
+            groupId: conflictGroupId,
+            lessonId: conflictLessonBId,
+            outcome: 'DECLINED',
+            status: 'BOOKED',
+            studentId: conflictStudentId,
+          },
           canonicalOperation: 'UPSERT',
           canonicalRevision: 1,
           createdAt: new Date().toISOString(),
           differences: [
-            { candidate: 'Филиал устройства', canonical: 'Филиал сервера', field: 'name' },
+            {
+              candidate: conflictLessonAId,
+              canonical: conflictLessonBId,
+              field: 'lessonId',
+            },
+            { candidate: 'THINKING', canonical: 'DECLINED', field: 'outcome' },
           ],
-          entityId: 'branch-conflict',
-          entityType: 'BRANCH',
+          entityId: 'trial-conflict',
+          entityType: 'TRIAL_APPOINTMENT',
           id: 'conflict-e2e',
           sourceDeviceId: 'other-device',
           status: 'RESOLVED',
@@ -479,24 +517,46 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await expect(diagnostics.getByText('Сервер доступен', { exact: true })).toBeVisible();
     await expect(diagnostics.getByText('Устройство авторизовано', { exact: true })).toBeVisible();
     await expect(diagnostics).not.toContainText('e2e-token');
-    const accessStudent = await page.evaluate(async () => {
+    const accessFixture = await page.evaluate(async () => {
       const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
         state?: { token?: string };
       };
       const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
       const token = persisted.state?.token ?? '';
       const branch = await api.branches.create(token, { name: 'Личный кабинет E2E' });
-      return api.students.create(token, {
+      const student = await api.students.create(token, {
         branchId: branch.id,
         firstName: 'Анна',
         lastName: 'Кабинетова',
         phone: '+7 (999) 100-20-30',
         status: 'ACTIVE',
       });
+      const group = await api.groups.create(token, {
+        branchId: branch.id,
+        capacity: 12,
+        direction: 'Хип-хоп',
+        name: 'KDS BABY',
+        status: 'RECRUITING',
+      });
+      const lessonA = await api.lessons.create(token, {
+        endsAt: '2030-08-27T16:00:00.000Z',
+        groupId: group.id,
+        startsAt: '2030-08-27T15:00:00.000Z',
+      });
+      const lessonB = await api.lessons.create(token, {
+        endsAt: '2030-08-28T17:00:00.000Z',
+        groupId: group.id,
+        startsAt: '2030-08-28T16:00:00.000Z',
+      });
+      return { group, lessonA, lessonB, student };
     });
+    conflictStudentId = accessFixture.student.id;
+    conflictGroupId = accessFixture.group.id;
+    conflictLessonAId = accessFixture.lessonA.id;
+    conflictLessonBId = accessFixture.lessonB.id;
     await page.evaluate((studentId) => {
       window.location.hash = `#/students/${studentId}`;
-    }, accessStudent.id);
+    }, accessFixture.student.id);
     const accessCard = page.getByTestId('client-web-access');
     await expect(accessCard.getByText('Доступ не выдан', { exact: true })).toBeVisible();
     await accessCard.getByRole('button', { name: 'Выдать доступ' }).click();
@@ -512,9 +572,16 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await accessCard.getByRole('button', { name: 'Обновить статус личного кабинета' }).click();
     await expect(accessCard.getByText('Аккаунт активирован', { exact: true })).toBeVisible();
     await page.getByRole('link', { name: 'Настройки' }).click();
+    await page.getByRole('button', { name: 'Проверить соединение' }).click();
+    await expect(page.getByText('Соединение с сайтом установлено.')).toBeVisible();
     const conflictCenter = page.getByTestId('integration-conflicts');
-    await expect(conflictCenter.getByRole('cell', { name: 'Филиал сервера' })).toBeVisible();
-    await conflictCenter.getByRole('button', { name: 'Оставить текущую версию' }).click();
+    await expect(
+      conflictCenter.getByText('Пробное занятие изменено на другом устройстве'),
+    ).toBeVisible();
+    await expect(conflictCenter.getByText('Кабинетова Анна')).toBeVisible();
+    await expect(conflictCenter.getByText('Результат: Думает')).toBeVisible();
+    await expect(conflictCenter.getByText('Результат: Отказался')).toBeVisible();
+    await conflictCenter.getByRole('button', { name: 'Использовать изменения с сервера' }).click();
     await page.getByRole('button', { name: 'Подтвердить решение' }).click();
     await expect(
       page.getByText('Конфликт разрешён. Новая версия будет получена активными устройствами.'),
@@ -637,7 +704,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await stopServer(server);
     await page.evaluate((studentId) => {
       window.location.hash = `#/students/${studentId}`;
-    }, accessStudent.id);
+    }, accessFixture.student.id);
     const offlineAccess = page.getByTestId('client-web-access');
     await offlineAccess.getByRole('button', { name: 'Обновить статус личного кабинета' }).click();
     await expect(offlineAccess).toContainText('Не удалось проверить личный кабинет');

@@ -443,6 +443,33 @@ describe('Sprint 4.2B attention center', () => {
     );
   });
 
+  it('prioritizes unresolved synchronization conflicts over ordinary queue warnings', async () => {
+    await database.appSetting.create({
+      data: { key: 'integration.enabled', value: 'true' },
+    });
+    await database.syncConflict.create({
+      data: {
+        baseRevision: 1,
+        candidateOperation: 'UPSERT',
+        candidatePayloadJson: '{}',
+        canonicalOperation: 'UPSERT',
+        canonicalPayloadJson: '{}',
+        canonicalRevision: 2,
+        entityId: 'trial-conflict-attention',
+        entityType: 'TRIAL_APPOINTMENT',
+      },
+    });
+
+    const items = await attention.listItems(ownerToken, { category: 'INTEGRATION' });
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        actionLabel: 'Разрешить конфликты',
+        id: 'integration:conflicts',
+        severity: 'CRITICAL',
+      }),
+    );
+  });
+
   it('flags only past incomplete attendance and preserves zero-PRESENT completion semantics', async () => {
     const { branch, coach, student } = await branchFoundation('Посещаемость');
     const group = await database.danceGroup.create({

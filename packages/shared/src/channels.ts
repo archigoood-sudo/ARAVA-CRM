@@ -2324,9 +2324,11 @@ export interface IntegrationDeviceRenameInput {
 export interface IntegrationStatus {
   baseUrl: string;
   connectionState: IntegrationConnectionState;
+  currentDeviceName?: string;
   deviceId: string;
   enabled: boolean;
   failedCount: number;
+  failedItems: IntegrationFailedSyncItem[];
   conflictCount: number;
   isPaired: boolean;
   lastError?: string;
@@ -2335,8 +2337,21 @@ export interface IntegrationStatus {
   lastOutboundSync?: string;
   inboundCursor: number;
   pendingCount: number;
+  processingCount: number;
+  recoveryBlocked: boolean;
+  retryableFailedCount: number;
   syncInProgress: boolean;
   devices: IntegrationDeviceSummary[];
+}
+
+export interface IntegrationFailedSyncItem {
+  createdAt: string;
+  entityLabel: string;
+  entityType: string;
+  id: string;
+  lastAttemptAt?: string;
+  reason: string;
+  retryable: boolean;
 }
 
 export type IntegrationDiagnosticLevel = 'WORKING' | 'WARNING' | 'ERROR';
@@ -2543,12 +2558,23 @@ export interface IntegrationConflictSummary {
   canonicalRevision: number;
   createdAt: string;
   differences: IntegrationConflictDifference[];
+  display: IntegrationConflictDisplay;
   entityId: string;
   entityType: string;
   id: string;
   sourceDeviceId: string;
   sourceDeviceName?: string;
   status: 'OPEN' | 'RESOLVED';
+}
+
+export interface IntegrationConflictDisplay {
+  candidateLabel: string;
+  candidateLines: string[];
+  canonicalLabel: string;
+  canonicalLines: string[];
+  category: string;
+  subject?: string;
+  title: string;
 }
 
 export interface IntegrationConflictResolutionInput {
