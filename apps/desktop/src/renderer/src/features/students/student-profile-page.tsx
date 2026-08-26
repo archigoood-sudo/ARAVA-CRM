@@ -7,6 +7,8 @@ import {
   type StudentInput,
   type StudentNoteInput,
   type StudentProfileNote,
+  type StudentProfileGroup,
+  type StudentBulkAction,
   type StudentStatus,
   type TrialAppointmentSummary,
   type TrialOutcome,
@@ -31,6 +33,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   AlertTriangle,
+  ArrowRightLeft,
   CalendarDays,
   Crown,
   Mail,
@@ -47,11 +50,10 @@ import {
   WalletCards,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
-import { localDateInputValue } from '../../lib/local-date';
 import {
   invalidateStudentIdentityCaches,
   invalidateTrialCaches,
@@ -61,6 +63,7 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { ContactDialog } from './contact-dialog';
 import { ClientWebAccessCard } from './client-web-access-card';
 import { StudentDialog } from './student-dialog';
+import { StudentBulkDialog } from './student-bulk-dialog';
 import { StudentFinance } from '../subscriptions/student-finance';
 import { StudentCard } from '../cards/student-card';
 
@@ -85,14 +88,15 @@ export function StudentProfilePage() {
   const user = useAuthStore((state) => state.user);
   const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [studentDialog, setStudentDialog] = useState(false);
   const [contactDialog, setContactDialog] = useState(false);
   const [editingContact, setEditingContact] = useState<StudentContactSummary | null>(null);
   const [noteDialog, setNoteDialog] = useState(false);
   const [editingNote, setEditingNote] = useState<StudentProfileNote | null>(null);
   const [noteText, setNoteText] = useState('');
-  const [groupDialog, setGroupDialog] = useState(false);
-  const [selectedGroupId, setSelectedGroupId] = useState('');
+  const [membershipAction, setMembershipAction] = useState<StudentBulkAction>();
+  const [membershipSourceGroupId, setMembershipSourceGroupId] = useState<string>();
   const [financeAction, setFinanceAction] = useState<'payment' | 'subscription' | undefined>(() => {
     const action = searchParameters.get('action');
     return action === 'payment' || action === 'subscription' ? action : undefined;
@@ -105,6 +109,7 @@ export function StudentProfilePage() {
   const [requestedPaymentOperationId, setRequestedPaymentOperationId] = useState(
     () => searchParameters.get('paymentOperationId') ?? undefined,
   );
+  const [requestedSubscriptionPaymentId, setRequestedSubscriptionPaymentId] = useState<string>();
   const [cardAction, setCardAction] = useState(searchParameters.get('action') === 'card');
   const [error, setError] = useState<string>();
   const [trialDialog, setTrialDialog] = useState(false);
@@ -121,18 +126,9 @@ export function StudentProfilePage() {
     queryKey: queryKeys.branches(),
   });
   const groups = useQuery({
-    enabled: canManage && Boolean(student.data?.student.id),
-    queryFn: () => getDesktopApi().groups.listEligibleGroups(getSessionToken(), studentId),
-    queryKey: ['groups', 'eligible-for-student', studentId],
-  });
-  const trials = useQuery({
-    enabled: canManage && Boolean(studentId),
-    queryFn: () =>
-      getDesktopApi().trials.list(getSessionToken(), { includeHistory: true, studentId }),
-    queryKey: queryKeys.trials(`${user?.id ?? ''}:${user?.role ?? ''}`, {
-      includeHistory: true,
-      studentId,
-    }),
+    enabled: canManage,
+    queryFn: () => getDesktopApi().groups.list(getSessionToken(), {}),
+    queryKey: queryKeys.groups({}),
   });
   const trialGroups = useQuery({
     enabled: canManage && trialDialog,
@@ -215,19 +211,6 @@ export function StudentProfilePage() {
   const archiveNote = useMutation({
     mutationFn: (noteId: string) => getDesktopApi().students.archiveNote(getSessionToken(), noteId),
   });
-  const addEnrollment = useMutation({
-    mutationFn: (groupId: string) =>
-      getDesktopApi().groups.addEnrollment(getSessionToken(), groupId, {
-        joinedAt: localDateInputValue(),
-        overrideCapacity: false,
-        status: 'ACTIVE',
-        studentId,
-      }),
-  });
-  const removeEnrollment = useMutation({
-    mutationFn: ({ enrollmentId, groupId }: { enrollmentId: string; groupId: string }) =>
-      getDesktopApi().groups.removeEnrollment(getSessionToken(), groupId, enrollmentId),
-  });
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.student(studentId) }),
@@ -274,17 +257,6 @@ export function StudentProfilePage() {
       setError(getErrorMessage(caught, 'Не удалось сохранить заметку.'));
     }
   };
-  const submitEnrollment = async () => {
-    setError(undefined);
-    try {
-      await addEnrollment.mutateAsync(selectedGroupId);
-      await refresh();
-      setGroupDialog(false);
-      setSelectedGroupId('');
-    } catch (caught) {
-      setError(getErrorMessage(caught, 'Не удалось добавить ученика в группу.'));
-    }
-  };
 
   if (student.isLoading) return <LoadingState label={t('student.loadingProfile')} />;
   if (student.isError || !student.data)
@@ -301,8 +273,31 @@ export function StudentProfilePage() {
   const detail = profile.student;
   const fullName = `${detail.lastName} ${detail.firstName}${detail.middleName ? ` ${detail.middleName}` : ''}`;
   const age = detail.birthDate ? calculateAge(detail.birthDate) : undefined;
+  const currentMemberships = profile.groups.filter(({ segment }) => segment === 'CURRENT');
+  const futureMemberships = profile.groups.filter(({ segment }) => segment === 'FUTURE');
+  const formerMemberships = profile.groups.filter(({ segment }) => segment === 'FORMER');
+  const remainingLessons = profile.activeSubscriptions.reduce(
+    (sum, subscription) => sum + (subscription.remainingLessons ?? 0),
+    0,
+  );
+  const runPrimaryAction = () => {
+    const action = profile.primaryAction;
+    if (!action) return;
+    if (action.kind === 'SALE') setFinanceAction('subscription');
+    if (action.kind === 'PAYMENT') {
+      if (action.targetId) setRequestedSubscriptionPaymentId(action.targetId);
+      else setFinanceAction('payment');
+    }
+    if (action.kind === 'PAYMENT_OPERATION') setRequestedPaymentOperationId(action.targetId);
+    if (action.kind === 'ADD_TO_GROUP') setMembershipAction('ADD_TO_GROUP');
+    if (action.kind === 'TRIAL_OUTCOME')
+      document.getElementById(`trial-${action.targetId ?? ''}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+  };
   return (
-    <main className="mx-auto w-full max-w-[1320px] animate-fade-in p-9 pb-14">
+    <main className="mx-auto w-full max-w-[1320px] animate-fade-in p-5 pb-14 md:p-7 min-[1500px]:p-9">
       <Link
         className="mb-6 inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground transition hover:text-foreground"
         to="/students"
@@ -312,7 +307,7 @@ export function StudentProfilePage() {
       </Link>
 
       <Card className="mb-5 overflow-hidden">
-        <div className="relative flex items-center gap-5 bg-sidebar px-7 py-8 text-white">
+        <div className="relative flex flex-wrap items-center gap-5 bg-sidebar px-5 py-7 text-white md:px-7 md:py-8">
           <span className="absolute right-0 top-0 h-full w-48 bg-[radial-gradient(circle_at_top_right,rgba(156,255,46,0.22),transparent_66%)]" />
           <Avatar className="ring-4 ring-white/10" name={fullName} size="large" />
           <div className="relative min-w-0 flex-1">
@@ -323,6 +318,11 @@ export function StudentProfilePage() {
             <p className="mt-2 flex items-center gap-2 text-sm text-neutral-400">
               <MapPin className="size-4 text-accent" /> {detail.branchName}
             </p>
+            {detail.phone ? (
+              <p className="mt-1 flex items-center gap-2 text-sm text-neutral-400">
+                <Phone className="size-4 text-accent" /> {detail.phone}
+              </p>
+            ) : null}
             <div className="mt-3 flex flex-wrap gap-2">
               {age !== undefined ? (
                 <Badge className="border-white/10 bg-white/10 text-white">{age} лет</Badge>
@@ -348,43 +348,107 @@ export function StudentProfilePage() {
             ) : null}
           </div>
           {canManage ? (
-            <Button
-              className="relative border-white/15 bg-white/10 text-white hover:bg-white/15"
-              onClick={() => {
-                setError(undefined);
-                setStudentDialog(true);
-              }}
-              variant="outline"
-            >
-              <Pencil className="size-4" />
-              {t('student.action.edit')}
-            </Button>
+            <div className="relative flex flex-wrap gap-2">
+              {profile.primaryAction ? (
+                <Button
+                  className="bg-accent text-neutral-950 hover:bg-accent/90"
+                  onClick={runPrimaryAction}
+                >
+                  {profile.primaryAction.label}
+                </Button>
+              ) : null}
+              <Button
+                className="border-white/15 bg-white/10 text-white hover:bg-white/15"
+                onClick={() => {
+                  setError(undefined);
+                  setStudentDialog(true);
+                }}
+                variant="outline"
+              >
+                <Pencil className="size-4" />
+                {t('student.action.edit')}
+              </Button>
+            </div>
           ) : null}
         </div>
       </Card>
 
-      {profile.warnings.length ? (
+      {profile.attentionItems.length ? (
         <Card className="mb-5 border-amber-200 bg-amber-50/70 dark:border-amber-500/20 dark:bg-amber-500/5">
           <CardContent className="flex items-start gap-4 p-5">
             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
               <AlertTriangle className="size-5" />
             </span>
             <div>
-              <p className="font-semibold">Требует внимания</p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {profile.warnings.map((warning) => (
-                  <Badge
-                    className={warning.tone === 'danger' ? 'bg-red-100 text-red-700' : ''}
-                    key={warning.code}
+              <p className="font-semibold">Требует внимания: {profile.attentionItems.length}</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {profile.attentionItems.map((item) => (
+                  <Link
+                    className="rounded-xl border border-amber-200 bg-white/70 p-3 text-sm transition hover:bg-white"
+                    key={item.id}
+                    to={item.actionRoute}
                   >
-                    {warning.message}
-                  </Badge>
+                    <span className="font-semibold">{item.title}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {item.description}
+                    </span>
+                    <span className="mt-2 block text-xs font-semibold text-foreground">
+                      {item.actionLabel} →
+                    </span>
+                  </Link>
                 ))}
               </div>
             </div>
           </CardContent>
         </Card>
       ) : null}
+
+      <section className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <WorkspaceMetric
+          label="Абонементы"
+          value={
+            profile.access === 'TRAINER'
+              ? 'Недоступно'
+              : profile.activeSubscriptions.length
+                ? `${String(profile.activeSubscriptions.length)} активных`
+                : 'Нет активного'
+          }
+        />
+        <WorkspaceMetric
+          label="Осталось занятий"
+          value={profile.access === 'TRAINER' ? 'Недоступно' : String(remainingLessons)}
+        />
+        <WorkspaceMetric
+          danger={Boolean(profile.totalDebt)}
+          label="Общая задолженность"
+          value={
+            profile.access === 'TRAINER'
+              ? 'Недоступно'
+              : profile.totalDebt
+                ? formatRubles(profile.totalDebt)
+                : 'Нет долга'
+          }
+        />
+        <WorkspaceMetric
+          label="Следующее занятие"
+          value={
+            profile.upcomingLessons[0]
+              ? formatDate(profile.upcomingLessons[0].startsAt, {
+                  dateStyle: 'medium',
+                  timeStyle: 'short',
+                })
+              : 'Не запланировано'
+          }
+        />
+        <WorkspaceMetric
+          label="Последний раз"
+          value={
+            profile.attendance.lastAttendedAt
+              ? formatDate(profile.attendance.lastAttendedAt, { dateStyle: 'medium' })
+              : 'Посещений нет'
+          }
+        />
+      </section>
 
       {profile.access === 'ADMIN' ? (
         <Card className="mb-5">
@@ -395,10 +459,14 @@ export function StudentProfilePage() {
             </Button>
           </CardHeader>
           <CardContent>
-            {trials.data?.length ? (
+            {profile.trials.length ? (
               <div className="space-y-2">
-                {trials.data.slice(0, 6).map((trial) => (
-                  <div className="rounded-xl border border-border p-3" key={trial.id}>
+                {profile.trials.slice(0, 6).map((trial) => (
+                  <div
+                    className="rounded-xl border border-border p-3"
+                    id={`trial-${trial.id}`}
+                    key={trial.id}
+                  >
                     <Link
                       className="flex items-center justify-between gap-3 hover:text-primary"
                       to={`/attendance/${trial.lessonId}`}
@@ -491,22 +559,69 @@ export function StudentProfilePage() {
         <Card className="mb-5">
           <CardContent className="flex flex-wrap items-center gap-2 p-4">
             <p className="mr-3 text-sm font-semibold">Быстрые действия</p>
-            <Button onClick={() => setFinanceAction('payment')} size="small">
-              <WalletCards className="size-4" /> Принять оплату
-            </Button>
-            <Button onClick={() => setFinanceAction('subscription')} size="small" variant="outline">
-              <TicketCheck className="size-4" />{' '}
-              {profile.currentSubscription ? 'Продлить абонемент' : 'Оформить абонемент'}
-            </Button>
+            {profile.totalDebt ? (
+              <Button
+                onClick={() => {
+                  const debtSubscription = profile.finance?.subscriptions.find(
+                    ({ debt }) => debt > 0,
+                  );
+                  if (debtSubscription) setRequestedSubscriptionPaymentId(debtSubscription.id);
+                  else setFinanceAction('payment');
+                }}
+                size="small"
+              >
+                <WalletCards className="size-4" /> Принять оплату
+              </Button>
+            ) : null}
+            {!profile.pendingSale ? (
+              <Button
+                onClick={() => setFinanceAction('subscription')}
+                size="small"
+                variant={profile.activeSubscriptions.length ? 'outline' : 'primary'}
+              >
+                <TicketCheck className="size-4" /> Продать абонемент
+              </Button>
+            ) : null}
             <Button
               onClick={() => {
                 void groups.refetch();
-                setGroupDialog(true);
+                setMembershipSourceGroupId(undefined);
+                setMembershipAction('ADD_TO_GROUP');
               }}
               size="small"
               variant="outline"
             >
               <UsersRound className="size-4" /> Добавить в группу
+            </Button>
+            {currentMemberships.length ? (
+              <Button
+                onClick={() => {
+                  setMembershipSourceGroupId(
+                    currentMemberships.length === 1 ? currentMemberships[0]?.groupId : undefined,
+                  );
+                  setMembershipAction('MOVE_TO_GROUP');
+                }}
+                size="small"
+                variant="outline"
+              >
+                <ArrowRightLeft className="size-4" /> Перевести
+              </Button>
+            ) : null}
+            <Button onClick={() => setTrialDialog(true)} size="small" variant="outline">
+              <CalendarDays className="size-4" /> Записать на пробное
+            </Button>
+            <Button
+              onClick={() =>
+                navigate(
+                  profile.upcomingLessons[0]
+                    ? `/attendance?date=${profile.upcomingLessons[0].startsAt.slice(0, 10)}&groupId=${profile.upcomingLessons[0].groupId}`
+                    : '/attendance',
+                )
+              }
+              size="small"
+              variant="outline"
+            >
+              <CalendarDays className="size-4" /> Открыть посещения
             </Button>
             <Button onClick={() => setCardAction(true)} size="small" variant="outline">
               <Crown className="size-4" /> {profile.card ? 'Заменить карту' : 'Привязать карту'}
@@ -529,7 +644,7 @@ export function StudentProfilePage() {
       <div
         className={
           profile.access === 'ADMIN'
-            ? 'grid grid-cols-[340px_minmax(0,1fr)] gap-5'
+            ? 'grid grid-cols-1 gap-5 xl:grid-cols-[340px_minmax(0,1fr)]'
             : 'grid grid-cols-1 gap-5'
         }
       >
@@ -604,7 +719,7 @@ export function StudentProfilePage() {
                   title={t('contact.emptyTitle')}
                 />
               ) : (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-3 md:grid-cols-2">
                   {detail.contacts.map((contact) => (
                     <article
                       className="group rounded-2xl border border-border bg-background p-4 transition hover:-translate-y-0.5 hover:bg-surface hover:shadow-card"
@@ -679,61 +794,33 @@ export function StudentProfilePage() {
         ) : null}
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-5">
+      <div className="mt-5 grid gap-5 xl:grid-cols-2">
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>Группы</CardTitle>
             {canManage ? (
-              <Button onClick={() => setGroupDialog(true)} size="small" variant="outline">
+              <Button
+                onClick={() => {
+                  setMembershipSourceGroupId(undefined);
+                  setMembershipAction('ADD_TO_GROUP');
+                }}
+                size="small"
+                variant="outline"
+              >
                 <Plus className="size-4" /> Добавить
               </Button>
             ) : null}
           </CardHeader>
           <CardContent className="space-y-2">
-            {profile.groups.length ? (
-              profile.groups.map((membership) => (
-                <article
-                  className="flex items-center gap-3 rounded-2xl border border-border bg-background p-4"
-                  key={membership.enrollmentId}
-                >
-                  <span className="flex size-10 items-center justify-center rounded-xl bg-accent-soft">
-                    <UsersRound className="size-4" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <Link
-                      className="block truncate text-sm font-semibold hover:underline"
-                      to={`/groups/${membership.groupId}`}
-                    >
-                      {membership.groupName}
-                    </Link>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      {membership.direction} · {membership.coachName ?? 'Тренер не назначен'}
-                    </span>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      {membership.scheduleSummary.join(', ') || 'Расписание не задано'}
-                    </span>
-                  </span>
-                  <Badge>{t(`enrollment.status.${membership.membershipStatus}`)}</Badge>
-                  {canManage ? (
-                    <Button
-                      aria-label={`Удалить из группы ${membership.groupName}`}
-                      onClick={async () => {
-                        if (!window.confirm(`Удалить ученика из группы «${membership.groupName}»?`))
-                          return;
-                        await removeEnrollment.mutateAsync({
-                          enrollmentId: membership.enrollmentId,
-                          groupId: membership.groupId,
-                        });
-                        await refresh();
-                      }}
-                      size="icon"
-                      variant="ghost"
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  ) : null}
-                </article>
-              ))
+            {currentMemberships.length ? (
+              <MembershipRows
+                canManage={canManage}
+                memberships={currentMemberships}
+                onRemove={(groupId) => {
+                  setMembershipSourceGroupId(groupId);
+                  setMembershipAction('REMOVE_FROM_GROUP');
+                }}
+              />
             ) : (
               <EmptyState
                 description={t('group.emptyDescription')}
@@ -741,6 +828,24 @@ export function StudentProfilePage() {
                 title={t('student.groups')}
               />
             )}
+            {futureMemberships.length ? (
+              <div className="pt-3">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Начнёт позже
+                </p>
+                <MembershipRows memberships={futureMemberships} />
+              </div>
+            ) : null}
+            {formerMemberships.length ? (
+              <details className="pt-3">
+                <summary className="cursor-pointer text-sm font-semibold text-muted-foreground">
+                  Ранее занимался · {formerMemberships.length}
+                </summary>
+                <div className="mt-2">
+                  <MembershipRows memberships={formerMemberships} />
+                </div>
+              </details>
+            ) : null}
           </CardContent>
         </Card>
         <Card>
@@ -797,8 +902,12 @@ export function StudentProfilePage() {
             profile.upcomingLessons.map((lesson, index) => (
               <Link
                 className="rounded-2xl border border-border bg-background p-4 transition hover:bg-muted/50"
-                key={lesson.id}
-                to={`/lessons/${lesson.id}`}
+                key={`${lesson.groupId}:${lesson.startsAt}`}
+                to={
+                  lesson.id
+                    ? `/lessons/${lesson.id}`
+                    : `/attendance?date=${lesson.startsAt.slice(0, 10)}&groupId=${lesson.groupId}`
+                }
               >
                 {index === 0 ? <Badge className="mb-3">Ближайшее занятие</Badge> : null}
                 <p className="font-semibold">{lesson.groupName}</p>
@@ -826,14 +935,17 @@ export function StudentProfilePage() {
           <ClientWebAccessCard student={detail} />
           <StudentFinance
             branches={branches.data ?? []}
+            initialFinance={profile.finance}
             onRequestedActionHandled={() => {
               setFinanceAction(undefined);
               setRequestedAttendanceLessonId(undefined);
               setRequestedPaymentOperationId(undefined);
+              setRequestedSubscriptionPaymentId(undefined);
             }}
             requestedAttendanceLessonId={requestedAttendanceLessonId}
             requestedAction={financeAction}
             requestedPaymentOperationId={requestedPaymentOperationId}
+            requestedSubscriptionPaymentId={requestedSubscriptionPaymentId}
             student={detail}
           />
           <Card className="mt-5">
@@ -867,6 +979,9 @@ export function StudentProfilePage() {
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {formatDate(payment.paidAt)} · {paymentMethodLabel(payment.method)}
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {payment.purpose}
                       </span>
                     </span>
                     <Badge>{t(`payment.status.${payment.status}`)}</Badge>
@@ -1028,42 +1143,26 @@ export function StudentProfilePage() {
         </div>
       </Dialog>
 
-      <Dialog
-        closeLabel="Закрыть"
-        footer={
-          <div className="flex justify-end gap-2">
-            <Button onClick={() => setGroupDialog(false)} variant="outline">
-              Отмена
-            </Button>
-            <Button
-              disabled={!selectedGroupId || addEnrollment.isPending}
-              onClick={() => void submitEnrollment()}
-            >
-              Добавить в группу
-            </Button>
-          </div>
-        }
-        onClose={() => setGroupDialog(false)}
-        open={groupDialog}
-        title="Добавление в группу"
-      >
-        <div className="space-y-3">
-          <Label htmlFor="student-profile-group">Группа</Label>
-          <Select
-            id="student-profile-group"
-            onChange={(event) => setSelectedGroupId(event.target.value)}
-            value={selectedGroupId}
-          >
-            <option value="">Выберите группу</option>
-            {(groups.data ?? []).map((group) => (
-              <option key={group.id} value={group.id}>
-                {group.name} · свободно {group.availablePlaces}
-              </option>
-            ))}
-          </Select>
-          {error ? <p className="text-sm text-red-600">{error}</p> : null}
-        </div>
-      </Dialog>
+      <StudentBulkDialog
+        action={membershipAction}
+        fixedSourceGroupId={membershipSourceGroupId}
+        groups={(groups.data ?? []).filter(
+          ({ id }) =>
+            membershipAction !== 'ADD_TO_GROUP' ||
+            !profile.groups.some(({ groupId, segment }) => groupId === id && segment !== 'FORMER'),
+        )}
+        onClose={() => {
+          setMembershipAction(undefined);
+          setMembershipSourceGroupId(undefined);
+        }}
+        onSuccess={() => {
+          setMembershipAction(undefined);
+          setMembershipSourceGroupId(undefined);
+          void refresh();
+        }}
+        open={Boolean(membershipAction)}
+        studentIds={[studentId]}
+      />
 
       <Dialog
         closeLabel="Закрыть"
@@ -1127,6 +1226,83 @@ function Detail({ label, value }: { label: string; value: string }) {
         {label}
       </dt>
       <dd className="mt-1.5 break-words text-sm leading-6">{value}</dd>
+    </div>
+  );
+}
+
+function WorkspaceMetric({
+  danger = false,
+  label,
+  value,
+}: {
+  danger?: boolean;
+  label: string;
+  value: string;
+}) {
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {label}
+        </p>
+        <p className={danger ? 'mt-2 font-semibold text-red-600' : 'mt-2 font-semibold'}>{value}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MembershipRows({
+  canManage = false,
+  memberships,
+  onRemove,
+}: {
+  canManage?: boolean;
+  memberships: StudentProfileGroup[];
+  onRemove?: ((groupId: string) => void) | undefined;
+}) {
+  return (
+    <div className="space-y-2">
+      {memberships.map((membership) => (
+        <article
+          className="flex items-center gap-3 rounded-2xl border border-border bg-background p-4"
+          key={membership.enrollmentId}
+        >
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft">
+            <UsersRound className="size-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <Link
+              className="block truncate text-sm font-semibold hover:underline"
+              to={`/groups/${membership.groupId}`}
+            >
+              {membership.groupName}
+            </Link>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {membership.direction} · {membership.coachName ?? 'Тренер не назначен'}
+            </span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {membership.scheduleSummary.join(', ') || 'Расписание не задано'}
+            </span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              С {formatDate(membership.joinedAt, { dateStyle: 'medium' })}
+              {membership.leftAt
+                ? ` · до ${formatDate(membership.leftAt, { dateStyle: 'medium' })}`
+                : ''}
+            </span>
+          </span>
+          <Badge>{t(`enrollment.status.${membership.membershipStatus}`)}</Badge>
+          {canManage && onRemove ? (
+            <Button
+              aria-label={`Убрать из группы ${membership.groupName}`}
+              onClick={() => onRemove(membership.groupId)}
+              size="icon"
+              variant="ghost"
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          ) : null}
+        </article>
+      ))}
     </div>
   );
 }

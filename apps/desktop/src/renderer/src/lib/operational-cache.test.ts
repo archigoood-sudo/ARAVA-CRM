@@ -6,6 +6,7 @@ import {
   invalidateFinanceCaches,
   invalidateLessonCaches,
   invalidateStudentIdentityCaches,
+  invalidateSyncedEntityCaches,
   invalidateTrialCaches,
 } from './operational-cache';
 
@@ -101,5 +102,19 @@ describe('operational cache invalidation', () => {
 
     await invalidateLessonCaches(client);
     for (const key of lessonKeys) expect(invalidated(client, key)).toBe(true);
+  });
+
+  it('refreshes the open workspace when canonical data arrives from another device', async () => {
+    const profileKey = ['student-profile', 'owner', 'student-1'] as const;
+    const financeKey = ['students', 'finance', 'student-1'] as const;
+    const groupKey = ['groups', 'roster', 'group-1'] as const;
+    const client = clientWith([profileKey, groupKey]);
+
+    await invalidateSyncedEntityCaches(client, 'GROUP_MEMBERSHIP');
+    expect(invalidated(client, profileKey)).toBe(true);
+
+    const financeClient = clientWith([financeKey]);
+    await invalidateSyncedEntityCaches(financeClient, 'SUBSCRIPTION');
+    expect(invalidated(financeClient, financeKey)).toBe(true);
   });
 });

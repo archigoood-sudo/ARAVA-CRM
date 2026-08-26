@@ -84,6 +84,18 @@ test('расширенный профиль объединяет работу а
         lastName: 'Профильная E2E',
         status: 'ACTIVE',
       });
+      const emptyStudent = await api.students.create(token, {
+        branchId: branch.id,
+        firstName: 'Без',
+        lastName: 'Группы E2E',
+        status: 'ACTIVE',
+      });
+      const trialStudent = await api.students.create(token, {
+        branchId: branch.id,
+        firstName: 'Пробная',
+        lastName: 'Ученица E2E',
+        status: 'TRIAL',
+      });
       await api.contacts.create(token, student.id, {
         fullName: 'Марина Профильная',
         isPrimary: true,
@@ -118,11 +130,20 @@ test('расширенный профиль объединяет работу а
         currency: 'RUB',
         freezeDays: 7,
         isActive: true,
-        lessonCount: 10,
+        lessonCount: 2,
         name: 'Абонемент профиля E2E',
         price: 10_000,
         type: 'LESSON_PACK',
         validityDays: 30,
+      });
+      const trial = await api.trials.schedule(token, {
+        groupId: group.id,
+        startsAt: lesson.startsAt,
+        studentId: trialStudent.id,
+      });
+      await api.trials.setOutcome(token, trial.id, {
+        expectedVersion: trial.version ?? 1,
+        outcome: 'THINKING',
       });
       await api.subscriptions.create(token, {
         initialPayment: {
@@ -141,10 +162,14 @@ test('расширенный профиль объединяет работу а
         studentId: student.id,
       });
       return {
+        emptyStudentId: emptyStudent.id,
+        groupId: group.id,
         hiddenStudentId: hiddenStudent.id,
         studentId: student.id,
+        tariffId: tariff.id,
         trainerEmail: trainer.user.email,
         trainerTemporaryPassword: trainer.temporaryPassword,
+        trialStudentId: trialStudent.id,
       };
     });
 
@@ -153,14 +178,49 @@ test('расширенный профиль объединяет работу а
     await search.getByLabel('Поиск по приложению').fill('Профильная E2E Анна');
     await search.getByRole('button', { name: /Профильная E2E Анна/u }).click();
     await expect(page).toHaveURL(new RegExp(`/students/${context.studentId}$`, 'u'));
-    await expect(
-      page.getByRole('main').getByText('Требует внимания', { exact: true }),
-    ).toBeVisible();
     await expect(page.getByRole('link', { name: 'Группа профиля E2E', exact: true })).toBeVisible();
     await expect(page.getByText('Абонемент профиля E2E').first()).toBeVisible();
     await expect(page.getByText(/Долг:/u).first()).toBeVisible();
     await expect(page.getByText('Присутствовал').first()).toBeVisible();
     await expect(page.getByText('0000042111', { exact: true })).toBeVisible();
+
+    const quickActions = page.getByText('Быстрые действия').locator('..');
+    await quickActions.getByRole('button', { name: 'Принять оплату' }).click();
+    const paymentDialog = page.getByRole('dialog', { name: 'Новый платёж' });
+    await expect(paymentDialog.getByLabel('Сумма, ₽')).toHaveValue('40');
+    await paymentDialog.getByRole('button', { name: 'Принять оплату', exact: true }).click();
+    await expect(page.getByText('Нет долга', { exact: true }).first()).toBeVisible();
+
+    await page.evaluate((studentId) => {
+      window.location.hash = `/students/${studentId}`;
+    }, context.emptyStudentId);
+    await expect(page).toHaveURL(new RegExp(`/students/${context.emptyStudentId}$`, 'u'));
+    await page.getByRole('button', { name: 'Добавить в группу', exact: true }).first().click();
+    const membershipDialog = page.getByRole('dialog', { name: 'Добавить в группу' });
+    await membershipDialog.getByLabel('Группа', { exact: true }).selectOption(context.groupId);
+    await membershipDialog.getByRole('button', { name: 'Проверить изменения' }).click();
+    await membershipDialog.getByRole('button', { name: 'Добавить 1 учеников' }).click();
+    await expect(page.getByRole('link', { name: 'Группа профиля E2E', exact: true })).toBeVisible();
+
+    await page.evaluate((studentId) => {
+      window.location.hash = `/students/${studentId}`;
+    }, context.trialStudentId);
+    await expect(page).toHaveURL(new RegExp(`/students/${context.trialStudentId}$`, 'u'));
+    await expect(page.getByText('Думает', { exact: true }).first()).toBeVisible();
+    await page.getByRole('button', { name: 'Оформить абонемент' }).click();
+    const subscriptionDialog = page.getByRole('dialog', { name: 'Продажа абонемента' });
+    await subscriptionDialog.getByLabel('Тариф').selectOption(context.tariffId);
+    await subscriptionDialog.getByLabel('Оплата при продаже').selectOption('NONE');
+    page.once('dialog', (dialog) => void dialog.accept());
+    await subscriptionDialog.getByRole('button', { name: 'Выдать с задолженностью' }).click();
+    await expect(subscriptionDialog).toBeHidden();
+    await expect(page.getByText('Активен', { exact: true }).first()).toBeVisible();
+    await page.getByRole('dialog').getByRole('button', { name: 'Закрыть окно' }).last().click();
+
+    await page.evaluate((studentId) => {
+      window.location.hash = `/students/${studentId}`;
+    }, context.studentId);
+    await expect(page).toHaveURL(new RegExp(`/students/${context.studentId}$`, 'u'));
     await page.getByRole('button', { name: 'Добавить заметку' }).first().click();
     const noteDialog = page.getByRole('dialog', { name: 'Новая заметка' });
     await noteDialog.getByLabel('Текст заметки').fill('Безопасное действие E2E');

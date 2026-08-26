@@ -3,21 +3,27 @@ import type {
   StudentProfileActivity,
   StudentProfileNote,
   StudentProfileOverview,
+  StudentProfilePrimaryAction,
   StudentProfileSubscription,
   StudentProfileWarning,
+  StudentFinanceSummary,
+  SubscriptionSummary,
+  TrialAppointmentSummary,
 } from '@arava/shared';
 
 import type { DatabaseClient } from './index';
-import { assertBranchAccess, assertPermission } from './permissions';
+import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
 import { FinanceService } from './finance-service';
-import { ATTENTION_RULES, isExpiringSoon, isLowLessonBalance } from './attention-rules';
+import { AttentionService } from './attention-service';
+import { LessonOccurrenceService } from './lesson-occurrence-service';
+import { deriveTrialWorkflowState } from './lead-service';
 
-const ACTIVE_ENROLLMENTS = ['ACTIVE', 'TRIAL', 'FROZEN'] as const;
 const UPCOMING_LIMIT = 5;
-const RECENT_LIMIT = 10;
+const RECENT_LIMIT = 5;
 const ATTENDANCE_PERIOD_DAYS = 90;
+const UPCOMING_PERIOD_DAYS = 8;
 const WEEKDAYS = ['', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
 function noteSummary(note: {
@@ -75,118 +81,136 @@ export class StudentProfileService {
     const student = await this.application.getStudent(token, studentId);
     const trainer = actor.role === 'COACH';
     const financeService = new FinanceService(this.database, this.application);
-    const groupAccess = trainer
-      ? { group: { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] } }
-      : {};
-    const periodStart = new Date();
+    const branchIds = accessibleBranchIds(actor);
+    const now = new Date();
+    const periodStart = new Date(now);
     periodStart.setDate(periodStart.getDate() - ATTENDANCE_PERIOD_DAYS);
+    const groupScope = {
+      ...(branchIds ? { branchId: { in: branchIds } } : {}),
+      ...(trainer ? { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] } : {}),
+    };
 
-    const [enrollments, recentAttendance, attendancePeriod, finance, payments, card, notes] =
-      await Promise.all([
-        this.database.enrollment.findMany({
-          include: {
-            group: {
-              include: {
-                branch: { select: { name: true } },
-                coach: { select: { fullName: true } },
-                schedules: {
-                  include: { roomEntity: { select: { name: true } } },
-                  orderBy: [{ weekday: 'asc' }, { startTime: 'asc' }],
-                  where: { isActive: true },
-                },
+    const [
+      enrollments,
+      recentAttendance,
+      attendancePeriod,
+      unfilteredFinance,
+      payments,
+      card,
+      notes,
+      trialAppointments,
+      pendingSale,
+      allAttentionItems,
+    ] = await Promise.all([
+      this.database.enrollment.findMany({
+        include: {
+          group: {
+            include: {
+              branch: { select: { name: true } },
+              coach: { select: { fullName: true } },
+              schedules: {
+                include: { roomEntity: { select: { name: true } } },
+                orderBy: [{ weekday: 'asc' }, { startTime: 'asc' }],
+                where: { isActive: true },
               },
             },
           },
-          orderBy: { joinedAt: 'desc' },
-          where: {
-            ...groupAccess,
-            leftAt: null,
-            status: { in: [...ACTIVE_ENROLLMENTS] },
-            studentId,
-          },
-        }),
-        this.database.attendance.findMany({
-          include: {
-            lesson: {
-              include: {
-                branch: { select: { name: true } },
-                coach: { select: { fullName: true } },
-                group: { select: { assistantCoachId: true, coachId: true, name: true } },
-              },
+        },
+        orderBy: { joinedAt: 'desc' },
+        where: { group: groupScope, studentId },
+      }),
+      this.database.attendance.findMany({
+        include: {
+          lesson: {
+            include: {
+              branch: { select: { name: true } },
+              coach: { select: { fullName: true } },
+              group: { select: { assistantCoachId: true, coachId: true, name: true } },
             },
           },
-          orderBy: { markedAt: 'desc' },
-          take: RECENT_LIMIT,
-          where: {
-            studentId,
-            ...(trainer
-              ? {
-                  lesson: {
-                    group: { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] },
-                  },
-                }
-              : {}),
+        },
+        orderBy: { markedAt: 'desc' },
+        take: RECENT_LIMIT,
+        where: {
+          studentId,
+          lesson: { group: groupScope },
+        },
+      }),
+      this.database.attendance.findMany({
+        select: { status: true },
+        where: {
+          studentId,
+          lesson: { group: groupScope, startsAt: { gte: periodStart } },
+        },
+      }),
+      trainer
+        ? Promise.resolve(undefined)
+        : financeService.listStudentSubscriptions(token, studentId),
+      trainer
+        ? Promise.resolve([])
+        : this.database.payment.findMany({
+            include: {
+              refunds: true,
+              subscription: { include: { tariff: { select: { name: true } } } },
+            },
+            orderBy: { paidAt: 'desc' },
+            take: RECENT_LIMIT,
+            where: { ...(branchIds ? { branchId: { in: branchIds } } : {}), studentId },
+          }),
+      trainer
+        ? Promise.resolve(null)
+        : this.database.membershipCard.findFirst({
+            include: { scans: { orderBy: { occurredAt: 'desc' }, take: 1 } },
+            orderBy: { updatedAt: 'desc' },
+            where: { archivedAt: null, studentId },
+          }),
+      trainer
+        ? Promise.resolve([])
+        : this.database.studentNote.findMany({
+            include: { author: { select: { fullName: true } } },
+            orderBy: { createdAt: 'desc' },
+            take: RECENT_LIMIT,
+            where: { archivedAt: null, studentId },
+          }),
+      this.database.trialAppointment.findMany({
+        include: {
+          group: { include: { branch: { select: { name: true } } } },
+          lesson: {
+            include: {
+              attendance: { where: { studentId } },
+            },
           },
-        }),
-        this.database.attendance.findMany({
-          select: { status: true },
-          where: {
-            markedAt: { gte: periodStart },
-            studentId,
-            ...(trainer
-              ? {
-                  lesson: {
-                    group: { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] },
-                  },
-                }
-              : {}),
-          },
-        }),
-        trainer
-          ? Promise.resolve(undefined)
-          : financeService.listStudentSubscriptions(token, studentId),
-        trainer
-          ? Promise.resolve([])
-          : this.database.payment.findMany({
-              include: { refunds: true },
-              orderBy: { paidAt: 'desc' },
-              take: RECENT_LIMIT,
-              where: { studentId },
-            }),
-        trainer
-          ? Promise.resolve(null)
-          : this.database.membershipCard.findFirst({
-              include: { scans: { orderBy: { occurredAt: 'desc' }, take: 1 } },
-              orderBy: { updatedAt: 'desc' },
-              where: { archivedAt: null, studentId },
-            }),
-        trainer
-          ? Promise.resolve([])
-          : this.database.studentNote.findMany({
-              include: { author: { select: { fullName: true } } },
-              orderBy: { createdAt: 'desc' },
-              take: RECENT_LIMIT,
-              where: { archivedAt: null, studentId },
-            }),
-      ]);
+          student: { select: { firstName: true, lastName: true } },
+        },
+        orderBy: { lesson: { startsAt: 'desc' } },
+        where: { group: groupScope, studentId },
+      }),
+      trainer
+        ? Promise.resolve(null)
+        : this.database.paymentOperation.findFirst({
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, status: true },
+            where: {
+              ...(branchIds ? { branchId: { in: branchIds } } : {}),
+              saleTariffId: { not: null },
+              status: { in: ['CREATED', 'WAITING_FOR_PAYMENT', 'PROCESSING'] },
+              studentId,
+            },
+          }),
+      trainer
+        ? Promise.resolve([])
+        : new AttentionService(this.database, this.application).listItems(token),
+    ]);
 
-    const groupIds = enrollments.map(({ groupId }) => groupId);
-    const upcomingLessons = groupIds.length
-      ? await this.database.lesson.findMany({
-          include: {
-            branch: { select: { name: true } },
-            coach: { select: { fullName: true } },
-            group: { select: { name: true } },
-            roomEntity: { select: { name: true } },
-          },
-          orderBy: { startsAt: 'asc' },
-          take: UPCOMING_LIMIT,
-          where: { groupId: { in: groupIds }, startsAt: { gte: new Date() }, status: 'PLANNED' },
-        })
-      : [];
+    const finance = trainer
+      ? undefined
+      : this.scopeFinance(unfilteredFinance, branchIds ? new Set(branchIds) : undefined);
+    const activeSubscriptions =
+      finance?.subscriptions.filter(({ status }) => status === 'ACTIVE' || status === 'FROZEN') ??
+      [];
 
-    const subscriptionViews: StudentProfileSubscription[] =
-      finance?.subscriptions.map((subscription) => ({
+    const subscriptionViews: StudentProfileSubscription[] = activeSubscriptions.map(
+      (subscription) => ({
         debt: subscription.debt,
         expiresAt: subscription.expiresAt,
         frozen: subscription.status === 'FROZEN',
@@ -198,52 +222,81 @@ export class StudentProfileService {
         startsAt: subscription.startsAt,
         status: subscription.status,
         tariffName: subscription.tariffName,
-      })) ?? [];
+      }),
+    );
     const currentSubscription = subscriptionViews
       .filter(({ status }) => status === 'ACTIVE' || status === 'FROZEN')
       .sort((left, right) =>
         (left.expiresAt ?? '9999').localeCompare(right.expiresAt ?? '9999'),
       )[0];
     const totalDebt = finance?.totalDebt ?? 0;
-    const warnings: StudentProfileWarning[] = [];
-    if (student.status !== 'ARCHIVED') {
-      if (!enrollments.length)
-        warnings.push({
-          code: 'NO_GROUP',
-          message: 'Ученик не состоит ни в одной группе.',
-          tone: 'warning',
-        });
-      if (!trainer && !currentSubscription)
-        warnings.push({
-          code: 'NO_SUBSCRIPTION',
-          message: 'Нет активного абонемента.',
-          tone: 'warning',
-        });
-      if (!trainer && totalDebt > 0)
-        warnings.push({ code: 'DEBT', message: 'Есть задолженность по оплате.', tone: 'danger' });
-      if (
-        currentSubscription?.remainingLessons !== undefined &&
-        isLowLessonBalance(currentSubscription.remainingLessons)
+    // Archived groups remain visible in history, but are not an active workspace context.
+    const currentEnrollments = enrollments
+      .filter(
+        ({ joinedAt, leftAt, status }) =>
+          joinedAt <= now && (!leftAt || leftAt >= now) && status !== 'LEFT',
       )
-        warnings.push({
-          code: 'LOW_BALANCE',
-          message: 'В абонементе осталось не больше двух занятий.',
-          tone: 'warning',
-        });
-      if (currentSubscription?.expiresAt && isExpiringSoon(new Date(currentSubscription.expiresAt)))
-        warnings.push({
-          code: 'EXPIRING',
-          message: `Абонемент заканчивается в ближайшие ${String(ATTENTION_RULES.expirationDays)} дней.`,
-          tone: 'warning',
-        });
-      if (card?.status === 'BLOCKED' || card?.status === 'LOST')
-        warnings.push({
-          code: 'CARD_PROBLEM',
-          message:
-            card.status === 'LOST' ? 'Карта отмечена как утерянная.' : 'Карта заблокирована.',
-          tone: 'danger',
-        });
-    }
+      .filter(({ group }) => !group.archivedAt && group.status !== 'ARCHIVED');
+    const groupIds = [...new Set(currentEnrollments.map(({ groupId }) => groupId))];
+    const upcomingEnd = new Date(now);
+    upcomingEnd.setDate(upcomingEnd.getDate() + UPCOMING_PERIOD_DAYS);
+    const upcomingOccurrences = groupIds.length
+      ? (
+          await new LessonOccurrenceService(this.database).resolveRange(actor, {
+            dateFrom: now,
+            dateTo: upcomingEnd,
+          })
+        )
+          .filter(({ groupId, startsAt }) => groupIds.includes(groupId) && startsAt >= now)
+          .slice(0, UPCOMING_LIMIT)
+      : [];
+    const groupById = new Map(enrollments.map(({ group }) => [group.id, group]));
+    const trials = trialAppointments.map((appointment): TrialAppointmentSummary => {
+      const attendance = appointment.lesson.attendance[0];
+      const purchased =
+        finance?.subscriptions.some(
+          (subscription) =>
+            subscription.status !== 'CANCELLED' &&
+            new Date(subscription.purchasedAt) >= appointment.lesson.startsAt,
+        ) ?? false;
+      return {
+        ...(attendance ? { attendanceStatus: attendance.status } : {}),
+        branchId: appointment.group.branchId,
+        branchName: appointment.group.branch.name,
+        endsAt: appointment.lesson.endsAt.toISOString(),
+        groupId: appointment.groupId,
+        groupName: appointment.group.name,
+        id: appointment.id,
+        leadName: [appointment.student?.firstName, appointment.student?.lastName]
+          .filter(Boolean)
+          .join(' '),
+        lessonId: appointment.lessonId,
+        lessonStatus: appointment.lesson.status,
+        startsAt: appointment.lesson.startsAt.toISOString(),
+        state: deriveTrialWorkflowState({
+          attendanceStatus: attendance?.status,
+          endsAt: appointment.lesson.endsAt,
+          lessonStatus: appointment.lesson.status,
+          now,
+          outcome: appointment.outcome,
+          purchased,
+          startsAt: appointment.lesson.startsAt,
+          status: appointment.status,
+        }),
+        ...(appointment.outcome ? { outcome: appointment.outcome } : {}),
+        studentId,
+        version: appointment.version,
+      };
+    });
+    const studentRoute = `/students/${studentId}`;
+    const attentionItems = allAttentionItems.filter(({ actionRoute }) =>
+      actionRoute.startsWith(studentRoute),
+    );
+    const warnings: StudentProfileWarning[] = attentionItems.map((item) => ({
+      code: item.id,
+      message: item.title,
+      tone: item.severity === 'CRITICAL' ? 'danger' : 'warning',
+    }));
 
     const history = trainer
       ? []
@@ -260,23 +313,40 @@ export class StudentProfileService {
     const missed = attendancePeriod.filter(
       ({ status }) => status === 'ABSENT' || status === 'EXCUSED',
     ).length;
+    const lastAttendedAt = recentAttendance.find(({ status }) =>
+      ['PRESENT', 'LATE', 'TRIAL'].includes(status),
+    )?.lesson.startsAt;
+    const recentAttendanceView = recentAttendance.map(({ lesson, markedAt, status }) => ({
+      groupName: lesson.group.name,
+      lessonId: lesson.id,
+      markedAt: markedAt.toISOString(),
+      startsAt: lesson.startsAt.toISOString(),
+      status,
+    }));
+    const primaryAction = this.primaryAction({
+      activeSubscriptions,
+      currentGroupCount: currentEnrollments.length,
+      pendingSale,
+      subscriptions: finance?.subscriptions ?? [],
+      totalDebt,
+      trials,
+    });
+    const nextLesson = upcomingOccurrences[0];
+    const nextLessonGroup = nextLesson ? groupById.get(nextLesson.groupId) : undefined;
 
     return {
       access: trainer ? 'TRAINER' : 'ADMIN',
+      activeSubscriptions,
       attendance: {
         attended,
+        lastAttendedAt: lastAttendedAt?.toISOString(),
         missed,
         percentage: attendancePeriod.length
           ? Math.round((attended / attendancePeriod.length) * 100)
           : 0,
-        recent: recentAttendance.map(({ lesson, markedAt, status }) => ({
-          groupName: lesson.group.name,
-          lessonId: lesson.id,
-          markedAt: markedAt.toISOString(),
-          startsAt: lesson.startsAt.toISOString(),
-          status,
-        })),
+        recent: recentAttendanceView,
       },
+      attentionItems,
       card: card
         ? {
             barcode: card.barcode,
@@ -288,7 +358,8 @@ export class StudentProfileService {
         : undefined,
       contacts: trainer ? [] : student.contacts,
       currentSubscription,
-      groups: enrollments.map(({ group, id, joinedAt, status }) => ({
+      finance,
+      groups: enrollments.map(({ group, id, joinedAt, leftAt, status }) => ({
         branchName: group.branch.name,
         coachName: group.coach?.fullName,
         direction: group.direction,
@@ -296,6 +367,7 @@ export class StudentProfileService {
         groupId: group.id,
         groupName: group.name,
         joinedAt: joinedAt.toISOString(),
+        leftAt: leftAt?.toISOString(),
         membershipStatus: status,
         roomName: group.schedules.find(({ roomEntity }) => roomEntity)?.roomEntity?.name,
         scheduleSummary: group.schedules
@@ -304,30 +376,141 @@ export class StudentProfileService {
             ({ endTime, startTime, weekday }) =>
               `${WEEKDAYS[weekday] ?? String(weekday)} · ${startTime}–${endTime}`,
           ),
+        segment:
+          group.archivedAt ||
+          group.status === 'ARCHIVED' ||
+          (leftAt && leftAt < now) ||
+          status === 'LEFT'
+            ? 'FORMER'
+            : joinedAt > now
+              ? 'FUTURE'
+              : 'CURRENT',
       })),
       history,
       notes: notes.map(noteSummary),
+      ...(pendingSale ? { pendingSale } : {}),
+      ...(primaryAction ? { primaryAction } : {}),
       recentPayments: payments.map((payment) => ({
         amount: payment.amount,
         id: payment.id,
         method: payment.paymentMethod,
         paidAt: payment.paidAt.toISOString(),
+        purpose: payment.subscription
+          ? `Абонемент «${payment.subscription.tariff.name}»`
+          : payment.attendanceLessonId
+            ? 'Разовое посещение'
+            : (payment.comment?.trim() ?? 'Оплата'),
         refundedAmount: payment.refunds.reduce((sum, refund) => sum + refund.amount, 0),
         status: payment.status,
       })),
-      student,
+      student: {
+        ...student,
+        attendanceHistory: recentAttendanceView,
+        attendancePercentage: attendancePeriod.length
+          ? Math.round((attended / attendancePeriod.length) * 100)
+          : 0,
+        contacts: trainer ? [] : student.contacts,
+        groups: enrollments.map(({ group, groupId, joinedAt, leftAt, status }) => ({
+          groupId,
+          groupName: group.name,
+          joinedAt: joinedAt.toISOString(),
+          leftAt: leftAt?.toISOString(),
+          status,
+        })),
+        nextLesson:
+          nextLesson && nextLessonGroup
+            ? {
+                groupName: nextLessonGroup.name,
+                id:
+                  nextLesson.lessonId ??
+                  `${nextLesson.groupId}:${nextLesson.startsAt.toISOString()}`,
+                startsAt: nextLesson.startsAt.toISOString(),
+              }
+            : undefined,
+      },
       totalDebt: trainer ? undefined : totalDebt,
-      upcomingLessons: upcomingLessons.map((lesson) => ({
-        branchName: lesson.branch.name,
-        coachName: lesson.coach?.fullName,
-        endsAt: lesson.endsAt.toISOString(),
-        groupName: lesson.group.name,
-        id: lesson.id,
-        roomName: lesson.roomEntity?.name ?? lesson.room ?? undefined,
-        startsAt: lesson.startsAt.toISOString(),
-      })),
+      trials,
+      upcomingLessons: upcomingOccurrences.flatMap((lesson) => {
+        const group = groupById.get(lesson.groupId);
+        if (!group) return [];
+        return [
+          {
+            branchName: group.branch.name,
+            coachName: group.coach?.fullName,
+            endsAt: lesson.endsAt.toISOString(),
+            groupId: group.id,
+            groupName: group.name,
+            ...(lesson.lessonId ? { id: lesson.lessonId } : {}),
+            roomName: group.schedules.find(({ roomEntity }) => roomEntity)?.roomEntity?.name,
+            source: lesson.source,
+            startsAt: lesson.startsAt.toISOString(),
+          },
+        ];
+      }),
       warnings,
     };
+  }
+
+  private scopeFinance(
+    finance: StudentFinanceSummary | undefined,
+    branchIds: Set<string> | undefined,
+  ): StudentFinanceSummary | undefined {
+    if (!finance) return undefined;
+    const subscriptions = branchIds
+      ? finance.subscriptions.filter(({ branchId }) => branchIds.has(branchId))
+      : finance.subscriptions;
+    const uncoveredAttendances = branchIds
+      ? finance.uncoveredAttendances.filter(({ branchId }) => branchIds.has(branchId))
+      : finance.uncoveredAttendances;
+    const uncoveredDebt = uncoveredAttendances.reduce(
+      (sum, attendance) => sum + (attendance.amount ?? 0),
+      0,
+    );
+    return {
+      activeSubscriptions: subscriptions.filter(
+        ({ status }) => status === 'ACTIVE' || status === 'FROZEN',
+      ).length,
+      expiringSoon: subscriptions.filter(({ expiringSoon }) => expiringSoon).length,
+      lowBalance: subscriptions.filter(({ lowBalance }) => lowBalance).length,
+      subscriptions,
+      totalDebt:
+        subscriptions.reduce((sum, subscription) => sum + subscription.debt, 0) + uncoveredDebt,
+      uncoveredAttendances,
+      uncoveredDebt,
+      unpricedUncoveredAttendanceCount: uncoveredAttendances.filter(
+        ({ amount }) => amount === undefined,
+      ).length,
+    };
+  }
+
+  private primaryAction(input: {
+    activeSubscriptions: SubscriptionSummary[];
+    currentGroupCount: number;
+    pendingSale: { id: string; status: string } | null;
+    subscriptions: SubscriptionSummary[];
+    totalDebt: number;
+    trials: TrialAppointmentSummary[];
+  }): StudentProfilePrimaryAction | undefined {
+    const trial = input.trials.find(
+      ({ outcome, state }) => state === 'FOLLOW_UP' && outcome === undefined,
+    );
+    if (trial) return { kind: 'TRIAL_OUTCOME', label: 'Указать результат', targetId: trial.id };
+    const debtSubscription = input.subscriptions.find(({ debt }) => debt > 0);
+    if (input.totalDebt > 0)
+      return {
+        kind: 'PAYMENT',
+        label: 'Принять оплату',
+        ...(debtSubscription ? { targetId: debtSubscription.id } : {}),
+      };
+    if (input.pendingSale)
+      return {
+        kind: 'PAYMENT_OPERATION',
+        label: 'Продолжить оплату',
+        targetId: input.pendingSale.id,
+      };
+    if (input.activeSubscriptions.length === 0) return { kind: 'SALE', label: 'Продать абонемент' };
+    if (input.currentGroupCount === 0) return { kind: 'ADD_TO_GROUP', label: 'Добавить в группу' };
+    return undefined;
   }
 
   async createNote(

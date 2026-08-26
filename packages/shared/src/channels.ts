@@ -693,9 +693,11 @@ export interface StudentProfileGroup {
   groupId: string;
   groupName: string;
   joinedAt: string;
+  leftAt?: string | undefined;
   membershipStatus: EnrollmentStatus;
   roomName?: string | undefined;
   scheduleSummary: string[];
+  segment: GroupRosterSegment;
 }
 
 export interface StudentProfileLesson {
@@ -703,9 +705,11 @@ export interface StudentProfileLesson {
   coachName?: string | undefined;
   endsAt: string;
   groupName: string;
-  id: string;
+  groupId: string;
+  id?: string | undefined;
   roomName?: string | undefined;
   startsAt: string;
+  source: 'LESSON' | 'WEEKLY_SCHEDULE';
 }
 
 export interface StudentProfileSubscription {
@@ -727,8 +731,18 @@ export interface StudentProfilePayment {
   id: string;
   method: PaymentMethod;
   paidAt: string;
+  purpose: string;
   refundedAmount: number;
   status: PaymentStatus;
+}
+
+export type StudentProfilePrimaryActionKind =
+  'ADD_TO_GROUP' | 'PAYMENT' | 'PAYMENT_OPERATION' | 'SALE' | 'TRIAL_OUTCOME';
+
+export interface StudentProfilePrimaryAction {
+  kind: StudentProfilePrimaryActionKind;
+  label: string;
+  targetId?: string | undefined;
 }
 
 export interface StudentProfileCard {
@@ -748,28 +762,35 @@ export interface StudentProfileActivity {
 }
 
 export interface StudentProfileWarning {
-  code: 'CARD_PROBLEM' | 'DEBT' | 'EXPIRING' | 'LOW_BALANCE' | 'NO_GROUP' | 'NO_SUBSCRIPTION';
+  code: string;
   message: string;
   tone: 'danger' | 'warning';
 }
 
 export interface StudentProfileOverview {
   access: 'ADMIN' | 'TRAINER';
+  activeSubscriptions: SubscriptionSummary[];
   attendance: {
     attended: number;
+    lastAttendedAt?: string | undefined;
     missed: number;
     percentage: number;
     recent: StudentAttendanceHistory[];
   };
+  attentionItems: AttentionItem[];
   card?: StudentProfileCard | undefined;
   contacts: StudentContactSummary[];
   currentSubscription?: StudentProfileSubscription | undefined;
+  finance?: StudentFinanceSummary | undefined;
   groups: StudentProfileGroup[];
   history: StudentProfileActivity[];
   notes: StudentProfileNote[];
+  pendingSale?: { id: string; status: PaymentOperationStatus } | undefined;
+  primaryAction?: StudentProfilePrimaryAction | undefined;
   recentPayments: StudentProfilePayment[];
   student: StudentDetail;
   totalDebt?: number | undefined;
+  trials: TrialAppointmentSummary[];
   upcomingLessons: StudentProfileLesson[];
   warnings: StudentProfileWarning[];
 }

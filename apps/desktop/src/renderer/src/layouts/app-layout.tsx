@@ -9,7 +9,7 @@ import { GlobalSearch } from '../components/global-search';
 import { IntegrationStatusIndicator } from '../components/integration-status-indicator';
 import { t } from '@arava/shared';
 import { getDesktopApi } from '../lib/desktop-api';
-import { invalidateTrialCaches } from '../lib/operational-cache';
+import { invalidateSyncedEntityCaches } from '../lib/operational-cache';
 import { getSessionToken, useAuthStore } from '../stores/auth-store';
 
 const pageTitles: Record<string, { eyebrow: string; title: string }> = {
@@ -41,7 +41,7 @@ export function AppLayout() {
 
   useEffect(() => {
     return getDesktopApi().integration.onDataChanged((entityType) => {
-      if (entityType === 'TRIAL_APPOINTMENT') void invalidateTrialCaches(queryClient);
+      void invalidateSyncedEntityCaches(queryClient, entityType);
     });
   }, [queryClient]);
 

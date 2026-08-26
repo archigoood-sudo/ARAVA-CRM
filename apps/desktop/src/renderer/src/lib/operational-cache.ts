@@ -75,3 +75,22 @@ export async function invalidateLessonCaches(client: QueryClient): Promise<void>
     client.invalidateQueries({ queryKey: ['trial-occurrences'] }),
   ]);
 }
+
+export async function invalidateSyncedEntityCaches(
+  client: QueryClient,
+  entityType: string,
+): Promise<void> {
+  if (entityType === 'TRIAL_APPOINTMENT') return invalidateTrialCaches(client);
+  if (entityType === 'ATTENDANCE') return invalidateAttendanceCaches(client);
+  if (entityType === 'SUBSCRIPTION' || entityType === 'SUBSCRIPTION_LEDGER')
+    return invalidateFinanceCaches(client);
+  if (entityType === 'LESSON' || entityType === 'SCHEDULE') return invalidateLessonCaches(client);
+  if (
+    entityType === 'STUDENT_IDENTITY' ||
+    entityType === 'STUDENT_CONTACT' ||
+    entityType === 'STUDENT_NOTE' ||
+    entityType === 'GROUP_MEMBERSHIP' ||
+    entityType === 'GROUP'
+  )
+    return invalidateStudentIdentityCaches(client);
+}

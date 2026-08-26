@@ -117,7 +117,7 @@ test('вход, создание филиала, ученика и контак�
 
     await window.getByRole('link', { name: 'Ученики' }).click();
     await window.getByRole('link', { name: /Петрова Мила/u }).click();
-    await window.getByRole('button', { name: 'Продать абонемент' }).click();
+    await window.getByRole('button', { name: 'Продать абонемент' }).first().click();
     const subscriptionDialog = window.getByRole('dialog');
     await subscriptionDialog.getByLabel('Тариф').selectOption({ index: 1 });
     await subscriptionDialog.getByLabel('Оплата при продаже').selectOption('PARTIAL');
@@ -131,9 +131,9 @@ test('вход, создание филиала, ученика и контак�
 
     await window.getByRole('button', { name: 'Принять оплату' }).first().click();
     const paymentDialog = window.getByRole('dialog');
-    await paymentDialog.getByLabel('Абонемент').selectOption({ label: 'Абонемент E2E' });
-    await paymentDialog.getByLabel('Сумма, ₽').fill('3000');
-    await paymentDialog.getByRole('button', { name: 'Сохранить платёж' }).click();
+    await expect(paymentDialog.getByText('Абонемент E2E')).toBeVisible();
+    await expect(paymentDialog.getByLabel('Сумма, ₽')).toHaveValue('3000');
+    await paymentDialog.getByRole('button', { name: 'Принять оплату', exact: true }).click();
     await expect(paymentDialog).not.toBeVisible();
 
     await window.getByRole('link', { name: 'Главная', exact: true }).click();
@@ -141,7 +141,7 @@ test('вход, создание филиала, ученика и контак�
       window.locator('article').filter({ hasText: 'Петрова Мила: есть задолженность' }),
     ).toHaveCount(0);
 
-    await window.getByRole('link', { name: 'Группы' }).click();
+    await window.getByRole('link', { name: 'Группы', exact: true }).click();
     await window.getByRole('button', { name: 'Создать группу' }).click();
     const groupDialog = window.getByRole('dialog');
     await groupDialog.getByLabel('Название группы').fill('Импульс E2E');
@@ -175,15 +175,17 @@ test('вход, создание филиала, ученика и контак�
 
     await window.getByRole('link', { name: 'Ученики' }).click();
     await window.getByRole('link', { name: /Петрова Мила/u }).click();
-    await window.getByRole('button', { name: 'Добавить в группу' }).click();
-    const groupMembershipDialog = window.getByRole('dialog');
+    await window.getByRole('button', { name: 'Добавить в группу' }).first().click();
+    const groupMembershipDialog = window.getByRole('dialog', { name: 'Добавить в группу' });
     const groupMembershipSelect = groupMembershipDialog.getByLabel('Группа');
-    await expect(groupMembershipSelect.getByRole('option', { name: /Ритм E2E/u })).toBeAttached();
+    const rhythmOption = groupMembershipSelect.getByRole('option', { name: /Ритм E2E/u });
+    await expect(rhythmOption).toBeAttached();
     await expect(groupMembershipSelect.getByRole('option', { name: /Импульс E2E/u })).toHaveCount(
       0,
     );
-    await groupMembershipSelect.selectOption({ label: 'Ритм E2E · свободно 20' });
-    await groupMembershipDialog.getByRole('button', { name: 'Добавить в группу' }).click();
+    await groupMembershipSelect.selectOption((await rhythmOption.getAttribute('value')) ?? '');
+    await groupMembershipDialog.getByRole('button', { name: 'Проверить изменения' }).click();
+    await groupMembershipDialog.getByRole('button', { name: 'Добавить 1 учеников' }).click();
     await expect(groupMembershipDialog).not.toBeVisible();
 
     await window.getByRole('link', { name: 'Расписание' }).click();

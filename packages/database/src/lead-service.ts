@@ -34,6 +34,39 @@ function localDateKey(value = new Date()): string {
   ].join('-');
 }
 
+export function deriveTrialWorkflowState(input: {
+  attendanceStatus?: string | undefined;
+  endsAt: Date;
+  leadStatus?: LeadStatus | undefined;
+  lessonStatus: string;
+  now: Date;
+  outcome?: string | null | undefined;
+  purchased: boolean;
+  status: string;
+  startsAt: Date;
+}): TrialAppointmentSummary['state'] {
+  if (input.status === 'CANCELLED') return 'CANCELLED';
+  if (input.outcome === 'PURCHASED') return 'SUBSCRIPTION_PURCHASED';
+  if (input.outcome === 'DECLINED') return 'CLOSED';
+  if (input.outcome === 'NO_SHOW') return 'MISSED';
+  if (input.outcome === 'THINKING') return 'FOLLOW_UP';
+  if (input.leadStatus === 'REJECTED' || input.leadStatus === 'NOT_RELEVANT') return 'CLOSED';
+  if (input.lessonStatus === 'CANCELLED') return 'CANCELLED';
+  if (input.purchased) return 'SUBSCRIPTION_PURCHASED';
+  const attended =
+    input.leadStatus === 'TRIAL_ATTENDED' ||
+    ['PRESENT', 'LATE', 'TRIAL'].includes(input.attendanceStatus ?? '');
+  if (attended) return 'FOLLOW_UP';
+  if (['ABSENT', 'EXCUSED'].includes(input.attendanceStatus ?? '')) return 'MISSED';
+  if (input.leadStatus === 'NO_ANSWER' && input.startsAt <= input.now) return 'MISSED';
+  if (input.endsAt < input.now) return 'FOLLOW_UP';
+  const start = new Date(input.startsAt);
+  const today = new Date(input.now);
+  start.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  return start.getTime() === today.getTime() ? 'TODAY' : 'SCHEDULED';
+}
+
 export class LeadService {
   private readonly lessonOccurrences: LessonOccurrenceService;
 
@@ -513,7 +546,7 @@ export class LeadService {
             .get(studentId)
             ?.some((purchasedAt) => purchasedAt >= appointment.lesson.startsAt)
         : false;
-      const state = this.trialState({
+      const state = deriveTrialWorkflowState({
         attendanceStatus: attendance?.status,
         endsAt: appointment.lesson.endsAt,
         leadStatus: lead?.status,
@@ -550,39 +583,6 @@ export class LeadService {
       };
     });
     return summaries.filter((item): item is TrialAppointmentSummary => Boolean(item));
-  }
-
-  private trialState(input: {
-    attendanceStatus?: string | undefined;
-    endsAt: Date;
-    leadStatus?: LeadStatus | undefined;
-    lessonStatus: string;
-    now: Date;
-    outcome?: string | null | undefined;
-    purchased: boolean;
-    status: string;
-    startsAt: Date;
-  }): TrialAppointmentSummary['state'] {
-    if (input.status === 'CANCELLED') return 'CANCELLED';
-    if (input.outcome === 'PURCHASED') return 'SUBSCRIPTION_PURCHASED';
-    if (input.outcome === 'DECLINED') return 'CLOSED';
-    if (input.outcome === 'NO_SHOW') return 'MISSED';
-    if (input.outcome === 'THINKING') return 'FOLLOW_UP';
-    if (input.leadStatus === 'REJECTED' || input.leadStatus === 'NOT_RELEVANT') return 'CLOSED';
-    if (input.lessonStatus === 'CANCELLED') return 'CANCELLED';
-    if (input.purchased) return 'SUBSCRIPTION_PURCHASED';
-    const attended =
-      input.leadStatus === 'TRIAL_ATTENDED' ||
-      ['PRESENT', 'LATE', 'TRIAL'].includes(input.attendanceStatus ?? '');
-    if (attended) return 'FOLLOW_UP';
-    if (['ABSENT', 'EXCUSED'].includes(input.attendanceStatus ?? '')) return 'MISSED';
-    if (input.leadStatus === 'NO_ANSWER' && input.startsAt <= input.now) return 'MISSED';
-    if (input.endsAt < input.now) return 'FOLLOW_UP';
-    const start = new Date(input.startsAt);
-    const today = new Date(input.now);
-    start.setHours(0, 0, 0, 0);
-    today.setHours(0, 0, 0, 0);
-    return start.getTime() === today.getTime() ? 'TODAY' : 'SCHEDULED';
   }
 
   private async withLocalCandidates(

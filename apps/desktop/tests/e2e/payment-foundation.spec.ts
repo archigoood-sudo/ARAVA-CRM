@@ -125,7 +125,7 @@ test('платёжная операция становится одним под
     await expect(page.getByText('Создана')).toBeVisible();
     await expect(page.getByText('Исторический чек с ошибкой')).toBeVisible();
     await expect(page.getByText('Посещения без покрытия')).toBeVisible();
-    await expect(page.getByText(/Разовая группа E2E ·/u)).toBeVisible();
+    await expect(page.getByText(/Разовая группа E2E ·/u).last()).toBeVisible();
     await expect(page.getByText('Разовый E2E')).toBeVisible();
     await expect(page.getByLabel('Сумма')).toHaveValue('15');
     await page.getByRole('button', { name: 'Оплатить посещение' }).click();
@@ -230,7 +230,7 @@ test('платёжная операция становится одним под
       const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
       return (await api.subscriptions.listStudent(token, studentId)).subscriptions.length;
     }, context);
-    await page.getByRole('button', { name: 'Продать абонемент' }).click();
+    await page.getByRole('button', { name: 'Продать абонемент' }).first().click();
     const saleDialog = page.getByRole('dialog');
     const saleTariff = saleDialog.getByLabel('Тариф');
     await expect(saleTariff).toBeEnabled();

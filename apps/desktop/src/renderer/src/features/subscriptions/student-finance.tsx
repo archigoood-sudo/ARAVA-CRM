@@ -5,6 +5,7 @@ import {
   type PaymentInput,
   type AqsiGatewayPayment,
   type StudentSummary,
+  type StudentFinanceSummary,
   type SubscriptionAdjustmentInput,
   type SubscriptionCreateInput,
   type SubscriptionFreezeInput,
@@ -57,17 +58,21 @@ const currentStatuses: SubscriptionStatus[] = ['ACTIVE', 'FROZEN'];
 
 export function StudentFinance({
   branches,
+  initialFinance,
   onRequestedActionHandled,
   requestedAttendanceLessonId,
   requestedAction,
   requestedPaymentOperationId,
+  requestedSubscriptionPaymentId,
   student,
 }: {
   branches: BranchSummary[];
+  initialFinance?: StudentFinanceSummary | undefined;
   onRequestedActionHandled?: (() => void) | undefined;
   requestedAttendanceLessonId?: string | undefined;
   requestedAction?: 'payment' | 'subscription' | undefined;
   requestedPaymentOperationId?: string | undefined;
+  requestedSubscriptionPaymentId?: string | undefined;
   student: StudentSummary;
 }) {
   const user = useAuthStore((state) => state.user);
@@ -118,9 +123,31 @@ export function StudentFinance({
     onRequestedActionHandled?.();
   }, [onRequestedActionHandled, requestedPaymentOperationId]);
   const finance = useQuery({
+    initialData: initialFinance,
     queryFn: () => getDesktopApi().subscriptions.listStudent(getSessionToken(), student.id),
     queryKey: queryKeys.studentFinance(student.id),
+    staleTime: initialFinance ? 30_000 : 0,
   });
+  useEffect(() => {
+    if (!requestedSubscriptionPaymentId || !finance.data) return;
+    const subscription = finance.data.subscriptions.find(
+      ({ id }) => id === requestedSubscriptionPaymentId,
+    );
+    if (!subscription || subscription.debt <= 0) {
+      onRequestedActionHandled?.();
+      return;
+    }
+    setSubscriptionPayment({
+      amount: subscription.debt,
+      fixedAmount: false,
+      subscriptionId: subscription.id,
+      tariffName: subscription.tariffName,
+    });
+    setAttendancePayment(undefined);
+    setPaymentOpen(true);
+    const handledTimer = window.setTimeout(() => onRequestedActionHandled?.(), 0);
+    return () => window.clearTimeout(handledTimer);
+  }, [finance.data, onRequestedActionHandled, requestedSubscriptionPaymentId]);
   const paymentOperations = useQuery({
     enabled: canManage,
     queryFn: () => getDesktopApi().paymentOperations.listStudent(getSessionToken(), student.id),
