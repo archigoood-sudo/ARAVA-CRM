@@ -41,6 +41,7 @@ import {
   type AttendanceScanOptions,
   type AttendanceWorkspaceDay,
   type DashboardStats,
+  type FinanceJournalPage,
   type BackupEntry,
   type BackupRestoreSelection,
   type BackupStatus,
@@ -1703,5 +1704,66 @@ describe('Electron IPC boundary', () => {
     expect(() =>
       handlers[IPC_CHANNELS.financeTodayOverview]?.(owner.token, { date: '27.08.2026' }),
     ).toThrow();
+  });
+
+  it('validates, pages and exports the finance journal through narrow IPC', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!FinanceJournalIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Журнал IPC' });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Журналова',
+      status: 'ACTIVE',
+    });
+    const chooseFinanceExportPath = vi.fn().mockResolvedValue('/tmp/arava-finance.csv');
+    const writeFinanceExport = vi.fn().mockResolvedValue(undefined);
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'), {
+      chooseFinanceExportPath,
+      writeFinanceExport,
+    });
+    await handlers[IPC_CHANNELS.paymentCreate]?.(owner.token, {
+      amount: 2_500,
+      branchId: branch.id,
+      paidAt: new Date().toISOString(),
+      paymentMethod: 'CASH',
+      studentId: student.id,
+    });
+    const date = [
+      String(new Date().getFullYear()),
+      String(new Date().getMonth() + 1).padStart(2, '0'),
+      String(new Date().getDate()).padStart(2, '0'),
+    ].join('-');
+    const filter = { dateFrom: date, dateTo: date, eventType: 'ALL' as const };
+    const journal = (await handlers[IPC_CHANNELS.financeJournal]?.(owner.token, {
+      ...filter,
+      page: 1,
+      pageSize: 25,
+    })) as FinanceJournalPage;
+    expect(journal).toMatchObject({
+      items: [expect.objectContaining({ amount: 2_500, studentId: student.id })],
+      total: 1,
+    });
+    expect(() =>
+      handlers[IPC_CHANNELS.financeJournal]?.(owner.token, {
+        ...filter,
+        page: 0,
+        pageSize: 25,
+      }),
+    ).toThrow();
+    await expect(
+      handlers[IPC_CHANNELS.financeJournalExport]?.(owner.token, filter),
+    ).resolves.toEqual({ status: 'SAVED' });
+    expect(chooseFinanceExportPath).toHaveBeenCalledWith(`ARAVA-finance-${date}_${date}.csv`);
+    expect(writeFinanceExport).toHaveBeenCalledWith(
+      '/tmp/arava-finance.csv',
+      expect.stringContaining('Журналова Анна'),
+    );
   });
 });

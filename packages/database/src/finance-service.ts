@@ -1,5 +1,11 @@
 import type {
   AuthenticatedUser,
+  CsvExport,
+  FinanceJournalEvent,
+  FinanceJournalFilter,
+  FinanceJournalPage,
+  FinanceJournalQuery,
+  FinanceJournalSummary,
   FinanceTodayOperation,
   FinanceTodayOverview,
   FinanceTodayProviderOperation,
@@ -25,7 +31,7 @@ import type {
   TariffSummary,
 } from '@arava/shared';
 import { t } from '@arava/shared';
-import type { Prisma, Subscription, Tariff } from '@prisma/client';
+import { Prisma, type Subscription, type Tariff } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
 import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
@@ -61,6 +67,7 @@ const paymentInclude = {
 
 const financeTodayPaymentInclude = {
   branch: { select: { name: true } },
+  refunds: { select: { amount: true, id: true, refundedAt: true } },
   student: { select: { firstName: true, lastName: true, middleName: true } },
   subscription: {
     include: {
@@ -83,6 +90,12 @@ type FinanceTodayPaymentRecord = Prisma.PaymentGetPayload<{
 type FinanceTodayProviderRecord = Prisma.PaymentOperationGetPayload<{
   include: typeof financeTodayOperationInclude;
 }>;
+interface FinanceJournalIndexRow {
+  eventId: string;
+  kind: 'PAYMENT' | 'REFUND';
+  occurredAt: Date;
+  paymentId: string;
+}
 type FinanceClient = DatabaseClient | Prisma.TransactionClient;
 
 export interface RosterFinanceEntry {
@@ -286,6 +299,47 @@ function financePaymentPurpose(payment: FinanceTodayPaymentRecord): string {
   return firstPaymentId === payment.id
     ? `Абонемент «${payment.subscription.tariff.name}»`
     : `Доплата по абонементу «${payment.subscription.tariff.name}»`;
+}
+
+function csvText(value: string): string {
+  const protectedValue = /^[=+\-@]/u.test(value) ? `'${value}` : value;
+  return `"${protectedValue.replaceAll('"', '""')}"`;
+}
+
+function financeJournalCsv(events: FinanceJournalEvent[]): string {
+  const headers = [
+    'Дата',
+    'Время',
+    'Тип операции',
+    'Ученик',
+    'Сумма',
+    'Способ оплаты',
+    'Назначение',
+    'Филиал',
+    'Статус',
+  ];
+  const rows = events.map((event) => {
+    const occurredAt = new Date(event.occurredAt);
+    const amount = event.kind === 'REFUND' ? -event.amount : event.amount;
+    return [
+      csvText(
+        occurredAt.toLocaleDateString('ru-RU', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        }),
+      ),
+      csvText(occurredAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })),
+      csvText(event.kind === 'REFUND' ? 'Возврат' : 'Оплата'),
+      csvText(event.studentName),
+      amount.toFixed(2).replace('.', ','),
+      csvText(t(`payment.method.${event.method}`)),
+      csvText(event.purpose),
+      csvText(event.branchName),
+      csvText(event.kind === 'REFUND' ? 'Возвращено' : t(`payment.status.${event.status}`)),
+    ];
+  });
+  return `\uFEFF${[headers.map(csvText), ...rows].map((row) => row.join(';')).join('\r\n')}`;
 }
 
 function providerOperationSummary(
@@ -1219,6 +1273,43 @@ export class FinanceService {
     });
   }
 
+  async financeJournal(token: string, query: FinanceJournalQuery): Promise<FinanceJournalPage> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'finance:read');
+    if (query.branchId) assertBranchAccess(actor, query.branchId);
+    const [summary, items] = await Promise.all([
+      this.financeJournalSummary(actor, query),
+      this.financeJournalItems(actor, query, (query.page - 1) * query.pageSize, query.pageSize),
+    ]);
+    return {
+      items,
+      page: query.page,
+      pageSize: query.pageSize,
+      summary,
+      total: summary.operationsCount,
+      totalPages: Math.max(1, Math.ceil(summary.operationsCount / query.pageSize)),
+    };
+  }
+
+  async exportFinanceJournalCsv(
+    token: string,
+    query: FinanceJournalFilter,
+  ): Promise<CsvExport | undefined> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'finance:read');
+    if (query.branchId) assertBranchAccess(actor, query.branchId);
+    const summary = await this.financeJournalSummary(actor, query);
+    if (summary.operationsCount === 0) return undefined;
+    const events: FinanceJournalEvent[] = [];
+    const batchSize = 500;
+    for (let offset = 0; offset < summary.operationsCount; offset += batchSize)
+      events.push(...(await this.financeJournalItems(actor, query, offset, batchSize)));
+    return {
+      content: financeJournalCsv(events),
+      filename: `ARAVA-finance-${query.dateFrom}_${query.dateTo}.csv`,
+    };
+  }
+
   async financeToday(token: string, query: FinanceTodayQuery): Promise<FinanceTodayOverview> {
     const actor = await this.application.authenticate(token);
     assertPermission(actor, 'finance:read');
@@ -1441,6 +1532,213 @@ export class FinanceService {
       },
       successfulCount: payments.length + refunds.length,
     };
+  }
+
+  private financeJournalWhere(actor: AuthenticatedUser, query: FinanceJournalFilter) {
+    const branchIds = accessibleBranchIds(actor);
+    const scope = query.branchId
+      ? { branchId: query.branchId }
+      : branchIds
+        ? { branchId: { in: branchIds } }
+        : {};
+    const searchTokens = query.search?.trim().split(/\s+/u).filter(Boolean) ?? [];
+    const student = searchTokens.length
+      ? {
+          AND: searchTokens.map((token) => ({
+            OR: [
+              { firstName: { contains: token } },
+              { lastName: { contains: token } },
+              { middleName: { contains: token } },
+              { phone: { contains: token } },
+            ],
+          })),
+        }
+      : undefined;
+    const dayStart = startOfLocalDay(query.dateFrom);
+    const dayEnd = endOfLocalDay(query.dateTo);
+    const paymentWhere: Prisma.PaymentWhereInput = {
+      ...scope,
+      ...(query.paymentMethod ? { paymentMethod: query.paymentMethod } : {}),
+      ...(student ? { student } : {}),
+      paidAt: { gte: dayStart, lte: dayEnd },
+      status: { not: 'CANCELLED' },
+    };
+    const refundWhere: Prisma.RefundWhereInput = {
+      payment: {
+        ...scope,
+        ...(query.paymentMethod ? { paymentMethod: query.paymentMethod } : {}),
+        ...(student ? { student } : {}),
+      },
+      refundedAt: { gte: dayStart, lte: dayEnd },
+    };
+    return { branchIds, dayEnd, dayStart, paymentWhere, refundWhere, searchTokens };
+  }
+
+  private async financeJournalSummary(
+    actor: AuthenticatedUser,
+    query: FinanceJournalFilter,
+  ): Promise<FinanceJournalSummary> {
+    const { paymentWhere, refundWhere } = this.financeJournalWhere(actor, query);
+    const includePayments = query.eventType !== 'REFUND';
+    const includeRefunds = query.eventType !== 'PAYMENT';
+    const [paymentAggregate, refundAggregate, methodGroups] = await Promise.all([
+      includePayments
+        ? this.database.payment.aggregate({
+            _count: { _all: true },
+            _sum: { amount: true },
+            where: paymentWhere,
+          })
+        : undefined,
+      includeRefunds
+        ? this.database.refund.aggregate({
+            _count: { _all: true },
+            _sum: { amount: true },
+            where: refundWhere,
+          })
+        : undefined,
+      includePayments
+        ? this.database.payment.groupBy({
+            _count: { _all: true },
+            _sum: { amount: true },
+            by: ['paymentMethod'],
+            where: paymentWhere,
+          })
+        : [],
+    ]);
+    const received = paymentAggregate?._sum.amount ?? 0;
+    const refunds = refundAggregate?._sum.amount ?? 0;
+    return {
+      byMethod: methodGroups.map((group) => ({
+        amount: group._sum.amount ?? 0,
+        count: group._count._all,
+        method: group.paymentMethod,
+      })),
+      net: received - refunds,
+      operationsCount: (paymentAggregate?._count._all ?? 0) + (refundAggregate?._count._all ?? 0),
+      received,
+      refunds,
+    };
+  }
+
+  private async financeJournalItems(
+    actor: AuthenticatedUser,
+    query: FinanceJournalFilter,
+    offset: number,
+    limit: number,
+  ): Promise<FinanceJournalEvent[]> {
+    const { branchIds, dayEnd, dayStart, searchTokens } = this.financeJournalWhere(actor, query);
+    const scopeSql = query.branchId
+      ? Prisma.sql`p."branchId" = ${query.branchId}`
+      : branchIds
+        ? Prisma.sql`p."branchId" IN (${Prisma.join(branchIds)})`
+        : Prisma.sql`1 = 1`;
+    const methodSql = query.paymentMethod
+      ? Prisma.sql`p."paymentMethod" = ${query.paymentMethod}`
+      : Prisma.sql`1 = 1`;
+    const searchSql = searchTokens.length
+      ? Prisma.join(
+          searchTokens.map((token) => {
+            const pattern = `%${token}%`;
+            return Prisma.sql`(
+              s."firstName" LIKE ${pattern} COLLATE NOCASE OR
+              s."lastName" LIKE ${pattern} COLLATE NOCASE OR
+              COALESCE(s."middleName", '') LIKE ${pattern} COLLATE NOCASE OR
+              COALESCE(s."phone", '') LIKE ${pattern} COLLATE NOCASE
+            )`;
+          }),
+          ' AND ',
+        )
+      : Prisma.sql`1 = 1`;
+    const paymentEnabled = query.eventType === 'REFUND' ? Prisma.sql`0 = 1` : Prisma.sql`1 = 1`;
+    const refundEnabled = query.eventType === 'PAYMENT' ? Prisma.sql`0 = 1` : Prisma.sql`1 = 1`;
+    const rows = await this.database.$queryRaw<FinanceJournalIndexRow[]>(Prisma.sql`
+      SELECT events."kind", events."eventId", events."paymentId", events."occurredAt"
+      FROM (
+        SELECT
+          'PAYMENT' AS "kind",
+          p."id" AS "eventId",
+          p."id" AS "paymentId",
+          p."paidAt" AS "occurredAt"
+        FROM "Payment" p
+        INNER JOIN "Student" s ON s."id" = p."studentId"
+        WHERE ${paymentEnabled}
+          AND p."status" <> 'CANCELLED'
+          AND p."paidAt" >= ${dayStart}
+          AND p."paidAt" <= ${dayEnd}
+          AND ${scopeSql}
+          AND ${methodSql}
+          AND ${searchSql}
+        UNION ALL
+        SELECT
+          'REFUND' AS "kind",
+          r."id" AS "eventId",
+          r."paymentId" AS "paymentId",
+          r."refundedAt" AS "occurredAt"
+        FROM "Refund" r
+        INNER JOIN "Payment" p ON p."id" = r."paymentId"
+        INNER JOIN "Student" s ON s."id" = p."studentId"
+        WHERE ${refundEnabled}
+          AND r."refundedAt" >= ${dayStart}
+          AND r."refundedAt" <= ${dayEnd}
+          AND ${scopeSql}
+          AND ${methodSql}
+          AND ${searchSql}
+      ) events
+      ORDER BY events."occurredAt" DESC, events."kind" DESC, events."eventId" DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+    if (rows.length === 0) return [];
+    const payments = await this.database.payment.findMany({
+      include: financeTodayPaymentInclude,
+      where: { id: { in: [...new Set(rows.map(({ paymentId }) => paymentId))] } },
+    });
+    const paymentById = new Map(payments.map((payment) => [payment.id, payment]));
+    const lessonIds = payments.flatMap(({ attendanceLessonId }) =>
+      attendanceLessonId ? [attendanceLessonId] : [],
+    );
+    const lessons = lessonIds.length
+      ? await this.database.lesson.findMany({
+          select: { group: { select: { name: true } }, id: true, startsAt: true },
+          where: { id: { in: lessonIds } },
+        })
+      : [];
+    const lessonById = new Map(lessons.map((lesson) => [lesson.id, lesson]));
+    return rows.flatMap((row) => {
+      const payment = paymentById.get(row.paymentId);
+      if (!payment) return [];
+      const lesson = payment.attendanceLessonId
+        ? lessonById.get(payment.attendanceLessonId)
+        : undefined;
+      const purpose = lesson
+        ? `Разовое посещение · ${lesson.startsAt.toLocaleDateString('ru-RU')} · ${lesson.group.name}`
+        : financePaymentPurpose(payment);
+      return [
+        {
+          amount:
+            row.kind === 'REFUND'
+              ? (payment.refunds.find(({ id }) => id === row.eventId)?.amount ?? 0)
+              : payment.amount,
+          ...(payment.attendanceLessonId ? { attendanceLessonId: payment.attendanceLessonId } : {}),
+          branchName: payment.branch.name,
+          id: `${row.kind.toLowerCase()}:${row.eventId}`,
+          kind: row.kind,
+          method: payment.paymentMethod,
+          occurredAt: new Date(row.occurredAt).toISOString(),
+          ...(row.kind === 'REFUND'
+            ? {
+                originalPaymentAmount: payment.amount,
+                originalPaymentAt: payment.paidAt.toISOString(),
+              }
+            : {}),
+          paymentId: payment.id,
+          purpose,
+          status: payment.status,
+          studentId: payment.studentId,
+          studentName: fullName(payment.student),
+          ...(payment.subscriptionId ? { subscriptionId: payment.subscriptionId } : {}),
+        },
+      ];
+    });
   }
 
   async financeStats(token: string, branchId?: string): Promise<FinanceStats> {

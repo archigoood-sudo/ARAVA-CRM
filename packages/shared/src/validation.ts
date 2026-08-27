@@ -8,6 +8,7 @@ import {
   ENROLLMENT_STATUSES,
   EXPENSE_PAYMENT_METHODS,
   EXPENSE_STATUSES,
+  FINANCE_JOURNAL_EVENT_TYPES,
   GENDERS,
   GROUP_STATUSES,
   LESSON_STATUSES,
@@ -46,6 +47,8 @@ import {
   type ExpenseInput,
   type ExpenseListQuery,
   type FinanceTodayQuery,
+  type FinanceJournalFilter,
+  type FinanceJournalQuery,
   type GroupInput,
   type GroupListQuery,
   type LessonCancelInput,
@@ -669,6 +672,33 @@ export const financeTodayQuerySchema: z.ZodType<FinanceTodayQuery> = z.object({
   branchId: optionalIdentifier,
   date: isoDate,
 });
+
+const financeJournalFilterFields = {
+  branchId: optionalIdentifier,
+  dateFrom: isoDate,
+  dateTo: isoDate,
+  eventType: z.enum(FINANCE_JOURNAL_EVENT_TYPES),
+  paymentMethod: paymentMethodSchema.optional(),
+  search: optionalText(120),
+};
+
+export const financeJournalFilterSchema: z.ZodType<FinanceJournalFilter> = z
+  .object(financeJournalFilterFields)
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
+
+export const financeJournalQuerySchema: z.ZodType<FinanceJournalQuery> = z
+  .object({
+    ...financeJournalFilterFields,
+    page: z.number().int().min(1),
+    pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]),
+  })
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
 
 export const expenseCategoryInputSchema: z.ZodType<ExpenseCategoryInput> = z.object({
   branchId: optionalIdentifier,

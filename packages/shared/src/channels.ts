@@ -364,6 +364,8 @@ export const IPC_CHANNELS = {
   financeEmployees: 'finance:employees',
   financeStats: 'finance:stats',
   financeTodayOverview: 'finance:today-overview',
+  financeJournal: 'finance:journal',
+  financeJournalExport: 'finance:journal-export',
   expenseCategoryArchive: 'expense-category:archive',
   expenseCategoryCreate: 'expense-category:create',
   expenseCategoryList: 'expense-category:list',
@@ -1285,6 +1287,62 @@ export interface FinanceTodayOverview {
   recoveryCount: number;
   subscriptionSales: { count: number; value: number };
   successfulCount: number;
+}
+
+export const FINANCE_JOURNAL_EVENT_TYPES = ['ALL', 'PAYMENT', 'REFUND'] as const;
+export type FinanceJournalEventType = (typeof FINANCE_JOURNAL_EVENT_TYPES)[number];
+
+export interface FinanceJournalFilter {
+  branchId?: string | undefined;
+  dateFrom: string;
+  dateTo: string;
+  eventType: FinanceJournalEventType;
+  paymentMethod?: PaymentMethod | undefined;
+  search?: string | undefined;
+}
+
+export interface FinanceJournalQuery extends FinanceJournalFilter {
+  page: number;
+  pageSize: 25 | 50 | 100;
+}
+
+export interface FinanceJournalEvent {
+  amount: number;
+  attendanceLessonId?: string | undefined;
+  branchName: string;
+  id: string;
+  kind: 'PAYMENT' | 'REFUND';
+  method: PaymentMethod;
+  occurredAt: string;
+  originalPaymentAmount?: number | undefined;
+  originalPaymentAt?: string | undefined;
+  paymentId: string;
+  purpose: string;
+  status: PaymentStatus;
+  studentId: string;
+  studentName: string;
+  subscriptionId?: string | undefined;
+}
+
+export interface FinanceJournalSummary {
+  byMethod: FinanceTodayMethodTotal[];
+  net: number;
+  operationsCount: number;
+  received: number;
+  refunds: number;
+}
+
+export interface FinanceJournalPage {
+  items: FinanceJournalEvent[];
+  page: number;
+  pageSize: number;
+  summary: FinanceJournalSummary;
+  total: number;
+  totalPages: number;
+}
+
+export interface FinanceJournalExportResult {
+  status: 'CANCELLED' | 'EMPTY' | 'SAVED';
 }
 
 export interface ExpenseCategoryInput {
@@ -3221,6 +3279,11 @@ export interface AravaDesktopApi {
   };
   finance: {
     employees: (token: string) => Promise<StaffOption[]>;
+    exportJournal: (
+      token: string,
+      query: FinanceJournalFilter,
+    ) => Promise<FinanceJournalExportResult>;
+    journal: (token: string, query: FinanceJournalQuery) => Promise<FinanceJournalPage>;
     stats: (token: string, branchId?: string) => Promise<FinanceStats>;
     today: (token: string, query: FinanceTodayQuery) => Promise<FinanceTodayOverview>;
   };

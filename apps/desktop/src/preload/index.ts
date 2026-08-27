@@ -313,6 +313,8 @@ const desktopApi: AravaDesktopApi = {
   },
   finance: {
     employees: (token) => invoke(IPC_CHANNELS.financeEmployees, token),
+    exportJournal: (token, query) => invoke(IPC_CHANNELS.financeJournalExport, token, query),
+    journal: (token, query) => invoke(IPC_CHANNELS.financeJournal, token, query),
     stats: (token, branchId) => invoke(IPC_CHANNELS.financeStats, token, branchId),
     today: (token, query) => invoke(IPC_CHANNELS.financeTodayOverview, token, query),
   },

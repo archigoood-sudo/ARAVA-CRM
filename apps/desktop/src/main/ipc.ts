@@ -53,6 +53,8 @@ import {
   expenseInputSchema,
   expenseListQuerySchema,
   financeTodayQuerySchema,
+  financeJournalFilterSchema,
+  financeJournalQuerySchema,
   forcedPasswordChangeSchema,
   groupInputSchema,
   groupListQuerySchema,
@@ -123,7 +125,7 @@ import {
 } from '@arava/shared';
 import { app, dialog, ipcMain, shell } from 'electron';
 import { basename, dirname, extname, join } from 'node:path';
-import { copyFile, mkdir, readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import type { EnrollmentStatus } from '@prisma/client';
@@ -176,8 +178,10 @@ export interface BackupIpcDependencies {
   chooseBackupFile?: () => Promise<string | undefined>;
   chooseBackupFolder?: () => Promise<string | undefined>;
   chooseExportPath?: (defaultPath: string) => Promise<string | undefined>;
+  chooseFinanceExportPath?: (defaultPath: string) => Promise<string | undefined>;
   openFolder?: (path: string) => Promise<void>;
   relaunch?: () => void;
+  writeFinanceExport?: (path: string, content: string) => Promise<void>;
   customerDisplay?: CustomerDisplayManager;
   integration?: IntegrationManager;
   updates?: UpdateController;
@@ -1303,6 +1307,32 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         financeTodayQuerySchema.parse(unsafeQuery),
       ),
+    [IPC_CHANNELS.financeJournal]: (unsafeToken, unsafeQuery) =>
+      finance.financeJournal(
+        sessionTokenSchema.parse(unsafeToken),
+        financeJournalQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.financeJournalExport]: async (unsafeToken, unsafeQuery) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const query = financeJournalFilterSchema.parse(unsafeQuery);
+      const csv = await finance.exportFinanceJournalCsv(token, query);
+      if (!csv) return { status: 'EMPTY' } as const;
+      const selected = backupDependencies.chooseFinanceExportPath
+        ? await backupDependencies.chooseFinanceExportPath(csv.filename)
+        : (
+            await dialog.showSaveDialog({
+              buttonLabel: 'Сохранить журнал',
+              defaultPath: join(app.getPath('documents'), csv.filename),
+              filters: [{ extensions: ['csv'], name: 'Журнал финансовых операций' }],
+              title: 'Экспорт финансовых операций',
+            })
+          ).filePath;
+      if (!selected) return { status: 'CANCELLED' } as const;
+      if (backupDependencies.writeFinanceExport)
+        await backupDependencies.writeFinanceExport(selected, csv.content);
+      else await writeFile(selected, csv.content, 'utf8');
+      return { status: 'SAVED' } as const;
+    },
 
     [IPC_CHANNELS.expenseCategoryList]: (unsafeToken, unsafeIncludeArchived) =>
       management.listExpenseCategories(
