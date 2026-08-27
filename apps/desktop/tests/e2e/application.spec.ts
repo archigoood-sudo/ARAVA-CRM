@@ -265,7 +265,10 @@ test('вход, создание филиала, ученика и контак�
     await expect(window.getByText('Заморожен').first()).toBeVisible();
 
     await window.getByRole('link', { name: 'Финансы' }).click();
-    const fullPaymentRow = window.getByRole('row').filter({ hasText: /3[\s\u00a0]000/u });
+    const fullPaymentRow = window
+      .getByRole('row')
+      .filter({ hasText: /3[\s\u00a0]000/u })
+      .last();
     await fullPaymentRow.click();
     await window.getByRole('button', { name: 'Оформить возврат' }).click();
     const refundDialog = window.getByRole('dialog').last();

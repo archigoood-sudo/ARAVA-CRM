@@ -52,6 +52,7 @@ import {
   expenseCategoryInputSchema,
   expenseInputSchema,
   expenseListQuerySchema,
+  financeTodayQuerySchema,
   forcedPasswordChangeSchema,
   groupInputSchema,
   groupListQuerySchema,
@@ -1296,6 +1297,11 @@ export function createIpcHandlers(
       finance.financeStats(
         sessionTokenSchema.parse(unsafeToken),
         unsafeBranchId === undefined ? undefined : identifierSchema.parse(unsafeBranchId),
+      ),
+    [IPC_CHANNELS.financeTodayOverview]: (unsafeToken, unsafeQuery) =>
+      finance.financeToday(
+        sessionTokenSchema.parse(unsafeToken),
+        financeTodayQuerySchema.parse(unsafeQuery),
       ),
 
     [IPC_CHANNELS.expenseCategoryList]: (unsafeToken, unsafeIncludeArchived) =>

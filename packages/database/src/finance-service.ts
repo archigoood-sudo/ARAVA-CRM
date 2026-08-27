@@ -1,5 +1,9 @@
 import type {
   AuthenticatedUser,
+  FinanceTodayOperation,
+  FinanceTodayOverview,
+  FinanceTodayProviderOperation,
+  FinanceTodayQuery,
   FinanceStats,
   LedgerEntrySummary,
   PaymentDetail,
@@ -33,6 +37,7 @@ import {
   subscriptionStatusAt,
 } from './subscription-ledger';
 import { DAY_MS, isExpiringSoon, isLowLessonBalance } from './attention-rules';
+import { endOfLocalDay, startOfLocalDay } from './schedule';
 
 const subscriptionInclude = {
   branch: { select: { name: true } },
@@ -54,8 +59,30 @@ const paymentInclude = {
   subscription: { include: { tariff: { select: { name: true } } } },
 } satisfies Prisma.PaymentInclude;
 
+const financeTodayPaymentInclude = {
+  branch: { select: { name: true } },
+  student: { select: { firstName: true, lastName: true, middleName: true } },
+  subscription: {
+    include: {
+      payments: { orderBy: [{ paidAt: 'asc' }, { createdAt: 'asc' }], select: { id: true } },
+      tariff: { select: { name: true } },
+    },
+  },
+} satisfies Prisma.PaymentInclude;
+
+const financeTodayOperationInclude = {
+  branch: { select: { name: true } },
+  student: { select: { firstName: true, lastName: true, middleName: true } },
+} satisfies Prisma.PaymentOperationInclude;
+
 type SubscriptionRecord = Prisma.SubscriptionGetPayload<{ include: typeof subscriptionInclude }>;
 type PaymentRecord = Prisma.PaymentGetPayload<{ include: typeof paymentInclude }>;
+type FinanceTodayPaymentRecord = Prisma.PaymentGetPayload<{
+  include: typeof financeTodayPaymentInclude;
+}>;
+type FinanceTodayProviderRecord = Prisma.PaymentOperationGetPayload<{
+  include: typeof financeTodayOperationInclude;
+}>;
 type FinanceClient = DatabaseClient | Prisma.TransactionClient;
 
 export interface RosterFinanceEntry {
@@ -249,6 +276,44 @@ function paymentSummary(payment: PaymentRecord): PaymentSummary {
     subscriptionId: payment.subscriptionId ?? undefined,
     subscriptionName: payment.subscription?.tariff.name,
     updatedAt: payment.updatedAt.toISOString(),
+  };
+}
+
+function financePaymentPurpose(payment: FinanceTodayPaymentRecord): string {
+  if (payment.attendanceLessonId) return 'Разовое посещение';
+  if (!payment.subscription) return 'Прочая оплата';
+  const firstPaymentId = payment.subscription.payments[0]?.id;
+  return firstPaymentId === payment.id
+    ? `Абонемент «${payment.subscription.tariff.name}»`
+    : `Доплата по абонементу «${payment.subscription.tariff.name}»`;
+}
+
+function providerOperationSummary(
+  operation: FinanceTodayProviderRecord,
+): FinanceTodayProviderOperation {
+  const failureReason = operation.saleFinalizationError
+    ? 'Оплата подтверждена, но абонемент ещё не выдан.'
+    : operation.status === 'EXPIRED'
+      ? 'Истекло время ожидания оплаты.'
+      : operation.status === 'CANCELLED'
+        ? 'Операция отменена.'
+        : operation.status === 'FAILED'
+          ? 'Провайдер не подтвердил операцию.'
+          : undefined;
+  return {
+    amount: operation.amount,
+    branchName: operation.branch.name,
+    ...(failureReason ? { failureReason } : {}),
+    id: operation.id,
+    providerType: operation.providerType,
+    purpose: operation.purpose,
+    ...(operation.saleFinalizationError
+      ? { saleFinalizationError: 'Требуется повторная безопасная финализация продажи.' }
+      : {}),
+    status: operation.status,
+    studentId: operation.studentId,
+    studentName: fullName(operation.student),
+    updatedAt: operation.updatedAt.toISOString(),
   };
 }
 
@@ -732,7 +797,7 @@ export class FinanceService {
     }));
     const canSeeDebt = actor.role !== 'COACH';
     const uncoveredDebt = canSeeDebt
-      ? await this.uncoveredDebtByStudent(studentIds)
+      ? (await this.uncoveredDebtByStudent(studentIds)).amounts
       : new Map<string, number>();
     return new Map(
       studentIds.map((studentId) => {
@@ -1154,6 +1219,230 @@ export class FinanceService {
     });
   }
 
+  async financeToday(token: string, query: FinanceTodayQuery): Promise<FinanceTodayOverview> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'finance:read');
+    if (query.branchId) assertBranchAccess(actor, query.branchId);
+    const branchIds = accessibleBranchIds(actor);
+    const scope = query.branchId
+      ? { branchId: query.branchId }
+      : branchIds
+        ? { branchId: { in: branchIds } }
+        : {};
+    const dayStart = startOfLocalDay(query.date);
+    const dayEnd = endOfLocalDay(query.date);
+    const pendingStatuses = ['CREATED', 'WAITING_FOR_PAYMENT', 'PROCESSING'] as const;
+    const failedStatuses = ['FAILED', 'CANCELLED', 'EXPIRED'] as const;
+
+    const [
+      payments,
+      refunds,
+      subscriptions,
+      subscriptionSales,
+      students,
+      providerOperations,
+      pendingCount,
+      failedCount,
+      recoveryCount,
+    ] = await Promise.all([
+      this.database.payment.findMany({
+        include: financeTodayPaymentInclude,
+        orderBy: { paidAt: 'desc' },
+        where: {
+          ...scope,
+          paidAt: { gte: dayStart, lte: dayEnd },
+          status: { not: 'CANCELLED' },
+        },
+      }),
+      this.database.refund.findMany({
+        include: {
+          payment: { include: financeTodayPaymentInclude },
+        },
+        orderBy: { refundedAt: 'desc' },
+        where: {
+          payment: scope,
+          refundedAt: { gte: dayStart, lte: dayEnd },
+        },
+      }),
+      this.database.subscription.findMany({
+        include: subscriptionInclude,
+        where: { ...scope, status: { not: 'CANCELLED' } },
+      }),
+      this.database.subscription.findMany({
+        select: { id: true, salePrice: true },
+        where: {
+          ...scope,
+          purchasedAt: { gte: dayStart, lte: dayEnd },
+          status: { not: 'CANCELLED' },
+          tariff: { type: { not: 'TRIAL' } },
+        },
+      }),
+      this.database.student.findMany({
+        select: { id: true },
+        where: { ...scope, archivedAt: null },
+      }),
+      this.database.paymentOperation.findMany({
+        include: financeTodayOperationInclude,
+        orderBy: { updatedAt: 'desc' },
+        take: 50,
+        where: {
+          ...scope,
+          OR: [
+            {
+              createdAt: { gte: dayStart, lte: dayEnd },
+              status: { in: [...pendingStatuses] },
+            },
+            {
+              status: { in: [...failedStatuses] },
+              updatedAt: { gte: dayStart, lte: dayEnd },
+            },
+            { saleFinalizationError: { not: null }, status: { in: [...pendingStatuses] } },
+          ],
+        },
+      }),
+      this.database.paymentOperation.count({
+        where: {
+          ...scope,
+          createdAt: { gte: dayStart, lte: dayEnd },
+          status: { in: [...pendingStatuses] },
+        },
+      }),
+      this.database.paymentOperation.count({
+        where: {
+          ...scope,
+          status: { in: [...failedStatuses] },
+          updatedAt: { gte: dayStart, lte: dayEnd },
+        },
+      }),
+      this.database.paymentOperation.count({
+        where: {
+          ...scope,
+          saleFinalizationError: { not: null },
+          status: { in: [...pendingStatuses] },
+        },
+      }),
+    ]);
+
+    const studentIds = students.map(({ id }) => id);
+    const uncoveredSummary = studentIds.length
+      ? await this.uncoveredDebtByStudent(studentIds)
+      : { amounts: new Map<string, number>(), unpricedCount: 0 };
+    const uncoveredByStudent = uncoveredSummary.amounts;
+    const subscriptionDebtByStudent = new Map<string, number>();
+    for (const subscription of subscriptions) {
+      const debt = subscriptionSummary(subscription).debt;
+      if (debt > 0)
+        subscriptionDebtByStudent.set(
+          subscription.studentId,
+          (subscriptionDebtByStudent.get(subscription.studentId) ?? 0) + debt,
+        );
+    }
+    const subscriptionDebt = [...subscriptionDebtByStudent.values()].reduce(
+      (sum, amount) => sum + amount,
+      0,
+    );
+    const uncoveredDebt = [...uncoveredByStudent.values()].reduce((sum, amount) => sum + amount, 0);
+    const debtStudentIds = new Set([
+      ...subscriptionDebtByStudent.keys(),
+      ...[...uncoveredByStudent].filter(([, amount]) => amount > 0).map(([studentId]) => studentId),
+    ]);
+    const received = payments.reduce((sum, payment) => sum + payment.amount, 0);
+    const refundAmount = refunds.reduce((sum, refund) => sum + refund.amount, 0);
+    const methodTotals = new Map<
+      PaymentInput['paymentMethod'],
+      { amount: number; count: number }
+    >();
+    for (const payment of payments) {
+      const current = methodTotals.get(payment.paymentMethod) ?? { amount: 0, count: 0 };
+      methodTotals.set(payment.paymentMethod, {
+        amount: current.amount + payment.amount,
+        count: current.count + 1,
+      });
+    }
+    const directPayments = payments.filter(({ attendanceLessonId }) => attendanceLessonId !== null);
+    const paymentOperations: FinanceTodayOperation[] = payments.map((payment) => ({
+      amount: payment.amount,
+      branchName: payment.branch.name,
+      id: `payment:${payment.id}`,
+      kind: 'PAYMENT',
+      method: payment.paymentMethod,
+      occurredAt: payment.paidAt.toISOString(),
+      paymentId: payment.id,
+      purpose: financePaymentPurpose(payment),
+      status: payment.status,
+      studentId: payment.studentId,
+      studentName: fullName(payment.student),
+    }));
+    const refundOperations: FinanceTodayOperation[] = refunds.map((refund) => ({
+      amount: refund.amount,
+      branchName: refund.payment.branch.name,
+      id: `refund:${refund.id}`,
+      kind: 'REFUND',
+      method: refund.payment.paymentMethod,
+      occurredAt: refund.refundedAt.toISOString(),
+      paymentId: refund.paymentId,
+      purpose: `Возврат · ${financePaymentPurpose(refund.payment)}`,
+      status: refund.payment.status,
+      studentId: refund.payment.studentId,
+      studentName: fullName(refund.payment.student),
+    }));
+    const pending = providerOperations
+      .filter(
+        (operation) =>
+          pendingStatuses.includes(operation.status as (typeof pendingStatuses)[number]) &&
+          operation.createdAt >= dayStart &&
+          operation.createdAt <= dayEnd,
+      )
+      .slice(0, 8)
+      .map(providerOperationSummary);
+    const failed = providerOperations
+      .filter(
+        (operation) =>
+          failedStatuses.includes(operation.status as (typeof failedStatuses)[number]) &&
+          operation.updatedAt >= dayStart &&
+          operation.updatedAt <= dayEnd,
+      )
+      .slice(0, 8)
+      .map(providerOperationSummary);
+    const recovery = providerOperations
+      .filter((operation) => Boolean(operation.saleFinalizationError))
+      .slice(0, 8)
+      .map(providerOperationSummary);
+
+    return {
+      byMethod: [...methodTotals].map(([method, value]) => ({ method, ...value })),
+      date: query.date,
+      debt: {
+        studentCount: debtStudentIds.size,
+        subscriptionAmount: subscriptionDebt,
+        totalAmount: subscriptionDebt + uncoveredDebt,
+        uncoveredAmount: uncoveredDebt,
+        unpricedAttendanceCount: uncoveredSummary.unpricedCount,
+      },
+      directAttendance: {
+        amount: directPayments.reduce((sum, payment) => sum + payment.amount, 0),
+        count: directPayments.length,
+      },
+      failed,
+      failedCount,
+      net: received - refundAmount,
+      pending,
+      pendingCount,
+      received,
+      recentOperations: [...paymentOperations, ...refundOperations]
+        .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+        .slice(0, 30),
+      refunds: refundAmount,
+      recovery,
+      recoveryCount,
+      subscriptionSales: {
+        count: subscriptionSales.length,
+        value: subscriptionSales.reduce((sum, subscription) => sum + subscription.salePrice, 0),
+      },
+      successfulCount: payments.length + refunds.length,
+    };
+  }
+
   async financeStats(token: string, branchId?: string): Promise<FinanceStats> {
     const actor = await this.application.authenticate(token);
     assertPermission(actor, 'finance:read');
@@ -1212,7 +1501,9 @@ export class FinanceService {
     };
   }
 
-  private async uncoveredDebtByStudent(studentIds: string[]): Promise<Map<string, number>> {
+  private async uncoveredDebtByStudent(
+    studentIds: string[],
+  ): Promise<{ amounts: Map<string, number>; unpricedCount: number }> {
     const [attendances, writeOffs, tariffs, trialAppointments] = await Promise.all([
       this.database.attendance.findMany({
         select: {
@@ -1248,6 +1539,7 @@ export class FinanceService {
       ),
     );
     const result = new Map<string, number>();
+    let unpricedCount = 0;
     for (const attendance of attendances) {
       if (
         attendance.directPaymentId ||
@@ -1259,12 +1551,15 @@ export class FinanceService {
         ...tariffs.filter(({ branchId }) => branchId === attendance.lesson.branchId),
         ...tariffs.filter(({ branchId }) => branchId === null),
       ];
-      if (eligibleTariffs.length !== 1) continue;
+      if (eligibleTariffs.length !== 1) {
+        unpricedCount += 1;
+        continue;
+      }
       const tariff = eligibleTariffs[0];
       if (!tariff) continue;
       result.set(attendance.studentId, (result.get(attendance.studentId) ?? 0) + tariff.price);
     }
-    return result;
+    return { amounts: result, unpricedCount };
   }
 
   private async uncoveredAttendances(studentId: string) {

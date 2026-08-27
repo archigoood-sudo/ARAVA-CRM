@@ -45,6 +45,7 @@ import {
   type ExpenseCategoryInput,
   type ExpenseInput,
   type ExpenseListQuery,
+  type FinanceTodayQuery,
   type GroupInput,
   type GroupListQuery,
   type LessonCancelInput,
@@ -662,6 +663,11 @@ export const refundInputSchema: z.ZodType<RefundInput> = z.object({
   amount: positiveMoneyAmount,
   reason: z.string().trim().min(3, t('validation.refundReason')).max(1000),
   refundedAt: isoDateTime,
+});
+
+export const financeTodayQuerySchema: z.ZodType<FinanceTodayQuery> = z.object({
+  branchId: optionalIdentifier,
+  date: isoDate,
 });
 
 export const expenseCategoryInputSchema: z.ZodType<ExpenseCategoryInput> = z.object({

@@ -363,6 +363,7 @@ export const IPC_CHANNELS = {
   refundCreate: 'refund:create',
   financeEmployees: 'finance:employees',
   financeStats: 'finance:stats',
+  financeTodayOverview: 'finance:today-overview',
   expenseCategoryArchive: 'expense-category:archive',
   expenseCategoryCreate: 'expense-category:create',
   expenseCategoryList: 'expense-category:list',
@@ -1220,6 +1221,70 @@ export interface FinanceStats {
   outstandingDebt: number;
   revenueThisMonth: number;
   revenueToday: number;
+}
+
+export interface FinanceTodayQuery {
+  branchId?: string | undefined;
+  date: string;
+}
+
+export interface FinanceTodayMethodTotal {
+  amount: number;
+  count: number;
+  method: PaymentMethod;
+}
+
+export interface FinanceTodayOperation {
+  amount: number;
+  branchName: string;
+  id: string;
+  kind: 'PAYMENT' | 'REFUND';
+  method: PaymentMethod;
+  occurredAt: string;
+  paymentId: string;
+  purpose: string;
+  status: PaymentStatus;
+  studentId: string;
+  studentName: string;
+}
+
+export interface FinanceTodayProviderOperation {
+  amount: number;
+  branchName: string;
+  failureReason?: string | undefined;
+  id: string;
+  providerType: PaymentProviderType;
+  purpose: string;
+  saleFinalizationError?: string | undefined;
+  status: PaymentOperationStatus;
+  studentId: string;
+  studentName: string;
+  updatedAt: string;
+}
+
+export interface FinanceTodayOverview {
+  byMethod: FinanceTodayMethodTotal[];
+  date: string;
+  debt: {
+    studentCount: number;
+    subscriptionAmount: number;
+    totalAmount: number;
+    uncoveredAmount: number;
+    unpricedAttendanceCount: number;
+  };
+  directAttendance: { amount: number; count: number };
+  failed: FinanceTodayProviderOperation[];
+  failedCount: number;
+  net: number;
+  pending: FinanceTodayProviderOperation[];
+  pendingCount: number;
+  received: number;
+  recentOperations: FinanceTodayOperation[];
+  refunds: number;
+  recovery: FinanceTodayProviderOperation[];
+  recoveryCount: number;
+  subscriptionSales: { count: number; value: number };
+  successfulCount: number;
 }
 
 export interface ExpenseCategoryInput {
@@ -3157,6 +3222,7 @@ export interface AravaDesktopApi {
   finance: {
     employees: (token: string) => Promise<StaffOption[]>;
     stats: (token: string, branchId?: string) => Promise<FinanceStats>;
+    today: (token: string, query: FinanceTodayQuery) => Promise<FinanceTodayOverview>;
   };
   expenseCategories: {
     archive: (token: string, id: string) => Promise<ExpenseCategorySummary>;

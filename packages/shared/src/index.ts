@@ -32,6 +32,7 @@ export {
   expenseCategoryInputSchema,
   expenseInputSchema,
   expenseListQuerySchema,
+  financeTodayQuerySchema,
   forcedPasswordChangeSchema,
   genderSchema,
   groupInputSchema,

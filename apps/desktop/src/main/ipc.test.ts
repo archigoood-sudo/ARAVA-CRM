@@ -1665,4 +1665,43 @@ describe('Electron IPC boundary', () => {
       await database.syncOutbox.count({ where: { entityId: draft.id, entityType: 'PUBLICATION' } }),
     ).toBe(1);
   });
+
+  it('exposes the validated permission-aware Finance Today aggregator through one IPC call', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!FinanceTodayIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Финансы IPC' });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Финансова',
+      status: 'ACTIVE',
+    });
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'));
+    await handlers[IPC_CHANNELS.paymentCreate]?.(owner.token, {
+      amount: 2_500,
+      branchId: branch.id,
+      paidAt: new Date().toISOString(),
+      paymentMethod: 'CASH',
+      studentId: student.id,
+    });
+    const today = [
+      String(new Date().getFullYear()),
+      String(new Date().getMonth() + 1).padStart(2, '0'),
+      String(new Date().getDate()).padStart(2, '0'),
+    ].join('-');
+    const overview = (await handlers[IPC_CHANNELS.financeTodayOverview]?.(owner.token, {
+      date: today,
+    })) as { received: number; recentOperations: unknown[] };
+    expect(overview.received).toBe(2_500);
+    expect(overview.recentOperations).toHaveLength(1);
+    expect(() =>
+      handlers[IPC_CHANNELS.financeTodayOverview]?.(owner.token, { date: '27.08.2026' }),
+    ).toThrow();
+  });
 });

@@ -42,6 +42,8 @@ export const queryKeys = {
   lesson: (id: string) => ['lessons', 'detail', id] as const,
   lessons: (query: LessonListQuery) => ['lessons', 'list', query] as const,
   financeStats: (branchId?: string) => ['finance', 'stats', { branchId }] as const,
+  financeToday: (date: string, branchId?: string) =>
+    ['finance', 'today', { branchId, date }] as const,
   payments: (query: PaymentListQuery) => ['payments', 'list', query] as const,
   schedules: (query: WeeklyScheduleQuery) => ['schedules', 'list', query] as const,
   setting: (key: string) => ['settings', key] as const,
