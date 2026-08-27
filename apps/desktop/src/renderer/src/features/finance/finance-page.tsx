@@ -49,6 +49,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { FinanceJournal } from './finance-journal';
 import { FinanceDebts } from './finance-debts';
+import { FinanceAnalytics } from './finance-analytics';
 import { PaymentDetailsDialog } from './payment-details-dialog';
 import { PaymentDialog } from './payment-dialog';
 import { financeTodayOperationTone, hasFinanceTodayActivity } from './finance-today-model';
@@ -102,7 +103,9 @@ export function FinancePage() {
   const [parameters, setParameters] = useSearchParams();
   const requestedView = parameters.get('view');
   const view =
-    requestedView === 'operations' || requestedView === 'debts' ? requestedView : 'today';
+    requestedView === 'operations' || requestedView === 'debts' || requestedView === 'analytics'
+      ? requestedView
+      : 'today';
   const now = new Date();
   const [branchId, setBranchId] = useState('');
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -232,6 +235,19 @@ export function FinancePage() {
           variant={view === 'debts' ? 'secondary' : 'ghost'}
         >
           Долги
+        </Button>
+        <Button
+          onClick={() =>
+            setParameters((current) => {
+              const next = new URLSearchParams(current);
+              next.set('view', 'analytics');
+              return next;
+            })
+          }
+          size="small"
+          variant={view === 'analytics' ? 'secondary' : 'ghost'}
+        >
+          Аналитика
         </Button>
       </div>
       {view === 'today' ? (
@@ -509,8 +525,10 @@ export function FinancePage() {
           branches={branches.data ?? []}
           onOpenPayment={(paymentId) => setSelectedPaymentId(paymentId)}
         />
-      ) : (
+      ) : view === 'debts' ? (
         <FinanceDebts branches={branches.data ?? []} />
+      ) : (
+        <FinanceAnalytics branches={branches.data ?? []} />
       )}
       <PaymentDialog
         branches={branches.data ?? []}

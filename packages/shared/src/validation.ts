@@ -48,6 +48,7 @@ import {
   type ExpenseCategoryInput,
   type ExpenseInput,
   type ExpenseListQuery,
+  type FinanceAnalyticsQuery,
   type FinanceTodayQuery,
   type FinanceDebtQuery,
   type FinanceJournalFilter,
@@ -676,14 +677,31 @@ export const financeTodayQuerySchema: z.ZodType<FinanceTodayQuery> = z.object({
   date: isoDate,
 });
 
-export const financeDebtQuerySchema: z.ZodType<FinanceDebtQuery> = z.object({
+const financeDebtFilterFields = {
   branchId: optionalIdentifier,
   debtType: z.enum(FINANCE_DEBT_TYPES),
-  page: z.number().int().min(1),
-  pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]),
   search: optionalText(120),
   sort: z.enum(FINANCE_DEBT_SORTS),
+};
+
+export const financeDebtFilterSchema = z.object(financeDebtFilterFields);
+
+export const financeDebtQuerySchema: z.ZodType<FinanceDebtQuery> = z.object({
+  ...financeDebtFilterFields,
+  page: z.number().int().min(1),
+  pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]),
 });
+
+export const financeAnalyticsQuerySchema: z.ZodType<FinanceAnalyticsQuery> = z
+  .object({
+    branchId: optionalIdentifier,
+    dateFrom: isoDate,
+    dateTo: isoDate,
+  })
+  .refine((input) => input.dateFrom <= input.dateTo, {
+    message: t('validation.dateRange'),
+    path: ['dateTo'],
+  });
 
 const financeJournalFilterFields = {
   branchId: optionalIdentifier,

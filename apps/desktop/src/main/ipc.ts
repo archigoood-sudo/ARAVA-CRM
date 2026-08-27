@@ -53,6 +53,8 @@ import {
   expenseInputSchema,
   expenseListQuerySchema,
   financeDebtQuerySchema,
+  financeDebtFilterSchema,
+  financeAnalyticsQuerySchema,
   financeTodayQuerySchema,
   financeJournalFilterSchema,
   financeJournalQuerySchema,
@@ -1313,6 +1315,32 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         financeDebtQuerySchema.parse(unsafeQuery),
       ),
+    [IPC_CHANNELS.financeAnalytics]: (unsafeToken, unsafeQuery) =>
+      finance.financeAnalytics(
+        sessionTokenSchema.parse(unsafeToken),
+        financeAnalyticsQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.financeDebtExport]: async (unsafeToken, unsafeQuery) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const query = financeDebtFilterSchema.parse(unsafeQuery);
+      const csv = await finance.exportFinanceDebtCsv(token, query);
+      if (!csv) return { status: 'EMPTY' } as const;
+      const selected = backupDependencies.chooseFinanceExportPath
+        ? await backupDependencies.chooseFinanceExportPath(csv.filename)
+        : (
+            await dialog.showSaveDialog({
+              buttonLabel: 'Сохранить список',
+              defaultPath: join(app.getPath('documents'), csv.filename),
+              filters: [{ extensions: ['csv'], name: 'Список задолженностей' }],
+              title: 'Экспорт задолженностей',
+            })
+          ).filePath;
+      if (!selected) return { status: 'CANCELLED' } as const;
+      if (backupDependencies.writeFinanceExport)
+        await backupDependencies.writeFinanceExport(selected, csv.content);
+      else await writeFile(selected, csv.content, 'utf8');
+      return { status: 'SAVED' } as const;
+    },
     [IPC_CHANNELS.financeJournal]: (unsafeToken, unsafeQuery) =>
       finance.financeJournal(
         sessionTokenSchema.parse(unsafeToken),

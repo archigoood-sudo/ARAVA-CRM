@@ -1784,7 +1784,12 @@ describe('Electron IPC boundary', () => {
       lastName: 'Должникова',
       status: 'ACTIVE',
     });
-    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'));
+    const chooseFinanceExportPath = vi.fn().mockResolvedValue('/tmp/arava-debts.csv');
+    const writeFinanceExport = vi.fn().mockResolvedValue(undefined);
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'), {
+      chooseFinanceExportPath,
+      writeFinanceExport,
+    });
     const tariff = (await handlers[IPC_CHANNELS.tariffCreate]?.(owner.token, {
       branchId: branch.id,
       currency: 'RUB',
@@ -1819,5 +1824,31 @@ describe('Electron IPC boundary', () => {
         sort: 'OLDEST',
       }),
     ).toThrow();
+    const date = new Date().toISOString().slice(0, 10);
+    const analytics = (await handlers[IPC_CHANNELS.financeAnalytics]?.(owner.token, {
+      dateFrom: date,
+      dateTo: date,
+    })) as { aging: { currentDebt: number }; current: { subscriptionSales: { count: number } } };
+    expect(analytics).toMatchObject({
+      aging: { currentDebt: 12_000 },
+      current: { subscriptionSales: { count: 1 } },
+    });
+    expect(() =>
+      handlers[IPC_CHANNELS.financeAnalytics]?.(owner.token, {
+        dateFrom: '2026-08-02',
+        dateTo: '2026-08-01',
+      }),
+    ).toThrow();
+    await expect(
+      handlers[IPC_CHANNELS.financeDebtExport]?.(owner.token, {
+        debtType: 'ALL',
+        sort: 'OLDEST',
+      }),
+    ).resolves.toEqual({ status: 'SAVED' });
+    expect(chooseFinanceExportPath).toHaveBeenCalledWith(expect.stringMatching(/^ARAVA-debts-/u));
+    expect(writeFinanceExport).toHaveBeenCalledWith(
+      '/tmp/arava-debts.csv',
+      expect.stringContaining('Должникова Ирина'),
+    );
   });
 });

@@ -125,6 +125,19 @@ test('финансы сегодня показывают продажу, час�
     await page.getByRole('button', { name: 'Обновить' }).click();
     await expect(received).toContainText('265 ₽');
     await expect(page.getByText('Доплата по абонементу «Абонемент E2E»')).toBeVisible();
+    await page.getByRole('button', { name: 'Аналитика' }).click();
+    const analytics = page.getByTestId('finance-analytics');
+    await expect(analytics.getByText('Получено').locator('..')).toContainText('265 ₽');
+    await expect(analytics.getByText('Чистый приход', { exact: true }).locator('..')).toContainText(
+      '265 ₽',
+    );
+    await expect(analytics.getByText('Продано абонементов').locator('..')).toContainText('1');
+    await expect(analytics.getByText('Текущая задолженность').locator('..')).toContainText('80 ₽');
+    await expect(analytics.getByText('Способы оплаты')).toBeVisible();
+    await expect(analytics.getByText('Чистый приход по дням')).toBeVisible();
+    await analytics.getByLabel('Период аналитики').selectOption('SEVEN_DAYS');
+    await expect(analytics.getByText('Получено').locator('..')).toContainText('265 ₽');
+    await page.getByRole('button', { name: 'Сегодня' }).click();
     await page.getByText('Финансы E2E Анна').first().click();
     await expect(page).toHaveURL(new RegExp(`/students/${context.studentId}$`, 'u'));
     await expect(page.getByText('Долг: 80 ₽')).toBeVisible();

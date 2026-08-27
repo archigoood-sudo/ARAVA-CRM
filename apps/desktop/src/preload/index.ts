@@ -312,8 +312,10 @@ const desktopApi: AravaDesktopApi = {
     create: (token, paymentId, input) => invoke(IPC_CHANNELS.refundCreate, token, paymentId, input),
   },
   finance: {
+    analytics: (token, query) => invoke(IPC_CHANNELS.financeAnalytics, token, query),
     debts: (token, query) => invoke(IPC_CHANNELS.financeDebtOverview, token, query),
     employees: (token) => invoke(IPC_CHANNELS.financeEmployees, token),
+    exportDebts: (token, query) => invoke(IPC_CHANNELS.financeDebtExport, token, query),
     exportJournal: (token, query) => invoke(IPC_CHANNELS.financeJournalExport, token, query),
     journal: (token, query) => invoke(IPC_CHANNELS.financeJournal, token, query),
     stats: (token, branchId) => invoke(IPC_CHANNELS.financeStats, token, branchId),

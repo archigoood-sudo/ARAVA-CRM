@@ -30,13 +30,14 @@ import {
   TableHeader,
   TableRow,
 } from '@arava/ui';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   CalendarClock,
   ChevronLeft,
   ChevronRight,
   CircleDollarSign,
+  Download,
   Search,
   Users,
   WalletCards,
@@ -217,6 +218,7 @@ export function FinanceDebts({ branches }: { branches: BranchSummary[] }) {
   const [parameters, setParameters] = useSearchParams();
   const [search, setSearch] = useState(parameters.get('debtSearch') ?? '');
   const [selected, setSelected] = useState<FinanceDebtStudent>();
+  const [exportNotice, setExportNotice] = useState<string>();
   const branchId = parameters.get('debtBranch') ?? '';
   const requestedType = parameters.get('debtType');
   const debtType = FINANCE_DEBT_TYPES.includes(requestedType as FinanceDebtType)
@@ -273,11 +275,41 @@ export function FinanceDebts({ branches }: { branches: BranchSummary[] }) {
     queryFn: () => getDesktopApi().finance.debts(getSessionToken(), query),
     queryKey: queryKeys.financeDebts(query),
   });
+  const exportDebts = useMutation({
+    mutationFn: () =>
+      getDesktopApi().finance.exportDebts(getSessionToken(), {
+        branchId: branchId || undefined,
+        debtType,
+        search: committedSearch || undefined,
+        sort,
+      }),
+    onError: () => setExportNotice('Не удалось экспортировать задолженности.'),
+    onSuccess: (result) =>
+      setExportNotice(
+        result.status === 'SAVED'
+          ? 'Список задолженностей сохранён.'
+          : result.status === 'EMPTY'
+            ? 'По выбранным фильтрам задолженностей нет.'
+            : undefined,
+      ),
+  });
   const openStudent = (studentId: string, action?: string) =>
     navigate(`/students/${studentId}${action ? `?${action}` : ''}`);
 
   return (
     <section className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">Текущие долги по каноническим данным CRM</p>
+        <Button
+          disabled={exportDebts.isPending}
+          onClick={() => exportDebts.mutate()}
+          variant="outline"
+        >
+          <Download className="size-4" />
+          {exportDebts.isPending ? 'Экспортируем…' : 'Экспорт CSV'}
+        </Button>
+      </div>
+      {exportNotice ? <p className="text-sm text-muted-foreground">{exportNotice}</p> : null}
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           icon={CircleDollarSign}

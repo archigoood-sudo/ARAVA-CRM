@@ -1,6 +1,9 @@
 import type {
   AuthenticatedUser,
   CsvExport,
+  FinanceAnalyticsOverview,
+  FinanceAnalyticsPeriodSummary,
+  FinanceAnalyticsQuery,
   FinanceDebtAttendance,
   FinanceDebtPage,
   FinanceDebtQuery,
@@ -345,6 +348,46 @@ function financeJournalCsv(events: FinanceJournalEvent[]): string {
     ];
   });
   return `\uFEFF${[headers.map(csvText), ...rows].map((row) => row.join(';')).join('\r\n')}`;
+}
+
+function financeDebtCsv(rows: FinanceDebtStudent[]): string {
+  const headers = [
+    'Ученик',
+    'Статус ученика',
+    'Филиал',
+    'Общий долг',
+    'Долг по абонементам',
+    'Долг по посещениям',
+    'Непрооценённых посещений',
+    'Самый старый долг',
+  ];
+  const content = rows.map((row) => [
+    csvText(row.studentName),
+    csvText(t(`status.${row.status}`)),
+    csvText(row.branchName),
+    row.totalDebt.toFixed(2).replace('.', ','),
+    row.subscriptionDebt.toFixed(2).replace('.', ','),
+    row.attendanceDebt.toFixed(2).replace('.', ','),
+    String(row.unvaluedAttendanceCount),
+    csvText(row.oldestDebtDate),
+  ]);
+  return `\uFEFF${[headers.map(csvText), ...content].map((row) => row.join(';')).join('\r\n')}`;
+}
+
+function localDateKey(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${String(year)}-${month}-${day}`;
+}
+
+function previousPeriod(dateFrom: string, dateTo: string) {
+  const start = dateOnly(dateFrom);
+  const end = dateOnly(dateTo);
+  const days = Math.round((end.getTime() - start.getTime()) / DAY_MS) + 1;
+  const previousEnd = addDays(start, -1);
+  const previousStart = addDays(previousEnd, -(days - 1));
+  return { dateFrom: localDateKey(previousStart), dateTo: localDateKey(previousEnd) };
 }
 
 function providerOperationSummary(
@@ -996,6 +1039,217 @@ export class FinanceService {
       },
       total,
       totalPages,
+    };
+  }
+
+  async exportFinanceDebtCsv(
+    token: string,
+    query: Omit<FinanceDebtQuery, 'page' | 'pageSize'>,
+  ): Promise<CsvExport | undefined> {
+    const rows: FinanceDebtStudent[] = [];
+    let page = 1;
+    for (;;) {
+      const result = await this.financeDebts(token, { ...query, page, pageSize: 100 });
+      rows.push(...result.items);
+      if (page >= result.totalPages) break;
+      page += 1;
+    }
+    if (rows.length === 0) return undefined;
+    return {
+      content: financeDebtCsv(rows),
+      filename: `ARAVA-debts-${localDateKey(new Date())}.csv`,
+    };
+  }
+
+  async financeAnalytics(
+    token: string,
+    query: FinanceAnalyticsQuery,
+  ): Promise<FinanceAnalyticsOverview> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'finance:read');
+    if (query.branchId) assertBranchAccess(actor, query.branchId);
+    const previous = previousPeriod(query.dateFrom, query.dateTo);
+    const [currentPeriod, previousPeriodSummary] = await Promise.all([
+      this.financeAnalyticsPeriod(actor, query),
+      this.financeAnalyticsPeriod(actor, { ...previous, branchId: query.branchId }),
+    ]);
+    const debtRows: FinanceDebtStudent[] = [];
+    let debtPage = 1;
+    let debtSummary: FinanceDebtPage['summary'] = {
+      debtorsCount: 0,
+      totalDebt: 0,
+      unvaluedAttendanceCount: 0,
+    };
+    for (;;) {
+      const page = await this.financeDebts(token, {
+        branchId: query.branchId,
+        debtType: 'ALL',
+        page: debtPage,
+        pageSize: 100,
+        sort: 'OLDEST',
+      });
+      debtRows.push(...page.items);
+      debtSummary = page.summary;
+      if (debtPage >= page.totalPages) break;
+      debtPage += 1;
+    }
+    const today = startOfLocalDay(new Date());
+    const aging = new Map<
+      'DAYS_0_7' | 'DAYS_8_30' | 'DAYS_31_PLUS',
+      { amount: number; debtorIds: Set<string> }
+    >([
+      ['DAYS_0_7', { amount: 0, debtorIds: new Set() }],
+      ['DAYS_8_30', { amount: 0, debtorIds: new Set() }],
+      ['DAYS_31_PLUS', { amount: 0, debtorIds: new Set() }],
+    ]);
+    for (const row of debtRows) {
+      const sources = [
+        ...row.subscriptions.map((item) => ({ amount: item.debt, date: item.purchasedAt })),
+        ...row.attendances.flatMap((item) =>
+          item.amount === undefined ? [] : [{ amount: item.amount, date: item.startsAt }],
+        ),
+      ];
+      for (const source of sources) {
+        const ageDays = Math.max(
+          0,
+          Math.floor((today.getTime() - startOfLocalDay(source.date).getTime()) / DAY_MS),
+        );
+        const key = ageDays <= 7 ? 'DAYS_0_7' : ageDays <= 30 ? 'DAYS_8_30' : 'DAYS_31_PLUS';
+        const bucket = aging.get(key);
+        if (!bucket) continue;
+        bucket.amount += source.amount;
+        bucket.debtorIds.add(row.studentId);
+      }
+    }
+    return {
+      aging: {
+        buckets: [...aging].map(([key, value]) => ({
+          amount: value.amount,
+          debtorCount: value.debtorIds.size,
+          key,
+        })),
+        currentDebt: debtSummary.totalDebt,
+        debtorCount: debtSummary.debtorsCount,
+        unvaluedAttendanceCount: debtSummary.unvaluedAttendanceCount,
+      },
+      byMethod: currentPeriod.byMethod,
+      current: currentPeriod.summary,
+      daily: currentPeriod.daily,
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+      previous: previousPeriodSummary.summary,
+      previousDateFrom: previous.dateFrom,
+      previousDateTo: previous.dateTo,
+    };
+  }
+
+  private async financeAnalyticsPeriod(
+    actor: AuthenticatedUser,
+    query: FinanceAnalyticsQuery,
+  ): Promise<{
+    byMethod: FinanceTodayOverview['byMethod'];
+    daily: FinanceAnalyticsOverview['daily'];
+    summary: FinanceAnalyticsPeriodSummary;
+  }> {
+    const branchIds = accessibleBranchIds(actor);
+    const scope = query.branchId
+      ? { branchId: query.branchId }
+      : branchIds
+        ? { branchId: { in: branchIds } }
+        : {};
+    const dayStart = startOfLocalDay(query.dateFrom);
+    const dayEnd = endOfLocalDay(query.dateTo);
+    const paymentWhere: Prisma.PaymentWhereInput = {
+      ...scope,
+      paidAt: { gte: dayStart, lte: dayEnd },
+      status: { not: 'CANCELLED' },
+    };
+    const refundWhere: Prisma.RefundWhereInput = {
+      payment: scope,
+      refundedAt: { gte: dayStart, lte: dayEnd },
+    };
+    const [payments, refunds, paymentAggregate, refundAggregate, methodGroups, subscriptions] =
+      await Promise.all([
+        this.database.payment.findMany({
+          select: { amount: true, attendanceLessonId: true, paidAt: true },
+          where: paymentWhere,
+        }),
+        this.database.refund.findMany({
+          select: { amount: true, refundedAt: true },
+          where: refundWhere,
+        }),
+        this.database.payment.aggregate({
+          _count: { _all: true },
+          _sum: { amount: true },
+          where: paymentWhere,
+        }),
+        this.database.refund.aggregate({
+          _sum: { amount: true },
+          where: refundWhere,
+        }),
+        this.database.payment.groupBy({
+          _count: { _all: true },
+          _sum: { amount: true },
+          by: ['paymentMethod'],
+          where: paymentWhere,
+        }),
+        this.database.subscription.aggregate({
+          _count: { _all: true },
+          _sum: { salePrice: true },
+          where: {
+            ...scope,
+            purchasedAt: { gte: dayStart, lte: dayEnd },
+            status: { not: 'CANCELLED' },
+            tariff: { type: { not: 'TRIAL' } },
+          },
+        }),
+      ]);
+    const received = paymentAggregate._sum.amount ?? 0;
+    const refundAmount = refundAggregate._sum.amount ?? 0;
+    const paymentCount = paymentAggregate._count._all;
+    const direct = payments.filter(({ attendanceLessonId }) => Boolean(attendanceLessonId));
+    const daily = new Map<string, { received: number; refunds: number }>();
+    for (
+      let date = dateOnly(query.dateFrom);
+      date <= dateOnly(query.dateTo);
+      date = addDays(date, 1)
+    )
+      daily.set(localDateKey(date), { received: 0, refunds: 0 });
+    for (const payment of payments) {
+      const point = daily.get(localDateKey(payment.paidAt));
+      if (point) point.received += payment.amount;
+    }
+    for (const refund of refunds) {
+      const point = daily.get(localDateKey(refund.refundedAt));
+      if (point) point.refunds += refund.amount;
+    }
+    return {
+      byMethod: methodGroups.map((group) => ({
+        amount: group._sum.amount ?? 0,
+        count: group._count._all,
+        method: group.paymentMethod,
+      })),
+      daily: [...daily].map(([date, value]) => ({
+        date,
+        net: value.received - value.refunds,
+        received: value.received,
+        refunds: value.refunds,
+      })),
+      summary: {
+        averagePayment: paymentCount ? Math.round(received / paymentCount) : 0,
+        directAttendance: {
+          amount: direct.reduce((sum, payment) => sum + payment.amount, 0),
+          count: direct.length,
+        },
+        net: received - refundAmount,
+        paymentCount,
+        received,
+        refunds: refundAmount,
+        subscriptionSales: {
+          count: subscriptions._count._all,
+          value: subscriptions._sum.salePrice ?? 0,
+        },
+      },
     };
   }
 

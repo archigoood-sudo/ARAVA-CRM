@@ -33,6 +33,8 @@ export {
   expenseInputSchema,
   expenseListQuerySchema,
   financeDebtQuerySchema,
+  financeDebtFilterSchema,
+  financeAnalyticsQuerySchema,
   financeJournalFilterSchema,
   financeJournalQuerySchema,
   financeTodayQuerySchema,

@@ -367,6 +367,8 @@ export const IPC_CHANNELS = {
   financeJournal: 'finance:journal',
   financeJournalExport: 'finance:journal-export',
   financeDebtOverview: 'finance:debt-overview',
+  financeDebtExport: 'finance:debt-export',
+  financeAnalytics: 'finance:analytics',
   expenseCategoryArchive: 'expense-category:archive',
   expenseCategoryCreate: 'expense-category:create',
   expenseCategoryList: 'expense-category:list',
@@ -1410,6 +1412,50 @@ export interface FinanceDebtPage {
   summary: FinanceDebtSummary;
   total: number;
   totalPages: number;
+}
+
+export interface FinanceAnalyticsQuery {
+  branchId?: string | undefined;
+  dateFrom: string;
+  dateTo: string;
+}
+
+export interface FinanceAnalyticsPeriodSummary {
+  averagePayment: number;
+  directAttendance: { amount: number; count: number };
+  net: number;
+  paymentCount: number;
+  received: number;
+  refunds: number;
+  subscriptionSales: { count: number; value: number };
+}
+
+export interface FinanceAnalyticsDailyPoint {
+  date: string;
+  net: number;
+  received: number;
+  refunds: number;
+}
+
+export interface FinanceAnalyticsOverview {
+  aging: {
+    buckets: {
+      amount: number;
+      debtorCount: number;
+      key: 'DAYS_0_7' | 'DAYS_8_30' | 'DAYS_31_PLUS';
+    }[];
+    currentDebt: number;
+    debtorCount: number;
+    unvaluedAttendanceCount: number;
+  };
+  byMethod: FinanceTodayMethodTotal[];
+  current: FinanceAnalyticsPeriodSummary;
+  daily: FinanceAnalyticsDailyPoint[];
+  dateFrom: string;
+  dateTo: string;
+  previous: FinanceAnalyticsPeriodSummary;
+  previousDateFrom: string;
+  previousDateTo: string;
 }
 
 export interface ExpenseCategoryInput {
@@ -3345,7 +3391,12 @@ export interface AravaDesktopApi {
     create: (token: string, paymentId: string, input: RefundInput) => Promise<PaymentDetail>;
   };
   finance: {
+    analytics: (token: string, query: FinanceAnalyticsQuery) => Promise<FinanceAnalyticsOverview>;
     debts: (token: string, query: FinanceDebtQuery) => Promise<FinanceDebtPage>;
+    exportDebts: (
+      token: string,
+      query: Omit<FinanceDebtQuery, 'page' | 'pageSize'>,
+    ) => Promise<FinanceJournalExportResult>;
     employees: (token: string) => Promise<StaffOption[]>;
     exportJournal: (
       token: string,
