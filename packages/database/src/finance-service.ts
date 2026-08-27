@@ -1802,7 +1802,10 @@ export class FinanceService {
       }),
       this.database.student.findMany({
         select: { id: true },
-        where: { ...scope, archivedAt: null },
+        // Financial obligations survive operational archiving. Keep the current-debt
+        // card aligned with Finance Debts/Analytics instead of silently dropping an
+        // archived student's canonical subscription or uncovered-attendance debt.
+        where: scope,
       }),
       this.database.paymentOperation.findMany({
         include: financeTodayOperationInclude,
