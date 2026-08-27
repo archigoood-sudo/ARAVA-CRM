@@ -32,6 +32,7 @@ export {
   expenseCategoryInputSchema,
   expenseInputSchema,
   expenseListQuerySchema,
+  financeDebtQuerySchema,
   financeJournalFilterSchema,
   financeJournalQuerySchema,
   financeTodayQuerySchema,

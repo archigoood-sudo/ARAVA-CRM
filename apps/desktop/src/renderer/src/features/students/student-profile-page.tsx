@@ -111,7 +111,9 @@ export function StudentProfilePage() {
   const [requestedPaymentOperationId, setRequestedPaymentOperationId] = useState(
     () => searchParameters.get('paymentOperationId') ?? undefined,
   );
-  const [requestedSubscriptionPaymentId, setRequestedSubscriptionPaymentId] = useState<string>();
+  const [requestedSubscriptionPaymentId, setRequestedSubscriptionPaymentId] = useState(
+    () => searchParameters.get('subscriptionId') ?? undefined,
+  );
   const [cardAction, setCardAction] = useState(searchParameters.get('action') === 'card');
   const [error, setError] = useState<string>();
   const [trialDialog, setTrialDialog] = useState(false);

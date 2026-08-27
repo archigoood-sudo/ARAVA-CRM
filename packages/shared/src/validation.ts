@@ -8,6 +8,8 @@ import {
   ENROLLMENT_STATUSES,
   EXPENSE_PAYMENT_METHODS,
   EXPENSE_STATUSES,
+  FINANCE_DEBT_SORTS,
+  FINANCE_DEBT_TYPES,
   FINANCE_JOURNAL_EVENT_TYPES,
   GENDERS,
   GROUP_STATUSES,
@@ -47,6 +49,7 @@ import {
   type ExpenseInput,
   type ExpenseListQuery,
   type FinanceTodayQuery,
+  type FinanceDebtQuery,
   type FinanceJournalFilter,
   type FinanceJournalQuery,
   type GroupInput,
@@ -671,6 +674,15 @@ export const refundInputSchema: z.ZodType<RefundInput> = z.object({
 export const financeTodayQuerySchema: z.ZodType<FinanceTodayQuery> = z.object({
   branchId: optionalIdentifier,
   date: isoDate,
+});
+
+export const financeDebtQuerySchema: z.ZodType<FinanceDebtQuery> = z.object({
+  branchId: optionalIdentifier,
+  debtType: z.enum(FINANCE_DEBT_TYPES),
+  page: z.number().int().min(1),
+  pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]),
+  search: optionalText(120),
+  sort: z.enum(FINANCE_DEBT_SORTS),
 });
 
 const financeJournalFilterFields = {

@@ -1,5 +1,6 @@
 import type {
   ChatListQuery,
+  FinanceDebtQuery,
   FinanceJournalQuery,
   GroupListQuery,
   LessonListQuery,
@@ -43,6 +44,7 @@ export const queryKeys = {
   lesson: (id: string) => ['lessons', 'detail', id] as const,
   lessons: (query: LessonListQuery) => ['lessons', 'list', query] as const,
   financeStats: (branchId?: string) => ['finance', 'stats', { branchId }] as const,
+  financeDebts: (query: FinanceDebtQuery) => ['finance', 'debts', query] as const,
   financeJournal: (query: FinanceJournalQuery) => ['finance', 'journal', query] as const,
   financeToday: (date: string, branchId?: string) =>
     ['finance', 'today', { branchId, date }] as const,

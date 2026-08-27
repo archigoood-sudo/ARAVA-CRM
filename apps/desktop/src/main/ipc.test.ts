@@ -42,6 +42,7 @@ import {
   type AttendanceWorkspaceDay,
   type DashboardStats,
   type FinanceJournalPage,
+  type FinanceDebtPage,
   type BackupEntry,
   type BackupRestoreSelection,
   type BackupStatus,
@@ -1765,5 +1766,58 @@ describe('Electron IPC boundary', () => {
       '/tmp/arava-finance.csv',
       expect.stringContaining('Журналова Анна'),
     );
+  });
+
+  it('validates and returns debt overview through narrow finance IPC', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!FinanceDebtIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Долги IPC' });
+    const student = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Ирина',
+      lastName: 'Должникова',
+      status: 'ACTIVE',
+    });
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'));
+    const tariff = (await handlers[IPC_CHANNELS.tariffCreate]?.(owner.token, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 4,
+      name: 'Абонемент с долгом',
+      price: 12_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    })) as TariffSummary;
+    await handlers[IPC_CHANNELS.subscriptionCreate]?.(owner.token, {
+      salePrice: 12_000,
+      startsAt: new Date().toISOString().slice(0, 10),
+      studentId: student.id,
+      tariffId: tariff.id,
+    });
+    const debts = (await handlers[IPC_CHANNELS.financeDebtOverview]?.(owner.token, {
+      debtType: 'ALL',
+      page: 1,
+      pageSize: 50,
+      sort: 'OLDEST',
+    })) as FinanceDebtPage;
+    expect(debts).toMatchObject({
+      items: [expect.objectContaining({ studentId: student.id, totalDebt: 12_000 })],
+      summary: { debtorsCount: 1, totalDebt: 12_000, unvaluedAttendanceCount: 0 },
+    });
+    expect(() =>
+      handlers[IPC_CHANNELS.financeDebtOverview]?.(owner.token, {
+        debtType: 'ALL',
+        page: 0,
+        pageSize: 50,
+        sort: 'OLDEST',
+      }),
+    ).toThrow();
   });
 });

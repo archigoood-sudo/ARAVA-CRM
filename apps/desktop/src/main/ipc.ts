@@ -52,6 +52,7 @@ import {
   expenseCategoryInputSchema,
   expenseInputSchema,
   expenseListQuerySchema,
+  financeDebtQuerySchema,
   financeTodayQuerySchema,
   financeJournalFilterSchema,
   financeJournalQuerySchema,
@@ -1306,6 +1307,11 @@ export function createIpcHandlers(
       finance.financeToday(
         sessionTokenSchema.parse(unsafeToken),
         financeTodayQuerySchema.parse(unsafeQuery),
+      ),
+    [IPC_CHANNELS.financeDebtOverview]: (unsafeToken, unsafeQuery) =>
+      finance.financeDebts(
+        sessionTokenSchema.parse(unsafeToken),
+        financeDebtQuerySchema.parse(unsafeQuery),
       ),
     [IPC_CHANNELS.financeJournal]: (unsafeToken, unsafeQuery) =>
       finance.financeJournal(

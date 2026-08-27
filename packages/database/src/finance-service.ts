@@ -1,6 +1,10 @@
 import type {
   AuthenticatedUser,
   CsvExport,
+  FinanceDebtAttendance,
+  FinanceDebtPage,
+  FinanceDebtQuery,
+  FinanceDebtStudent,
   FinanceJournalEvent,
   FinanceJournalFilter,
   FinanceJournalPage,
@@ -29,6 +33,7 @@ import type {
   TariffInput,
   TariffListQuery,
   TariffSummary,
+  UncoveredAttendanceSummary,
 } from '@arava/shared';
 import { t } from '@arava/shared';
 import { Prisma, type Subscription, type Tariff } from '@prisma/client';
@@ -818,6 +823,179 @@ export class FinanceService {
       unpricedUncoveredAttendanceCount: uncoveredAttendances.filter(
         ({ amount }) => amount === undefined,
       ).length,
+    };
+  }
+
+  async financeDebts(token: string, query: FinanceDebtQuery): Promise<FinanceDebtPage> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'finance:read');
+    if (query.branchId) assertBranchAccess(actor, query.branchId);
+    const permittedBranchIds = query.branchId ? [query.branchId] : accessibleBranchIds(actor);
+    const branchScope = permittedBranchIds ? { branchId: { in: permittedBranchIds } } : {};
+    const search = query.search?.trim();
+    const students = await this.database.student.findMany({
+      include: { branch: { select: { name: true } } },
+      where: {
+        ...branchScope,
+        ...(search
+          ? {
+              OR: [
+                { firstName: { contains: search } },
+                { lastName: { contains: search } },
+                { middleName: { contains: search } },
+                { phone: { contains: search } },
+              ],
+            }
+          : {}),
+      },
+    });
+    const studentIds = students.map(({ id }) => id);
+    if (studentIds.length === 0)
+      return {
+        items: [],
+        page: query.page,
+        pageSize: query.pageSize,
+        summary: { debtorsCount: 0, totalDebt: 0, unvaluedAttendanceCount: 0 },
+        total: 0,
+        totalPages: 0,
+      };
+
+    const [subscriptions, attendanceByStudent, pendingOperations] = await Promise.all([
+      this.database.subscription.findMany({
+        include: subscriptionInclude,
+        where: { ...branchScope, studentId: { in: studentIds } },
+      }),
+      this.uncoveredAttendancesByStudent(studentIds, permittedBranchIds),
+      this.database.paymentOperation.findMany({
+        select: {
+          amount: true,
+          attendanceLessonId: true,
+          status: true,
+          studentId: true,
+          subscriptionId: true,
+        },
+        where: {
+          ...branchScope,
+          status: { in: [...reservingPaymentOperationStatuses] },
+          studentId: { in: studentIds },
+        },
+      }),
+    ]);
+    const pendingBySubscription = new Map<string, number>();
+    const pendingByAttendance = new Map<string, number>();
+    for (const operation of pendingOperations) {
+      if (operation.subscriptionId)
+        pendingBySubscription.set(
+          operation.subscriptionId,
+          (pendingBySubscription.get(operation.subscriptionId) ?? 0) + operation.amount,
+        );
+      if (operation.attendanceLessonId)
+        pendingByAttendance.set(
+          `${operation.studentId}:${operation.attendanceLessonId}`,
+          (pendingByAttendance.get(`${operation.studentId}:${operation.attendanceLessonId}`) ?? 0) +
+            operation.amount,
+        );
+    }
+    const subscriptionsByStudent = new Map<string, FinanceDebtStudent['subscriptions']>();
+    for (const subscription of subscriptions) {
+      const summary = subscriptionSummary(subscription);
+      if (summary.debt <= 0) continue;
+      const pendingAmount = pendingBySubscription.get(subscription.id) ?? 0;
+      const item = {
+        availablePaymentAmount: Math.max(0, summary.debt - pendingAmount),
+        branchId: summary.branchId,
+        branchName: summary.branchName,
+        debt: summary.debt,
+        expiresAt: summary.expiresAt,
+        id: summary.id,
+        paidAmount: summary.paidAmount,
+        paymentStatus: summary.paymentStatus,
+        pendingAmount,
+        purchasedAt: summary.purchasedAt,
+        salePrice: summary.salePrice,
+        status: summary.status,
+        tariffName: summary.tariffName,
+      } satisfies FinanceDebtStudent['subscriptions'][number];
+      const current = subscriptionsByStudent.get(subscription.studentId) ?? [];
+      current.push(item);
+      subscriptionsByStudent.set(subscription.studentId, current);
+    }
+
+    const rows = students.flatMap((student): FinanceDebtStudent[] => {
+      const subscriptionItems = subscriptionsByStudent.get(student.id) ?? [];
+      const attendanceItems = (attendanceByStudent.get(student.id) ?? []).map(
+        (attendance): FinanceDebtAttendance => ({
+          ...attendance,
+          pendingAmount: pendingByAttendance.get(`${student.id}:${attendance.lessonId}`) ?? 0,
+        }),
+      );
+      const visibleSubscriptions = query.debtType === 'ATTENDANCE' ? [] : subscriptionItems;
+      const visibleAttendances = query.debtType === 'SUBSCRIPTION' ? [] : attendanceItems;
+      const subscriptionDebt = visibleSubscriptions.reduce((sum, item) => sum + item.debt, 0);
+      const attendanceDebt = visibleAttendances.reduce((sum, item) => sum + (item.amount ?? 0), 0);
+      const unvaluedAttendanceCount = visibleAttendances.filter(
+        ({ amount }) => amount === undefined,
+      ).length;
+      if (subscriptionDebt + attendanceDebt <= 0 && unvaluedAttendanceCount === 0) return [];
+      const originDates = [
+        ...visibleSubscriptions.map(({ purchasedAt }) => purchasedAt),
+        ...visibleAttendances.map(({ startsAt }) => startsAt),
+      ].sort();
+      const oldestDebtDate = originDates[0];
+      if (!oldestDebtDate) return [];
+      return [
+        {
+          attendanceDebt,
+          attendances: visibleAttendances.sort((left, right) =>
+            left.startsAt.localeCompare(right.startsAt),
+          ),
+          branchId: student.branchId,
+          branchName: student.branch.name,
+          debtSourcesCount: visibleSubscriptions.length + visibleAttendances.length,
+          oldestDebtDate,
+          status: student.status,
+          studentId: student.id,
+          studentName: fullName(student),
+          subscriptionDebt,
+          subscriptions: visibleSubscriptions.sort((left, right) =>
+            left.purchasedAt.localeCompare(right.purchasedAt),
+          ),
+          totalDebt: subscriptionDebt + attendanceDebt,
+          unvaluedAttendanceCount,
+        },
+      ];
+    });
+    rows.sort((left, right) => {
+      if (query.sort === 'AMOUNT')
+        return (
+          right.totalDebt - left.totalDebt || left.studentName.localeCompare(right.studentName)
+        );
+      if (query.sort === 'NAME') return left.studentName.localeCompare(right.studentName);
+      return (
+        left.oldestDebtDate.localeCompare(right.oldestDebtDate) ||
+        left.studentName.localeCompare(right.studentName)
+      );
+    });
+    const totalDebt = rows.reduce((sum, row) => sum + row.totalDebt, 0);
+    const unvaluedAttendanceCount = rows.reduce((sum, row) => sum + row.unvaluedAttendanceCount, 0);
+    const oldestDebtDate = rows
+      .map((row) => row.oldestDebtDate)
+      .sort((left, right) => left.localeCompare(right))[0];
+    const total = rows.length;
+    const totalPages = Math.ceil(total / query.pageSize);
+    const offset = (query.page - 1) * query.pageSize;
+    return {
+      items: rows.slice(offset, offset + query.pageSize),
+      page: query.page,
+      pageSize: query.pageSize,
+      summary: {
+        debtorsCount: rows.filter(({ totalDebt: debt }) => debt > 0).length,
+        oldestDebtDate,
+        totalDebt,
+        unvaluedAttendanceCount,
+      },
+      total,
+      totalPages,
     };
   }
 
@@ -1860,7 +2038,11 @@ export class FinanceService {
     return { amounts: result, unpricedCount };
   }
 
-  private async uncoveredAttendances(studentId: string) {
+  private async uncoveredAttendancesByStudent(
+    studentIds: string[],
+    branchIds?: string[],
+  ): Promise<Map<string, UncoveredAttendanceSummary[]>> {
+    if (studentIds.length === 0) return new Map();
     const [attendances, writeOffs, tariffs, trialAppointments] = await Promise.all([
       this.database.attendance.findMany({
         include: {
@@ -1877,63 +2059,72 @@ export class FinanceService {
         },
         orderBy: { markedAt: 'desc' },
         where: {
-          lesson: { status: { not: 'CANCELLED' } },
+          lesson: {
+            ...(branchIds ? { branchId: { in: branchIds } } : {}),
+            status: { not: 'CANCELLED' },
+          },
           status: { in: ['PRESENT', 'LATE'] },
-          studentId,
+          studentId: { in: studentIds },
         },
       }),
       this.database.subscriptionLedger.findMany({
         include: { reversals: { select: { id: true } } },
-        where: { studentId, type: 'LESSON_WRITE_OFF' },
+        where: { studentId: { in: studentIds }, type: 'LESSON_WRITE_OFF' },
       }),
       this.database.tariff.findMany({
         where: { archivedAt: null, isActive: true, type: 'SINGLE_LESSON' },
       }),
       this.database.trialAppointment.findMany({
-        select: { lessonId: true },
-        where: { status: 'BOOKED', studentId, supersededAt: null },
+        select: { lessonId: true, studentId: true },
+        where: { status: 'BOOKED', studentId: { in: studentIds }, supersededAt: null },
       }),
     ]);
-    const freeTrialLessonIds = new Set(trialAppointments.map(({ lessonId }) => lessonId));
+    const freeTrials = new Set(
+      trialAppointments.map(({ lessonId, studentId }) => `${lessonId}:${studentId ?? ''}`),
+    );
     const covered = new Set(
       writeOffs.flatMap(({ attendanceId, reversals }) =>
         attendanceId && reversals.length === 0 ? [attendanceId] : [],
       ),
     );
-    return attendances.flatMap((attendance) => {
+    const result = new Map<string, UncoveredAttendanceSummary[]>();
+    for (const attendance of attendances) {
       if (
-        freeTrialLessonIds.has(attendance.lessonId) ||
-        covered.has(`${attendance.lessonId}:${attendance.studentId}`) ||
-        attendance.directPaymentId
+        attendance.directPaymentId ||
+        freeTrials.has(`${attendance.lessonId}:${attendance.studentId}`) ||
+        covered.has(`${attendance.lessonId}:${attendance.studentId}`)
       )
-        return [];
-      const branchTariffs = tariffs.filter(
-        ({ branchId }) => branchId === attendance.lesson.branchId,
-      );
-      const globalTariffs = tariffs.filter(({ branchId }) => branchId === null);
-      const eligibleTariffs = [...branchTariffs, ...globalTariffs];
-      const priceSource = eligibleTariffs.length === 1 ? eligibleTariffs[0] : undefined;
-      return [
-        {
-          amount: priceSource?.price,
-          branchId: attendance.lesson.branchId,
-          branchName: attendance.lesson.branch.name,
-          groupName: attendance.lesson.group.name,
-          lessonId: attendance.lessonId,
-          paymentStatus: attendance.directPaymentOperationId
-            ? ('PENDING' as const)
-            : ('UNPAID' as const),
-          startsAt: attendance.lesson.startsAt.toISOString(),
-          status: attendance.status,
-          tariffId: priceSource?.id,
-          tariffs: eligibleTariffs.map(({ id, name, price }) => ({ id, name, price })),
-          trainerName:
-            attendance.lesson.substitution?.substituteTrainer.fullName ??
-            attendance.lesson.coach?.fullName ??
-            undefined,
-        },
+        continue;
+      const eligibleTariffs = [
+        ...tariffs.filter(({ branchId }) => branchId === attendance.lesson.branchId),
+        ...tariffs.filter(({ branchId }) => branchId === null),
       ];
-    });
+      const priceSource = eligibleTariffs.length === 1 ? eligibleTariffs[0] : undefined;
+      const item: UncoveredAttendanceSummary = {
+        amount: priceSource?.price,
+        branchId: attendance.lesson.branchId,
+        branchName: attendance.lesson.branch.name,
+        groupName: attendance.lesson.group.name,
+        lessonId: attendance.lessonId,
+        paymentStatus: attendance.directPaymentOperationId ? 'PENDING' : 'UNPAID',
+        startsAt: attendance.lesson.startsAt.toISOString(),
+        status: attendance.status,
+        tariffId: priceSource?.id,
+        tariffs: eligibleTariffs.map(({ id, name, price }) => ({ id, name, price })),
+        trainerName:
+          attendance.lesson.substitution?.substituteTrainer.fullName ??
+          attendance.lesson.coach?.fullName ??
+          undefined,
+      };
+      const current = result.get(attendance.studentId) ?? [];
+      current.push(item);
+      result.set(attendance.studentId, current);
+    }
+    return result;
+  }
+
+  private async uncoveredAttendances(studentId: string) {
+    return (await this.uncoveredAttendancesByStudent([studentId])).get(studentId) ?? [];
   }
 
   private tariffData(input: TariffInput): Prisma.TariffUncheckedCreateInput {

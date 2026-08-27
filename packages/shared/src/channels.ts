@@ -366,6 +366,7 @@ export const IPC_CHANNELS = {
   financeTodayOverview: 'finance:today-overview',
   financeJournal: 'finance:journal',
   financeJournalExport: 'finance:journal-export',
+  financeDebtOverview: 'finance:debt-overview',
   expenseCategoryArchive: 'expense-category:archive',
   expenseCategoryCreate: 'expense-category:create',
   expenseCategoryList: 'expense-category:list',
@@ -1343,6 +1344,72 @@ export interface FinanceJournalPage {
 
 export interface FinanceJournalExportResult {
   status: 'CANCELLED' | 'EMPTY' | 'SAVED';
+}
+
+export const FINANCE_DEBT_TYPES = ['ALL', 'SUBSCRIPTION', 'ATTENDANCE'] as const;
+export type FinanceDebtType = (typeof FINANCE_DEBT_TYPES)[number];
+export const FINANCE_DEBT_SORTS = ['OLDEST', 'AMOUNT', 'NAME'] as const;
+export type FinanceDebtSort = (typeof FINANCE_DEBT_SORTS)[number];
+
+export interface FinanceDebtQuery {
+  branchId?: string | undefined;
+  debtType: FinanceDebtType;
+  page: number;
+  pageSize: 25 | 50 | 100;
+  search?: string | undefined;
+  sort: FinanceDebtSort;
+}
+
+export interface FinanceDebtSubscription {
+  availablePaymentAmount: number;
+  branchId: string;
+  branchName: string;
+  debt: number;
+  expiresAt?: string | undefined;
+  id: string;
+  paidAmount: number;
+  paymentStatus: SubscriptionSummary['paymentStatus'];
+  pendingAmount: number;
+  purchasedAt: string;
+  salePrice: number;
+  status: SubscriptionStatus;
+  tariffName: string;
+}
+
+export interface FinanceDebtAttendance extends UncoveredAttendanceSummary {
+  pendingAmount: number;
+}
+
+export interface FinanceDebtStudent {
+  attendanceDebt: number;
+  branchId: string;
+  branchName: string;
+  debtSourcesCount: number;
+  oldestDebtDate: string;
+  status: StudentStatus;
+  studentId: string;
+  studentName: string;
+  subscriptionDebt: number;
+  totalDebt: number;
+  unvaluedAttendanceCount: number;
+  subscriptions: FinanceDebtSubscription[];
+  attendances: FinanceDebtAttendance[];
+}
+
+export interface FinanceDebtSummary {
+  debtorsCount: number;
+  oldestDebtDate?: string | undefined;
+  totalDebt: number;
+  unvaluedAttendanceCount: number;
+}
+
+export interface FinanceDebtPage {
+  items: FinanceDebtStudent[];
+  page: number;
+  pageSize: number;
+  summary: FinanceDebtSummary;
+  total: number;
+  totalPages: number;
 }
 
 export interface ExpenseCategoryInput {
@@ -3278,6 +3345,7 @@ export interface AravaDesktopApi {
     create: (token: string, paymentId: string, input: RefundInput) => Promise<PaymentDetail>;
   };
   finance: {
+    debts: (token: string, query: FinanceDebtQuery) => Promise<FinanceDebtPage>;
     employees: (token: string) => Promise<StaffOption[]>;
     exportJournal: (
       token: string,

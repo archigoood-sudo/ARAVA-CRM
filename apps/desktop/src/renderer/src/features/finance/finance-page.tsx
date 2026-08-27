@@ -48,6 +48,7 @@ import { invalidateFinanceCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { FinanceJournal } from './finance-journal';
+import { FinanceDebts } from './finance-debts';
 import { PaymentDetailsDialog } from './payment-details-dialog';
 import { PaymentDialog } from './payment-dialog';
 import { financeTodayOperationTone, hasFinanceTodayActivity } from './finance-today-model';
@@ -99,7 +100,9 @@ export function FinancePage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [parameters, setParameters] = useSearchParams();
-  const view = parameters.get('view') === 'operations' ? 'operations' : 'today';
+  const requestedView = parameters.get('view');
+  const view =
+    requestedView === 'operations' || requestedView === 'debts' ? requestedView : 'today';
   const now = new Date();
   const [branchId, setBranchId] = useState('');
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -216,6 +219,19 @@ export function FinancePage() {
           variant={view === 'operations' ? 'secondary' : 'ghost'}
         >
           Операции
+        </Button>
+        <Button
+          onClick={() =>
+            setParameters((current) => {
+              const next = new URLSearchParams(current);
+              next.set('view', 'debts');
+              return next;
+            })
+          }
+          size="small"
+          variant={view === 'debts' ? 'secondary' : 'ghost'}
+        >
+          Долги
         </Button>
       </div>
       {view === 'today' ? (
@@ -488,11 +504,13 @@ export function FinancePage() {
             )}
           </Card>
         </>
-      ) : (
+      ) : view === 'operations' ? (
         <FinanceJournal
           branches={branches.data ?? []}
           onOpenPayment={(paymentId) => setSelectedPaymentId(paymentId)}
         />
+      ) : (
+        <FinanceDebts branches={branches.data ?? []} />
       )}
       <PaymentDialog
         branches={branches.data ?? []}
