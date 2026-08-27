@@ -2335,6 +2335,7 @@ const ENTITY_PRIORITY: Record<SyncEntityType, number> = {
 
 export class IntegrationService {
   private processing = false;
+  private processingWaiters: (() => void)[] = [];
   private readonly finance: FinanceService;
   private readonly studio: StudioService;
 
@@ -4043,18 +4044,33 @@ export class IntegrationService {
         'Финансовый конфликт нельзя разрешить обычным перезаписыванием.',
       );
     }
-    const resolved = await this.api.resolveConflict(
-      connection.baseUrl,
-      connection.deviceId,
-      connection.token,
-      conflictId,
-      input,
-      this.ownerContext(actor),
-    );
+    let resolved: IntegrationConflictSummary;
+    try {
+      resolved = await this.api.resolveConflict(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        conflictId,
+        input,
+        this.ownerContext(actor),
+      );
+    } catch (error) {
+      const errorCode = error instanceof IntegrationApiError ? error.errorCode : 'UNKNOWN';
+      await this.log(
+        undefined,
+        'CONFLICT_RESOLUTION',
+        'FAILED',
+        1,
+        errorCode,
+        `Не удалось разрешить конфликт ${conflictId}.`,
+      );
+      throw error;
+    }
     await this.database.syncConflict.updateMany({
       data: { resolvedAt: this.now(), status: 'RESOLVED' },
       where: { serverConflictId: conflictId },
     });
+    await this.waitForPendingProcessing();
     await this.processPending();
     if (INBOUND_ENTITY_TYPES.has(resolved.entityType as InboundChange['entityType'])) {
       this.onInboundApplied?.(resolved.entityType as SyncEntityType);
@@ -4748,7 +4764,14 @@ export class IntegrationService {
       await this.processInboundSafely(baseUrl, deviceId, token);
     } finally {
       this.processing = false;
+      const waiters = this.processingWaiters.splice(0);
+      for (const resolve of waiters) resolve();
     }
+  }
+
+  private async waitForPendingProcessing(): Promise<void> {
+    if (!this.processing) return;
+    await new Promise<void>((resolve) => this.processingWaiters.push(resolve));
   }
 
   private async queueLegacyTrialBootstrap(): Promise<void> {

@@ -146,6 +146,7 @@ export function IntegrationSettings() {
     conflict: IntegrationConflictSummary;
     resolution: 'KEEP_CANONICAL' | 'ACCEPT_CANDIDATE';
   }>();
+  const [resolutionError, setResolutionError] = useState<string>();
   const status = useQuery({
     queryFn: () => getDesktopApi().integration.getStatus(getSessionToken()),
     queryKey: queryKeys.integrationStatus,
@@ -268,9 +269,14 @@ export function IntegrationSettings() {
         idempotencyKey: `resolve:${conflict.id}:${String(conflict.canonicalRevision)}:${resolution}`,
         resolution,
       }),
-    onError: (error) => setNotice(errorMessage(error)),
+    onError: () => {
+      setResolutionError(
+        'Не удалось применить выбранное решение. Обновите данные и попробуйте ещё раз.',
+      );
+    },
     onSuccess: async () => {
       setResolving(undefined);
+      setResolutionError(undefined);
       setNotice('Конфликт разрешён. Новая версия будет получена активными устройствами.');
       await refresh();
     },
@@ -809,7 +815,11 @@ export function IntegrationSettings() {
               </div>
             </div>
             {conflicts.data.map((conflict) => (
-              <div className="rounded-xl border border-border bg-background p-4" key={conflict.id}>
+              <div
+                className="rounded-xl border border-border bg-background p-4"
+                data-testid={`integration-conflict-${conflict.id}`}
+                key={conflict.id}
+              >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="font-semibold">
@@ -865,14 +875,22 @@ export function IntegrationSettings() {
                 ) : (
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button
-                      onClick={() => setResolving({ conflict, resolution: 'KEEP_CANONICAL' })}
+                      disabled={resolve.isPending}
+                      onClick={() => {
+                        setResolutionError(undefined);
+                        setResolving({ conflict, resolution: 'KEEP_CANONICAL' });
+                      }}
                       size="small"
                       variant="outline"
                     >
                       Использовать изменения с сервера
                     </Button>
                     <Button
-                      onClick={() => setResolving({ conflict, resolution: 'ACCEPT_CANDIDATE' })}
+                      disabled={resolve.isPending}
+                      onClick={() => {
+                        setResolutionError(undefined);
+                        setResolving({ conflict, resolution: 'ACCEPT_CANDIDATE' });
+                      }}
                       size="small"
                     >
                       Оставить изменения этого устройства
@@ -889,18 +907,29 @@ export function IntegrationSettings() {
           description="Перед сохранением сервер повторно проверит каноническую ревизию. Устаревшее решение будет отклонено."
           footer={
             <div className="flex justify-end gap-2">
-              <Button onClick={() => setResolving(undefined)} variant="outline">
+              <Button
+                disabled={resolve.isPending}
+                onClick={() => {
+                  setResolving(undefined);
+                  setResolutionError(undefined);
+                }}
+                variant="outline"
+              >
                 Отмена
               </Button>
               <Button
                 disabled={resolve.isPending}
                 onClick={() => resolving && resolve.mutate(resolving)}
               >
-                Подтвердить решение
+                {resolve.isPending ? 'Применяем...' : 'Подтвердить решение'}
               </Button>
             </div>
           }
-          onClose={() => setResolving(undefined)}
+          onClose={() => {
+            if (resolve.isPending) return;
+            setResolving(undefined);
+            setResolutionError(undefined);
+          }}
           open={Boolean(resolving)}
           title="Разрешить конфликт?"
         >
@@ -911,6 +940,11 @@ export function IntegrationSettings() {
             После разрешения выбранная версия станет основной и синхронизируется на другие
             устройства.
           </p>
+          {resolutionError ? (
+            <p className="mt-3 rounded-xl bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {resolutionError}
+            </p>
+          ) : null}
         </Dialog>
 
         {reconciliation.data ? (

@@ -71,6 +71,8 @@ describe('Sprint 4.5A multi-device integration', () => {
     }
   >;
   let changes: Record<string, unknown>[];
+  let changesRequestStarted: (() => void) | undefined;
+  let changesResponseGate: Promise<void> | undefined;
   let deviceList: Record<string, unknown>[];
   let database: DatabaseClient;
   let directory: string;
@@ -105,6 +107,8 @@ describe('Sprint 4.5A multi-device integration', () => {
     credentials = new MemoryCredentials();
     canonical = new Map();
     changes = [];
+    changesRequestStarted = undefined;
+    changesResponseGate = undefined;
     deviceList = [];
     failedProbe = undefined;
     healthApiVersion = 'v1';
@@ -313,13 +317,16 @@ describe('Sprint 4.5A multi-device integration', () => {
           (change) =>
             Number(change.sequence) > after && requestedTypes.has(String(change.entityType)),
         );
-        json(response, 200, {
+        const page = {
           apiVersion: 'v1',
           canonicalCount: canonical.size,
           changes: selected,
           cursor: selected.at(-1)?.sequence ?? after,
           hasMore: false,
-        });
+        };
+        changesRequestStarted?.();
+        if (changesResponseGate) await changesResponseGate;
+        json(response, 200, page);
         return;
       }
       if (request.url === '/api/integration/v1/devices') {
@@ -342,8 +349,43 @@ describe('Sprint 4.5A multi-device integration', () => {
         request.url?.includes('/conflicts/') &&
         request.url.endsWith('/resolve')
       ) {
-        const conflict = managedConflicts[0];
-        json(response, 200, { apiVersion: 'v1', conflict: { ...conflict, status: 'RESOLVED' } });
+        const conflictId = decodeURIComponent(request.url.split('/').at(-2) ?? '');
+        const conflict = managedConflicts.find((item) => item.id === conflictId);
+        if (!conflict) {
+          json(response, 404, { code: 'NOT_FOUND', message: 'conflict not found' });
+          return;
+        }
+        if (conflict.simulateCanonicalChange === true) {
+          const selectedPayload =
+            requestBody.resolution === 'ACCEPT_CANDIDATE'
+              ? (conflict.candidate as Record<string, unknown>)
+              : (conflict.canonical as Record<string, unknown>);
+          const revision = Number(conflict.canonicalRevision) + 1;
+          const sequence = changes.length + 1;
+          const operation =
+            requestBody.resolution === 'ACCEPT_CANDIDATE'
+              ? String(conflict.candidateOperation)
+              : String(conflict.canonicalOperation);
+          canonical.set(`${String(conflict.entityType)}:${String(conflict.entityId)}`, {
+            operation: operation as 'ARCHIVE' | 'UPSERT',
+            payload: selectedPayload,
+            revision,
+            sequence,
+          });
+          changes.push({
+            entityId: conflict.entityId,
+            entityType: conflict.entityType,
+            operation,
+            payload: selectedPayload,
+            revision,
+            sequence,
+            serverUpdatedAt: now.toISOString(),
+            sourceDeviceId: 'mock-server',
+          });
+        }
+        const resolvedConflict = { ...conflict, status: 'RESOLVED' };
+        managedConflicts = managedConflicts.filter((item) => item.id !== conflictId);
+        json(response, 200, { apiVersion: 'v1', conflict: resolvedConflict });
         return;
       }
       if (request.method === 'POST' && request.url?.endsWith('/reconciliation/preview')) {
@@ -1217,39 +1259,136 @@ describe('Sprint 4.5A multi-device integration', () => {
     });
   });
 
-  it('sends the explicitly confirmed device version to canonical conflict resolution', async () => {
+  it.each([
+    ['ACCEPT_CANDIDATE', 'Версия устройства'],
+    ['KEEP_CANONICAL', 'Версия сервера'],
+  ] as const)(
+    'applies %s conflict resolution to the local canonical state',
+    async (resolution, expectedName) => {
+      await pair();
+      const branch = await application.createBranch(ownerToken, { name: 'Версия устройства' });
+      await database.syncOutbox.deleteMany();
+      const candidate = await integration.safePayload('BRANCH', branch.id);
+      const canonicalPayload = { ...candidate, name: 'Версия сервера' };
+      await database.syncEntityState.create({
+        data: {
+          entityId: branch.id,
+          entityType: 'BRANCH',
+          revision: 2,
+          serverSequence: 0,
+          serverUpdatedAt: now,
+          sourceDeviceId: credentials.deviceId,
+        },
+      });
+      managedConflicts = [
+        {
+          baseRevision: 1,
+          candidate,
+          candidateOperation: 'UPSERT',
+          canonical: canonicalPayload,
+          canonicalOperation: 'UPSERT',
+          canonicalRevision: 2,
+          createdAt: now.toISOString(),
+          differences: [
+            { candidate: 'Версия устройства', canonical: 'Версия сервера', field: 'name' },
+          ],
+          entityId: branch.id,
+          entityType: 'BRANCH',
+          id: 'conflict-device-version',
+          simulateCanonicalChange: true,
+          sourceDeviceId: credentials.deviceId,
+          status: 'OPEN',
+        },
+      ];
+      received = [];
+      await integration.resolveConflict(ownerToken, 'conflict-device-version', {
+        expectedCanonicalRevision: 2,
+        idempotencyKey: 'resolve-device-version-once',
+        resolution,
+      });
+      expect(received).toContainEqual(
+        expect.objectContaining({
+          method: 'POST',
+          resolution,
+        }),
+      );
+      expect(await database.branch.findUnique({ where: { id: branch.id } })).toMatchObject({
+        name: expectedName,
+      });
+      expect(managedConflicts).toHaveLength(0);
+      expect(
+        await database.syncEntityState.findUnique({
+          where: { entityType_entityId: { entityId: branch.id, entityType: 'BRANCH' } },
+        }),
+      ).toMatchObject({ revision: 3 });
+    },
+  );
+
+  it('runs a fresh canonical pull after a concurrent background cycle finishes', async () => {
     await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Локальная версия' });
+    await database.syncOutbox.deleteMany();
+    const candidate = await integration.safePayload('BRANCH', branch.id);
+    await database.syncEntityState.create({
+      data: {
+        entityId: branch.id,
+        entityType: 'BRANCH',
+        revision: 2,
+        serverSequence: 0,
+        serverUpdatedAt: now,
+        sourceDeviceId: credentials.deviceId,
+      },
+    });
     managedConflicts = [
       {
         baseRevision: 1,
-        candidate: { name: 'Версия устройства' },
+        candidate,
         candidateOperation: 'UPSERT',
-        canonical: { name: 'Версия сервера' },
+        canonical: { ...candidate, name: 'Серверная версия' },
         canonicalOperation: 'UPSERT',
         canonicalRevision: 2,
         createdAt: now.toISOString(),
         differences: [
-          { candidate: 'Версия устройства', canonical: 'Версия сервера', field: 'name' },
+          { candidate: 'Локальная версия', canonical: 'Серверная версия', field: 'name' },
         ],
-        entityId: 'branch-device-version',
+        entityId: branch.id,
         entityType: 'BRANCH',
-        id: 'conflict-device-version',
+        id: 'conflict-concurrent-sync',
+        simulateCanonicalChange: true,
         sourceDeviceId: credentials.deviceId,
         status: 'OPEN',
       },
     ];
-    received = [];
-    await integration.resolveConflict(ownerToken, 'conflict-device-version', {
-      expectedCanonicalRevision: 2,
-      idempotencyKey: 'resolve-device-version-once',
-      resolution: 'ACCEPT_CANDIDATE',
+    let releaseChanges: () => void = () => undefined;
+    changesResponseGate = new Promise<void>((resolve) => {
+      releaseChanges = resolve;
     });
-    expect(received).toContainEqual(
-      expect.objectContaining({
-        method: 'POST',
-        resolution: 'ACCEPT_CANDIDATE',
-      }),
-    );
+    const firstChangesRequest = new Promise<void>((resolve) => {
+      changesRequestStarted = resolve;
+    });
+    const background = integration.processPending();
+    await firstChangesRequest;
+    const resolution = integration.resolveConflict(ownerToken, 'conflict-concurrent-sync', {
+      expectedCanonicalRevision: 2,
+      idempotencyKey: 'resolve-concurrent-sync-once',
+      resolution: 'KEEP_CANONICAL',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    changesResponseGate = undefined;
+    releaseChanges();
+    await Promise.all([background, resolution]);
+
+    expect(await database.branch.findUnique({ where: { id: branch.id } })).toMatchObject({
+      name: 'Серверная версия',
+    });
+    expect(
+      received.filter(
+        ({ method, path }) =>
+          method === 'GET' &&
+          String(path).includes('/changes?') &&
+          !String(path).includes('snapshot=canonical'),
+      ),
+    ).toHaveLength(2);
   });
 
   it('does not expose unsafe generic overwrite for financial conflicts', async () => {

@@ -68,7 +68,8 @@ test('OWNER подключает сайт, выполняет initial/offline sy
   let targetGroupId: string | null = null;
   const receivedPaymentPaths: string[] = [];
   let clientAccessState: 'ACTIVE' | 'INVITED' | 'NOT_ISSUED' = 'NOT_ISSUED';
-  let conflictOpen = true;
+  const openConflictIds = new Set(['conflict-local-e2e', 'conflict-server-e2e']);
+  const receivedConflictResolutions: Record<string, unknown>[] = [];
   let conflictStudentId = 'student-conflict-pending';
   let conflictGroupId = 'group-conflict-pending';
   let conflictLessonAId = 'lesson-conflict-a-pending';
@@ -337,52 +338,51 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       return;
     }
     if (request.method === 'GET' && request.url?.endsWith('/conflicts')) {
+      const conflict = (id: string) => ({
+        baseRevision: 0,
+        candidate: {
+          groupId: conflictGroupId,
+          lessonId: conflictLessonAId,
+          outcome: 'THINKING',
+          status: 'BOOKED',
+          studentId: conflictStudentId,
+        },
+        candidateOperation: 'UPSERT',
+        canonical: {
+          groupId: conflictGroupId,
+          lessonId: conflictLessonBId,
+          outcome: 'DECLINED',
+          status: 'BOOKED',
+          studentId: conflictStudentId,
+        },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 1,
+        createdAt: new Date().toISOString(),
+        differences: [
+          {
+            candidate: conflictLessonAId,
+            canonical: conflictLessonBId,
+            field: 'lessonId',
+          },
+          { candidate: 'THINKING', canonical: 'DECLINED', field: 'outcome' },
+        ],
+        entityId: `trial-${id}`,
+        entityType: 'TRIAL_APPOINTMENT',
+        id,
+        sourceDeviceId: 'other-device',
+        sourceDeviceName: 'Второй компьютер',
+        status: 'OPEN',
+      });
       respond(response, {
         apiVersion: 'v1',
-        conflicts: conflictOpen
-          ? [
-              {
-                baseRevision: 0,
-                candidate: {
-                  groupId: conflictGroupId,
-                  lessonId: conflictLessonAId,
-                  outcome: 'THINKING',
-                  status: 'BOOKED',
-                  studentId: conflictStudentId,
-                },
-                candidateOperation: 'UPSERT',
-                canonical: {
-                  groupId: conflictGroupId,
-                  lessonId: conflictLessonBId,
-                  outcome: 'DECLINED',
-                  status: 'BOOKED',
-                  studentId: conflictStudentId,
-                },
-                canonicalOperation: 'UPSERT',
-                canonicalRevision: 1,
-                createdAt: new Date().toISOString(),
-                differences: [
-                  {
-                    candidate: conflictLessonAId,
-                    canonical: conflictLessonBId,
-                    field: 'lessonId',
-                  },
-                  { candidate: 'THINKING', canonical: 'DECLINED', field: 'outcome' },
-                ],
-                entityId: 'trial-conflict',
-                entityType: 'TRIAL_APPOINTMENT',
-                id: 'conflict-e2e',
-                sourceDeviceId: 'other-device',
-                sourceDeviceName: 'Второй компьютер',
-                status: 'OPEN',
-              },
-            ]
-          : [],
+        conflicts: [...openConflictIds].map(conflict),
       });
       return;
     }
-    if (request.method === 'POST' && request.url?.endsWith('/conflicts/conflict-e2e/resolve')) {
-      conflictOpen = false;
+    if (request.method === 'POST' && request.url?.includes('/conflicts/')) {
+      const conflictId = decodeURIComponent(request.url.split('/').at(-2) ?? '');
+      openConflictIds.delete(conflictId);
+      receivedConflictResolutions.push({ conflictId, ...body });
       respond(response, {
         apiVersion: 'v1',
         conflict: {
@@ -413,9 +413,9 @@ test('OWNER подключает сайт, выполняет initial/offline sy
             },
             { candidate: 'THINKING', canonical: 'DECLINED', field: 'outcome' },
           ],
-          entityId: 'trial-conflict',
+          entityId: `trial-${conflictId}`,
           entityType: 'TRIAL_APPOINTMENT',
-          id: 'conflict-e2e',
+          id: conflictId,
           sourceDeviceId: 'other-device',
           status: 'RESOLVED',
         },
@@ -597,16 +597,36 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await expect(page.getByText('Соединение с сайтом установлено.')).toBeVisible();
     const conflictCenter = page.getByTestId('integration-conflicts');
     await expect(
-      conflictCenter.getByText('Пробное занятие изменено на другом устройстве'),
+      conflictCenter.getByText('Пробное занятие изменено на другом устройстве').first(),
     ).toBeVisible();
-    await expect(conflictCenter.getByText('Кабинетова Анна')).toBeVisible();
-    await expect(conflictCenter.getByText('Результат: Думает')).toBeVisible();
-    await expect(conflictCenter.getByText('Результат: Отказался')).toBeVisible();
-    await conflictCenter.getByRole('button', { name: 'Использовать изменения с сервера' }).click();
+    await expect(conflictCenter.getByText('Кабинетова Анна').first()).toBeVisible();
+    await expect(conflictCenter.getByText('Результат: Думает').first()).toBeVisible();
+    await expect(conflictCenter.getByText('Результат: Отказался').first()).toBeVisible();
+    const localConflict = page.getByTestId('integration-conflict-conflict-local-e2e');
+    await localConflict
+      .getByRole('button', { name: 'Оставить изменения этого устройства' })
+      .click();
     await page.getByRole('button', { name: 'Подтвердить решение' }).click();
     await expect(
       page.getByText('Конфликт разрешён. Новая версия будет получена активными устройствами.'),
     ).toBeVisible();
+    await expect(localConflict).toHaveCount(0);
+    const serverConflict = page.getByTestId('integration-conflict-conflict-server-e2e');
+    await serverConflict.getByRole('button', { name: 'Использовать изменения с сервера' }).click();
+    await page.getByRole('button', { name: 'Подтвердить решение' }).click();
+    await expect(serverConflict).toHaveCount(0);
+    await expect
+      .poll(() => receivedConflictResolutions)
+      .toEqual([
+        expect.objectContaining({
+          conflictId: 'conflict-local-e2e',
+          resolution: 'ACCEPT_CANDIDATE',
+        }),
+        expect.objectContaining({
+          conflictId: 'conflict-server-e2e',
+          resolution: 'KEEP_CANONICAL',
+        }),
+      ]);
     await page.getByRole('button', { name: 'Сверить данные' }).click();
     await expect(page.getByTestId('integration-reconciliation')).toContainText('Совпадает: 0');
     await page.getByRole('link', { name: 'Чаты' }).click();
