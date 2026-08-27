@@ -19,6 +19,7 @@ import type {
 import { randomUUID } from 'node:crypto';
 
 import type { CrmChatRequestContext, IntegrationService } from './integration-service';
+import { accessibleBranchIds, canAccessBranch } from './permissions';
 import { DomainError } from './security';
 import { normalizePhone } from './security';
 import type { DatabaseClient } from './index';
@@ -247,21 +248,6 @@ export class LeadService {
     if (new Date(lesson.endsAt) <= new Date())
       throw new DomainError('VALIDATION', 'Выберите текущее или предстоящее занятие.');
 
-    if (lead) {
-      await this.integration.updateRemoteLeadGroup(
-        this.context(actor),
-        lead.id,
-        group.id,
-        `trial-group:${lead.id}:${lesson.id}`,
-      );
-      await this.integration.updateRemoteLeadStatus(
-        this.context(actor),
-        lead.id,
-        'TRIAL_BOOKED',
-        `trial-status:${lead.id}:${lesson.id}`,
-      );
-    }
-
     const subjectKey = lead?.id ?? `student:${student?.id ?? ''}`;
     const [occupiedEnrollments, bookedTrials] = await Promise.all([
       this.database.enrollment.findMany({
@@ -300,6 +286,21 @@ export class LeadService {
       occupiedEnrollments.length + trialGuests >= group.capacity
     )
       throw new DomainError('CONFLICT', 'В группе нет свободных мест для пробного занятия.');
+
+    if (lead) {
+      await this.integration.updateRemoteLeadGroup(
+        this.context(actor),
+        lead.id,
+        group.id,
+        `trial-group:${lead.id}:${lesson.id}`,
+      );
+      await this.integration.updateRemoteLeadStatus(
+        this.context(actor),
+        lead.id,
+        'TRIAL_BOOKED',
+        `trial-status:${lead.id}:${lesson.id}`,
+      );
+    }
 
     const appointment = await this.database.$transaction(async (transaction) => {
       const now = new Date();
@@ -363,7 +364,7 @@ export class LeadService {
       where: { id },
     });
     if (!appointment) throw new DomainError('NOT_FOUND', 'Пробное занятие не найдено.');
-    if (actor.role !== 'OWNER' && !actor.branchIds.includes(appointment.group.branchId))
+    if (!canAccessBranch(actor, appointment.group.branchId))
       throw new DomainError('AUTHORIZATION', 'Пробное относится к недоступному филиалу.');
     const updated = await this.database.$transaction(async (transaction) => {
       const result = await transaction.trialAppointment.updateMany({
@@ -396,7 +397,7 @@ export class LeadService {
       where: { id },
     });
     if (!appointment) throw new DomainError('NOT_FOUND', 'Пробное занятие не найдено.');
-    if (actor.role !== 'OWNER' && !actor.branchIds.includes(appointment.group.branchId))
+    if (!canAccessBranch(actor, appointment.group.branchId))
       throw new DomainError('AUTHORIZATION', 'Пробное относится к недоступному филиалу.');
     const result = await this.database.$transaction(async (transaction) => {
       const changed = await transaction.trialAppointment.updateMany({
@@ -463,7 +464,7 @@ export class LeadService {
 
   async listTrials(token: string, query: TrialListQuery): Promise<TrialAppointmentSummary[]> {
     const actor = await this.actor(token);
-    const branchIds = actor.role === 'OWNER' ? undefined : actor.branchIds;
+    const branchIds = accessibleBranchIds(actor);
     const appointments = await this.database.trialAppointment.findMany({
       include: {
         group: { include: { branch: { select: { name: true } } } },
@@ -589,7 +590,7 @@ export class LeadService {
     actor: AuthenticatedUser,
     lead: LeadDetail,
   ): Promise<LeadDetail> {
-    if (actor.role !== 'OWNER' && lead.branchCrmId && !actor.branchIds.includes(lead.branchCrmId))
+    if (lead.branchCrmId && !canAccessBranch(actor, lead.branchCrmId))
       throw new DomainError('AUTHORIZATION', 'Заявка относится к недоступному филиалу.');
     let phone: string;
     try {
@@ -597,6 +598,7 @@ export class LeadService {
     } catch {
       return lead;
     }
+    const branchIds = accessibleBranchIds(actor);
     const local = await this.database.student.findMany({
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
       select: { firstName: true, id: true, lastName: true },
@@ -604,7 +606,7 @@ export class LeadService {
       where: {
         archivedAt: null,
         phone,
-        ...(actor.role === 'OWNER' ? {} : { branchId: { in: actor.branchIds } }),
+        ...(branchIds ? { branchId: { in: branchIds } } : {}),
       },
     });
     const candidates = new Map(

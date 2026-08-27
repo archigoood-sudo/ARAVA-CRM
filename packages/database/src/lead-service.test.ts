@@ -968,4 +968,124 @@ describe('LeadService safe conversion', () => {
       }),
     ).resolves.toMatchObject({ studentId: guest.id });
   });
+
+  it('keeps a global ADMIN in canonical trial scope', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Глобальный администратор' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 10,
+      direction: 'Хип-хоп',
+      name: 'Глобальная группа',
+      status: 'RECRUITING',
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Глобальная',
+      status: 'TRIAL',
+    });
+    const startsAt = new Date(Date.now() + 3_600_000);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(startsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    const admin = await application.createUser(ownerToken, {
+      branchIds: [],
+      email: 'global-trial-admin@arava.local',
+      fullName: 'Глобальный администратор',
+      password: 'Admin!GlobalTrial2026',
+      role: 'ADMIN',
+    });
+    const session = await application.login({
+      email: admin.email,
+      password: 'Admin!GlobalTrial2026',
+    });
+    await application.changePassword(session.token, {
+      currentPassword: 'Admin!GlobalTrial2026',
+      newPassword: 'Admin!GlobalTrialChanged2026',
+    });
+    const service = new LeadService(
+      database,
+      application,
+      {
+        listRemoteLeads: vi.fn(() =>
+          Promise.resolve({
+            leads: [],
+            newCount: 0,
+            serverTimestamp: new Date().toISOString(),
+            summary: {},
+          }),
+        ),
+      } as unknown as IntegrationService,
+      studio,
+    );
+    const booked = await service.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      startsAt: lesson.startsAt,
+      studentId: student.id,
+    });
+
+    await expect(
+      service.listTrials(session.token, { studentId: student.id }),
+    ).resolves.toHaveLength(1);
+    const outcome = await service.setTrialOutcome(session.token, booked.id, {
+      expectedVersion: booked.version ?? 1,
+      outcome: 'THINKING',
+    });
+    await expect(
+      service.cancelTrial(session.token, booked.id, { expectedVersion: outcome.version ?? 2 }),
+    ).resolves.toMatchObject({ state: 'CANCELLED' });
+  });
+
+  it('does not mutate the remote lead before local trial capacity validation', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Локальная проверка' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 1,
+      direction: 'Джаз',
+      name: 'Заполненная группа',
+      status: 'RECRUITING',
+    });
+    const member = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Занято',
+      lastName: 'Место',
+      status: 'ACTIVE',
+    });
+    await database.enrollment.create({
+      data: { groupId: group.id, joinedAt: new Date(), status: 'ACTIVE', studentId: member.id },
+    });
+    const startsAt = new Date(Date.now() + 3_600_000);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(startsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    const remoteLead = { ...lead, branchCrmId: branch.id, crmGroupId: group.id };
+    const updateRemoteLeadGroup = vi.fn(() => Promise.resolve(remoteLead));
+    const updateRemoteLeadStatus = vi.fn(() => Promise.resolve(remoteLead));
+    const service = new LeadService(
+      database,
+      application,
+      {
+        getRemoteLead: vi.fn(() => Promise.resolve(remoteLead)),
+        updateRemoteLeadGroup,
+        updateRemoteLeadStatus,
+      } as unknown as IntegrationService,
+      studio,
+    );
+
+    await expect(
+      service.scheduleTrial(ownerToken, {
+        groupId: group.id,
+        leadId: lead.id,
+        startsAt: lesson.startsAt,
+      }),
+    ).rejects.toThrow('нет свободных мест');
+    expect(updateRemoteLeadGroup).not.toHaveBeenCalled();
+    expect(updateRemoteLeadStatus).not.toHaveBeenCalled();
+  });
 });

@@ -344,11 +344,12 @@ export class AttentionService {
       const thinking = trial.outcome === 'THINKING';
       const noShow = trial.outcome === 'NO_SHOW' || missed;
       add({
-        actionLabel: noShow
-          ? 'Перенести пробное'
-          : trial.studentId
-            ? 'Открыть ученика'
-            : 'Открыть заявку',
+        actionLabel:
+          cancelled || noShow
+            ? 'Перенести пробное'
+            : trial.studentId
+              ? 'Открыть ученика'
+              : 'Открыть заявку',
         actionRoute: trial.studentId
           ? `/students/${trial.studentId}`
           : `/leads?leadId=${encodeURIComponent(trial.externalLeadId)}`,

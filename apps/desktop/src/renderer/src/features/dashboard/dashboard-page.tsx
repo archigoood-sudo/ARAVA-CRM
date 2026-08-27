@@ -32,7 +32,11 @@ import { useNavigate } from 'react-router-dom';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
-import { buildDashboardWorkspace, type DashboardActionItem } from './dashboard-workspace';
+import {
+  buildDashboardWorkspace,
+  countTrialsOnDay,
+  type DashboardActionItem,
+} from './dashboard-workspace';
 import { classifyTodayLessons, todayAttendanceRoute } from './dashboard-today';
 
 function greetingKey(hour: number) {
@@ -133,15 +137,7 @@ export function DashboardPage() {
       }),
     [attention.data, chats.data?.conversations, leads.data?.leads, now, trials.data],
   );
-  const trialsToday =
-    trials.data?.filter((trial) => {
-      const date = new Date(trial.startsAt);
-      return (
-        date.getFullYear() === now.getFullYear() &&
-        date.getMonth() === now.getMonth() &&
-        date.getDate() === now.getDate()
-      );
-    }).length ?? currentStats.trialsToday;
+  const trialsToday = trials.data ? countTrialsOnDay(trials.data, now) : currentStats.trialsToday;
   const subscriptionAttention =
     attention.data?.filter(({ category }) => category === 'SUBSCRIPTIONS').length ?? 0;
   const paymentProblems =

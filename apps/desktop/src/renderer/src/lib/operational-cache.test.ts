@@ -29,6 +29,9 @@ describe('operational cache invalidation', () => {
       ['global-search', 'Иванов'],
       ['dashboard', 'stats'],
       ['attention', 'summary'],
+      ['attendance', 'lesson-1'],
+      ['groups', 'detail', 'group-1'],
+      ['groups', 'roster', 'group-1'],
     ]);
 
     await invalidateStudentIdentityCaches(client, 'student-1');
@@ -40,6 +43,9 @@ describe('operational cache invalidation', () => {
       ['global-search', 'Иванов'],
       ['dashboard', 'stats'],
       ['attention', 'summary'],
+      ['attendance', 'lesson-1'],
+      ['groups', 'detail', 'group-1'],
+      ['groups', 'roster', 'group-1'],
     ])
       expect(invalidated(client, key)).toBe(true);
   });
@@ -86,6 +92,8 @@ describe('operational cache invalidation', () => {
       ['students', 'finance', 'student-1'],
       ['student-profile', 'owner', 'student-1'],
       ['attention', 'summary'],
+      ['groups', 'detail', 'group-1'],
+      ['groups', 'roster', 'group-1'],
     ] as const;
     const lessonKeys = [
       ['lessons', 'list'],

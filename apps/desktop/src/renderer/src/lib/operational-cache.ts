@@ -15,6 +15,9 @@ export async function invalidateStudentIdentityCaches(
     client.invalidateQueries({ queryKey: ['dashboard'] }),
     client.invalidateQueries({ queryKey: ['attention'] }),
     client.invalidateQueries({ queryKey: ['trials'] }),
+    client.invalidateQueries({ queryKey: ['attendance'] }),
+    client.invalidateQueries({ queryKey: ['groups', 'detail'] }),
+    client.invalidateQueries({ queryKey: ['groups', 'roster'] }),
     ...(studentId
       ? [client.invalidateQueries({ queryKey: ['groups', 'eligible-for-student', studentId] })]
       : []),
@@ -59,6 +62,8 @@ export async function invalidateFinanceCaches(client: QueryClient): Promise<void
     client.invalidateQueries({ queryKey: ['dashboard'] }),
     client.invalidateQueries({ queryKey: ['attention'] }),
     client.invalidateQueries({ queryKey: ['trials'] }),
+    client.invalidateQueries({ queryKey: ['groups', 'detail'] }),
+    client.invalidateQueries({ queryKey: ['groups', 'roster'] }),
   ]);
 }
 

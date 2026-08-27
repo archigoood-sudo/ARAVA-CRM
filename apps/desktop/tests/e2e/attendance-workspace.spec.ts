@@ -221,7 +221,7 @@ test('рабочее место отмечает вручную, через по
     await expect(page.getByText('Добавлен в группу позже', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Участница Поздняя: Присутствовал' }).click();
     await page.getByRole('button', { name: 'Иванова Алиса: Присутствовал' }).click();
-    await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('1');
+    await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('2');
     await page.getByRole('button', { name: 'Иванова Алиса: Отсутствовал' }).click();
     await expect(page.getByText('Отсутствуют', { exact: true }).locator('..')).toContainText('1');
 

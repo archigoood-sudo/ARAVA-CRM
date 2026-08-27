@@ -6,7 +6,7 @@ import type {
 } from '@arava/shared';
 import { expect, it } from 'vitest';
 
-import { buildDashboardWorkspace } from './dashboard-workspace';
+import { buildDashboardWorkspace, countTrialsOnDay } from './dashboard-workspace';
 
 const NOW = new Date('2026-08-24T09:00:00.000Z');
 const trial: TrialAppointmentSummary = {
@@ -155,4 +155,18 @@ it('shows a delayed trial follow-up from canonical attention and removes it afte
     trials: [],
   });
   expect(resolved.today).toEqual([]);
+});
+
+it('excludes a cancelled trial from today counters and actions', () => {
+  const cancelled = { ...trial, lessonStatus: 'CANCELLED', state: 'CANCELLED' } as const;
+  const result = buildDashboardWorkspace({
+    attention: [],
+    chats: [],
+    leads: [],
+    now: NOW,
+    trials: [cancelled],
+  });
+
+  expect(countTrialsOnDay([cancelled], NOW)).toBe(0);
+  expect(result.today).toEqual([]);
 });

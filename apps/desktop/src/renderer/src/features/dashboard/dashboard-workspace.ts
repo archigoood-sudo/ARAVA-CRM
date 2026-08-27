@@ -45,6 +45,18 @@ function sorted(items: DashboardActionItem[]): DashboardActionItem[] {
   );
 }
 
+export function countTrialsOnDay(trials: TrialAppointmentSummary[], day: Date): number {
+  return trials.filter((trial) => {
+    if (trial.state === 'CANCELLED') return false;
+    const startsAt = new Date(trial.startsAt);
+    return (
+      startsAt.getFullYear() === day.getFullYear() &&
+      startsAt.getMonth() === day.getMonth() &&
+      startsAt.getDate() === day.getDate()
+    );
+  }).length;
+}
+
 export function buildDashboardWorkspace({
   attention,
   chats,
@@ -115,6 +127,7 @@ export function buildDashboardWorkspace({
         trial.state !== 'FOLLOW_UP' &&
         trial.state !== 'SUBSCRIPTION_PURCHASED' &&
         trial.state !== 'CLOSED' &&
+        trial.state !== 'CANCELLED' &&
         startsAt <= dayEnd &&
         startsAt >= new Date(now.getFullYear(), now.getMonth(), now.getDate())
       );

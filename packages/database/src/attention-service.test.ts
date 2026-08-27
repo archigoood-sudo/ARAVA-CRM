@@ -342,6 +342,21 @@ describe('Sprint 4.2B attention center', () => {
       expect.objectContaining({ id: `trial:missed:${trial.id}`, severity: 'WARNING' }),
     );
     await database.trialAppointment.update({
+      data: { outcome: null },
+      where: { id: trial.id },
+    });
+    await database.lesson.update({
+      data: { status: 'CANCELLED' },
+      where: { id: lesson.id },
+    });
+    items = await attention.listItems(ownerToken, { category: 'TRIALS' });
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        actionLabel: 'Перенести пробное',
+        id: `trial:reschedule:${trial.id}`,
+      }),
+    );
+    await database.trialAppointment.update({
       data: { supersededAt: NOW },
       where: { id: trial.id },
     });
