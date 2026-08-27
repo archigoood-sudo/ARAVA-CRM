@@ -123,6 +123,7 @@ import {
   type DashboardStats,
   type AttentionItem,
   type AttentionSummary,
+  type BrandingLogo,
   type SettingKey,
   type SystemInformation,
 } from '@arava/shared';
@@ -182,6 +183,7 @@ export interface BackupIpcDependencies {
   chooseBackupFolder?: () => Promise<string | undefined>;
   chooseExportPath?: (defaultPath: string) => Promise<string | undefined>;
   chooseFinanceExportPath?: (defaultPath: string) => Promise<string | undefined>;
+  chooseBrandingLogo?: () => Promise<string | undefined>;
   openFolder?: (path: string) => Promise<void>;
   relaunch?: () => void;
   writeFinanceExport?: (path: string, content: string) => Promise<void>;
@@ -288,6 +290,23 @@ export function createIpcHandlers(
     };
   };
   const publicationMediaDirectory = join(dirname(databasePath), 'media', 'publications');
+  const brandingMediaDirectory = join(dirname(databasePath), 'media', 'branding');
+  const readBrandingLogo = async (): Promise<BrandingLogo | undefined> => {
+    const setting = await database.appSetting.findUnique({
+      where: { key: 'appearance.logoMediaId' },
+    });
+    const mediaId = setting?.value;
+    if (!mediaId || !/^[\da-f-]+\.(?:jpe?g|png|webp)$/iu.test(mediaId)) return undefined;
+    try {
+      const bytes = await readFile(join(brandingMediaDirectory, mediaId));
+      const extension = extname(mediaId).toLowerCase();
+      const mimeType =
+        extension === '.png' ? 'image/png' : extension === '.webp' ? 'image/webp' : 'image/jpeg';
+      return { dataUrl: `data:${mimeType};base64,${bytes.toString('base64')}` };
+    } catch {
+      return undefined;
+    }
+  };
   const publicationMedia = (mediaId?: string) => {
     if (!mediaId) return undefined;
     if (!/^[\da-f-]+\.(?:jpe?g|png|webp)$/iu.test(mediaId))
@@ -1985,10 +2004,59 @@ export function createIpcHandlers(
       const setting = await database.appSetting.findUnique({ where: { key } });
       return setting?.value ?? null;
     },
+    [IPC_CHANNELS.settingsLogoGet]: async (unsafeToken): Promise<BrandingLogo | undefined> => {
+      await service.authenticate(sessionTokenSchema.parse(unsafeToken));
+      return readBrandingLogo();
+    },
+    [IPC_CHANNELS.settingsLogoSelect]: async (unsafeToken): Promise<BrandingLogo | undefined> => {
+      const actor = await service.authenticate(sessionTokenSchema.parse(unsafeToken));
+      assertCapability(actor, 'canManageSystemSettings');
+      const source = backupDependencies.chooseBrandingLogo
+        ? await backupDependencies.chooseBrandingLogo()
+        : (
+            await dialog.showOpenDialog({
+              filters: [{ extensions: ['jpg', 'jpeg', 'png', 'webp'], name: 'Изображения' }],
+              properties: ['openFile'],
+              title: 'Выберите логотип CRM',
+            })
+          ).filePaths[0];
+      if (!source) return undefined;
+      const bytes = await readFile(source);
+      if (!bytes.length || bytes.length > 5 * 1024 * 1024)
+        throw new Error('Логотип должен быть не больше 5 МБ.');
+      const extension = extname(source).toLowerCase();
+      const signatureValid =
+        (extension === '.png' &&
+          bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+        ((extension === '.jpg' || extension === '.jpeg') &&
+          bytes.length >= 3 &&
+          bytes[0] === 255 &&
+          bytes[1] === 216 &&
+          bytes[2] === 255) ||
+        (extension === '.webp' &&
+          bytes.length >= 12 &&
+          bytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+          bytes.subarray(8, 12).toString('ascii') === 'WEBP');
+      if (!signatureValid) throw new Error('Содержимое файла не похоже на изображение.');
+      const mediaId = `${randomUUID()}${extension}`;
+      await mkdir(brandingMediaDirectory, { recursive: true });
+      await copyFile(source, join(brandingMediaDirectory, mediaId));
+      await database.appSetting.upsert({
+        create: { key: 'appearance.logoMediaId', value: mediaId },
+        update: { value: mediaId },
+        where: { key: 'appearance.logoMediaId' },
+      });
+      return readBrandingLogo();
+    },
+    [IPC_CHANNELS.settingsLogoClear]: async (unsafeToken): Promise<void> => {
+      const actor = await service.authenticate(sessionTokenSchema.parse(unsafeToken));
+      assertCapability(actor, 'canManageSystemSettings');
+      await database.appSetting.deleteMany({ where: { key: 'appearance.logoMediaId' } });
+    },
     [IPC_CHANNELS.settingsSet]: async (unsafeToken, unsafeUpdate): Promise<void> => {
       const actor = await service.authenticate(sessionTokenSchema.parse(unsafeToken));
       const update = settingUpdateSchema.parse(unsafeUpdate);
-      if (update.key === 'general.workspaceName')
+      if (update.key === 'general.workspaceName' || update.key === 'appearance.logoMediaId')
         assertCapability(actor, 'canManageSystemSettings');
       await database.appSetting.upsert({
         create: update,

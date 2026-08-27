@@ -200,6 +200,13 @@ test('OWNER подключает сайт, выполняет initial/offline sy
                 originalName: 'недоступное фото.jpg',
                 type: 'image',
               },
+              {
+                height: 256,
+                id: 'sticker-e2e',
+                mimeType: 'image/jpeg',
+                type: 'sticker',
+                width: 256,
+              },
             ],
             body: 'Сообщение клиента',
             createdAt: '2026-08-18T12:00:00.000Z',
@@ -637,12 +644,18 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       name: 'Открыть изображение: фото клиента.jpg',
     });
     await expect(clientImage).toBeVisible();
+    const stickerImage = page.getByRole('button', { name: 'Открыть изображение: Стикер ARAVA' });
+    await expect(stickerImage).toBeVisible();
+    await expect(stickerImage.locator('img')).toHaveClass(/max-h-40/u);
     await expect(page.getByText('Изображение недоступно', { exact: true })).toBeVisible();
     await clientImage.click();
     await expect(page.getByRole('dialog').getByAltText('фото клиента.jpg')).toBeVisible();
     await page.getByRole('button', { name: 'Закрыть окно' }).last().click();
     await expect
       .poll(() => receivedChatImages.filter((path) => path.endsWith('/image-e2e')).length)
+      .toBe(1);
+    await expect
+      .poll(() => receivedChatImages.filter((path) => path.endsWith('/sticker-e2e')).length)
       .toBe(1);
     await page.getByLabel('Сообщение').fill('Ответ администратора');
     await page.getByRole('button', { name: 'Отправить' }).click();

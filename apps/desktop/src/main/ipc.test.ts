@@ -46,6 +46,7 @@ import {
   type BackupEntry,
   type BackupRestoreSelection,
   type BackupStatus,
+  type BrandingLogo,
   type TrialAppointmentSummary,
 } from '@arava/shared';
 
@@ -1633,6 +1634,67 @@ describe('Electron IPC boundary', () => {
     await expect(handlers[IPC_CHANNELS.backupStatus]?.(coachSession.token)).rejects.toThrow(
       'недостаточно прав',
     );
+  });
+
+  it('keeps the managed branding logo persistent, safe on corruption, and OWNER-only', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!Branding2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Филиал брендинга' });
+    const admin = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'admin-branding@arava.local',
+      fullName: 'Администратор брендинга',
+      password: 'Admin!Branding2026',
+      role: 'ADMIN',
+    });
+    const adminSession = await service.login({
+      email: admin.email,
+      password: 'Admin!Branding2026',
+    });
+    await service.changePassword(adminSession.token, {
+      currentPassword: 'Admin!Branding2026',
+      newPassword: 'Admin!BrandingChanged2026',
+    });
+    const logoSource = join(directory, 'selected-logo.png');
+    await writeFile(
+      logoSource,
+      Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from('test-logo')]),
+    );
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'), {
+      chooseBrandingLogo: () => Promise.resolve(logoSource),
+    });
+    const selected = (await handlers[IPC_CHANNELS.settingsLogoSelect]?.(
+      owner.token,
+    )) as BrandingLogo;
+    expect(selected.dataUrl).toMatch(/^data:image\/png;base64,/u);
+    const persisted = await database.appSetting.findUniqueOrThrow({
+      where: { key: 'appearance.logoMediaId' },
+    });
+    expect(persisted.value).toMatch(/\.png$/u);
+    await expect(handlers[IPC_CHANNELS.settingsLogoGet]?.(owner.token)).resolves.toEqual(selected);
+    await expect(handlers[IPC_CHANNELS.settingsLogoClear]?.(adminSession.token)).rejects.toThrow(
+      t('domain.authorization.permissionDenied'),
+    );
+    await expect(
+      handlers[IPC_CHANNELS.settingsSet]?.(adminSession.token, {
+        key: 'appearance.logoMediaId',
+        value: persisted.value,
+      }),
+    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
+    await expect(handlers[IPC_CHANNELS.settingsLogoClear]?.(owner.token)).resolves.toBeUndefined();
+    expect(
+      await database.appSetting.findUnique({ where: { key: 'appearance.logoMediaId' } }),
+    ).toBeNull();
+    await database.appSetting.create({
+      data: { key: 'appearance.logoMediaId', value: 'missing-logo.png' },
+    });
+    await expect(handlers[IPC_CHANNELS.settingsLogoGet]?.(owner.token)).resolves.toBeUndefined();
   });
 
   it('validates publication IPC and queues publication without renderer-controlled scope', async () => {

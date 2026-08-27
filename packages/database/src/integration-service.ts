@@ -839,7 +839,7 @@ function parseChatMessagePage(value: unknown): ChatMessagePage {
           if (
             !isRecord(attachment) ||
             typeof attachment.id !== 'string' ||
-            attachment.type !== 'image' ||
+            !['image', 'sticker'].includes(String(attachment.type)) ||
             !['image/jpeg', 'image/png', 'image/webp'].includes(String(attachment.mimeType))
           ) {
             return [];
@@ -848,6 +848,7 @@ function parseChatMessagePage(value: unknown): ChatMessagePage {
             {
               ...(typeof attachment.height === 'number' ? { height: attachment.height } : {}),
               id: attachment.id,
+              kind: attachment.type === 'sticker' ? ('STICKER' as const) : ('IMAGE' as const),
               mimeType: attachment.mimeType as 'image/jpeg' | 'image/png' | 'image/webp',
               ...(typeof attachment.originalName === 'string'
                 ? { originalName: attachment.originalName }

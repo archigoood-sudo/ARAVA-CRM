@@ -367,7 +367,12 @@ const desktopApi: AravaDesktopApi = {
     get: (token, query) => invoke(IPC_CHANNELS.reportGet, token, query),
   },
   settings: {
+    clearLogo: async (token) => {
+      await invoke(IPC_CHANNELS.settingsLogoClear, token);
+    },
     get: (token, key) => invoke(IPC_CHANNELS.settingsGet, token, key),
+    getLogo: (token) => invoke(IPC_CHANNELS.settingsLogoGet, token),
+    selectLogo: (token) => invoke(IPC_CHANNELS.settingsLogoSelect, token),
     set: async (token, update) => {
       await invoke(IPC_CHANNELS.settingsSet, token, update);
     },

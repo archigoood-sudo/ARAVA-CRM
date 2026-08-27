@@ -121,11 +121,16 @@ test('платёжная операция становится одним под
     await expect(page).toHaveURL(
       new RegExp(`/students/${context.studentId}[?]action=attendance-payment&lessonId=`, 'u'),
     );
-    await expect(page.getByText('Операции оплаты')).toBeVisible();
+    await page
+      .getByRole('dialog', { name: 'Новый платёж' })
+      .getByRole('button', { name: 'Отмена' })
+      .click();
+    await page.getByText('Операции оплаты').click();
     await expect(page.getByText('Создана')).toBeVisible();
     await expect(page.getByText('Исторический чек с ошибкой')).toBeVisible();
     await expect(page.getByText('Посещения без покрытия')).toBeVisible();
     await expect(page.getByText(/Разовая группа E2E ·/u).last()).toBeVisible();
+    await page.getByRole('button', { name: 'Оплатить разовое посещение' }).click();
     await expect(page.getByText('Разовый E2E')).toBeVisible();
     await expect(page.getByLabel('Сумма')).toHaveValue('15');
     await page.getByRole('button', { name: 'Оплатить посещение' }).click();
@@ -159,6 +164,7 @@ test('платёжная операция становится одним под
     await search.getByLabel('Поиск по приложению').fill('Оплатина E2E Анна');
     await search.getByRole('button', { name: /Оплатина E2E Анна/u }).click();
     await expect(page.getByRole('heading', { name: 'Оплатина E2E Анна' })).toBeVisible();
+    await page.getByText('Операции оплаты').click();
     await page
       .getByRole('button', { name: 'Открыть детали оплаты: Исторический чек с ошибкой' })
       .click();
@@ -230,8 +236,12 @@ test('платёжная операция становится одним под
       const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
       return (await api.subscriptions.listStudent(token, studentId)).subscriptions.length;
     }, context);
-    await page.getByRole('button', { name: 'Продать абонемент' }).first().click();
-    const saleDialog = page.getByRole('dialog');
+    await page.getByRole('button', { name: 'Оплата / абонемент' }).first().click();
+    await page
+      .getByRole('dialog', { name: 'Оплата и абонемент' })
+      .getByRole('button', { name: 'Продать абонемент' })
+      .click();
+    const saleDialog = page.getByRole('dialog', { name: 'Продажа абонемента' });
     const saleTariff = saleDialog.getByLabel('Тариф');
     await expect(saleTariff).toBeEnabled();
     await expect(saleTariff).toHaveValue(/.+/u);

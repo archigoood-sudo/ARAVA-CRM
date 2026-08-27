@@ -40,6 +40,12 @@ import { BrandMark } from './brand-mark';
 export function Sidebar() {
   const user = useAuthStore((state) => state.user);
   const trainer = user?.role === 'COACH';
+  const branding = useQuery({
+    enabled: Boolean(user),
+    queryFn: () => getDesktopApi().settings.getLogo(getSessionToken()),
+    queryKey: ['settings', 'branding-logo', user?.id],
+    staleTime: Number.POSITIVE_INFINITY,
+  });
   const attention = useQuery({
     enabled: Boolean(user && !trainer),
     queryFn: () => getDesktopApi().attention.summary(getSessionToken()),
@@ -122,7 +128,7 @@ export function Sidebar() {
       className="app-drag-region flex h-screen min-h-0 flex-col overflow-hidden bg-sidebar px-4 pb-5 pt-9 text-white"
       data-testid="sidebar"
     >
-      <BrandMark className="shrink-0 px-3" />
+      <BrandMark className="shrink-0 px-3" logoDataUrl={branding.data?.dataUrl} />
       <nav
         aria-label={t('nav.workspace')}
         className="app-no-drag mt-8 min-h-0 flex-1 space-y-1 overflow-y-auto pb-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"

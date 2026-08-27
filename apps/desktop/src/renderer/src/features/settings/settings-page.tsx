@@ -12,7 +12,7 @@ import {
   cn,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Database, KeyRound, Laptop, Moon, Save, Sun } from 'lucide-react';
+import { Check, Database, Image, KeyRound, Laptop, Moon, Save, Sun, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -83,6 +83,20 @@ export function SettingsPage() {
     enabled: user?.role === 'OWNER',
     queryFn: () => getDesktopApi().users.recoveryCodeStatus(getSessionToken()),
     queryKey: ['owner-recovery-code'],
+  });
+  const branding = useQuery({
+    queryFn: () => getDesktopApi().settings.getLogo(getSessionToken()),
+    queryKey: ['settings', 'branding-logo', user?.id],
+  });
+  const selectLogo = useMutation({
+    mutationFn: () => getDesktopApi().settings.selectLogo(getSessionToken()),
+    onSuccess: (logo) => {
+      if (logo) queryClient.setQueryData(['settings', 'branding-logo', user?.id], logo);
+    },
+  });
+  const clearLogo = useMutation({
+    mutationFn: () => getDesktopApi().settings.clearLogo(getSessionToken()),
+    onSuccess: () => queryClient.setQueryData(['settings', 'branding-logo', user?.id], undefined),
   });
   const createRecoveryCode = useMutation({
     mutationFn: () => getDesktopApi().users.recoveryCodeCreate(getSessionToken()),
@@ -200,6 +214,54 @@ export function SettingsPage() {
         {user?.role === 'OWNER' ? <BackupSettings /> : null}
         {user?.role === 'OWNER' ? <CustomerDisplaySettings /> : null}
         {user?.role === 'OWNER' ? <IntegrationSettings /> : null}
+
+        {user?.role === 'OWNER' ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Логотип CRM</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Локальный логотип для верхней части бокового меню. Он сохраняется вместе с
+                управляемыми медиафайлами и резервными копиями.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap items-center justify-between gap-5 rounded-2xl border border-border bg-background p-4">
+                <div className="flex h-16 min-w-48 max-w-sm flex-1 items-center rounded-xl bg-sidebar px-4">
+                  {branding.data?.dataUrl ? (
+                    <img
+                      alt="Текущий логотип CRM"
+                      className="max-h-12 max-w-full object-contain object-left"
+                      src={branding.data.dataUrl}
+                    />
+                  ) : (
+                    <p className="text-sm font-semibold text-white">ARAVA CRM · стандартный вид</p>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    disabled={selectLogo.isPending}
+                    onClick={() => selectLogo.mutate()}
+                    variant="outline"
+                  >
+                    <Image className="size-4" /> Загрузить логотип
+                  </Button>
+                  {branding.data ? (
+                    <Button
+                      disabled={clearLogo.isPending}
+                      onClick={() => clearLogo.mutate()}
+                      variant="ghost"
+                    >
+                      <Trash2 className="size-4" /> Вернуть стандартный
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              {selectLogo.error instanceof Error ? (
+                <p className="mt-3 text-sm text-red-600">{selectLogo.error.message}</p>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card>
           <CardHeader>

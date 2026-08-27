@@ -21,9 +21,9 @@ async function login(page: Page) {
   });
 }
 
-async function scan(page: Page, barcode: string) {
+async function scan(page: Page, barcode: string, withEnter = true) {
   await page.keyboard.type(barcode, { delay: scannerDelayMs });
-  await page.keyboard.press('Enter');
+  if (withEnter) await page.keyboard.press('Enter');
 }
 
 async function openScannedProfile(page: Page) {
@@ -106,7 +106,7 @@ test('глобальный сканер открывает профиль без
     await page.getByRole('link', { name: 'Группы', exact: true }).click();
     await expect(page).toHaveURL(/\/groups$/u);
     await page.getByRole('heading', { name: 'Танцевальные группы', exact: true }).click();
-    await scan(page, '0000091201');
+    await scan(page, '0000091201', false);
     await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixture.firstStudentId}\\?openedByCard=1$`, 'u'),
@@ -119,7 +119,7 @@ test('глобальный сканер открывает профиль без
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixture.firstStudentId}\\?openedByCard=1$`, 'u'),
     );
-    await scan(page, '0000091202');
+    await scan(page, '0000091202', false);
     await openScannedProfile(page);
     await expect(page).toHaveURL(
       new RegExp(`/students/${fixture.secondStudentId}\\?openedByCard=1$`, 'u'),

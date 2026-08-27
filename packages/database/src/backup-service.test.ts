@@ -112,13 +112,17 @@ describe('Sprint 4.3A local backup and restore', () => {
   });
 
   it('includes managed media files in backup and restores them', async () => {
+    const brandingDirectory = join(directory, 'media', 'branding');
     const customerDisplayDirectory = join(directory, 'media', 'customer-display');
     const publicationsDirectory = join(directory, 'media', 'publications');
+    await mkdir(brandingDirectory, { recursive: true });
     await mkdir(customerDisplayDirectory, { recursive: true });
     await mkdir(publicationsDirectory, { recursive: true });
 
+    const brandingMedia = join(brandingDirectory, 'logo.png');
     const customerMedia = join(customerDisplayDirectory, 'client-screen.jpg');
     const publicationMedia = join(publicationsDirectory, 'publication.webp');
+    await writeFile(brandingMedia, 'branding-image-v1');
     await writeFile(customerMedia, 'customer-image-v1');
     await writeFile(publicationMedia, 'publication-image-v1');
 
@@ -126,6 +130,7 @@ describe('Sprint 4.3A local backup and restore', () => {
       name: 'После резервной копии',
     });
     const backup = await backups.createManualBackup(ownerToken);
+    await writeFile(brandingMedia, 'branding-image-v2');
     await writeFile(customerMedia, 'customer-image-v2');
     await writeFile(publicationMedia, 'publication-image-v2');
     await application.createBranch(ownerToken, { name: 'До восстановления' });
@@ -141,6 +146,7 @@ describe('Sprint 4.3A local backup and restore', () => {
     const branches = await application.listBranches(ownerToken);
     expect(branches.map(({ name }) => name)).toContain('После резервной копии');
     expect(branches.map(({ name }) => name)).not.toContain('До восстановления');
+    expect(await readFile(brandingMedia, 'utf8')).toBe('branding-image-v1');
     expect(await readFile(customerMedia, 'utf8')).toBe('customer-image-v1');
     expect(await readFile(publicationMedia, 'utf8')).toBe('publication-image-v1');
     expect(await stat(customerMedia)).toBeDefined();

@@ -140,7 +140,7 @@ test('финансы сегодня показывают продажу, час�
     await page.getByRole('button', { name: 'Сегодня' }).click();
     await page.getByText('Финансы E2E Анна').first().click();
     await expect(page).toHaveURL(new RegExp(`/students/${context.studentId}$`, 'u'));
-    await expect(page.getByText('Долг: 80 ₽')).toBeVisible();
+    await expect(page.getByText('Общая задолженность').locator('..')).toContainText('80 ₽');
   } finally {
     await application.close();
   }

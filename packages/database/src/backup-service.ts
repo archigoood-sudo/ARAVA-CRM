@@ -47,7 +47,11 @@ const BACKUP_MANIFEST_FILE = 'manifest.json';
 const BACKUP_DATABASE_FILE = 'database.db';
 const BACKUP_FORMAT = 'ARAVA-CRM-BACKUP';
 const BACKUP_FORMAT_VERSION = 1;
-const MANAGED_MEDIA_DIRECTORIES = ['media/customer-display', 'media/publications'] as const;
+const MANAGED_MEDIA_DIRECTORIES = [
+  'media/branding',
+  'media/customer-display',
+  'media/publications',
+] as const;
 const ALLOWED_MEDIA_EXTENSION = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 const AUTOMATIC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const SELECTION_TTL_MS = 30 * 60 * 1000;

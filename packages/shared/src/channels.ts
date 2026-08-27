@@ -399,6 +399,9 @@ export const IPC_CHANNELS = {
   reportGet: 'report:get',
   reportExportCsv: 'report:export-csv',
   settingsGet: 'settings:get',
+  settingsLogoClear: 'settings:logo-clear',
+  settingsLogoGet: 'settings:logo-get',
+  settingsLogoSelect: 'settings:logo-select',
   settingsSet: 'settings:set',
   studentArchive: 'student:archive',
   studentBulkAddExecute: 'student-bulk:add-execute',
@@ -2513,7 +2516,12 @@ export interface BackupRestoreResult {
   success: true;
 }
 
-export type SettingKey = 'appearance.theme' | 'general.workspaceName';
+export type SettingKey = 'appearance.logoMediaId' | 'appearance.theme' | 'general.workspaceName';
+
+export interface BrandingLogo {
+  dataUrl: string;
+  fileName?: string | undefined;
+}
 
 export type IntegrationConnectionState =
   | 'DISABLED'
@@ -2954,6 +2962,7 @@ export type ChatMessageStatus = 'PENDING' | 'SENT' | 'ERROR';
 export interface ChatImageAttachment {
   height?: number | undefined;
   id: string;
+  kind?: 'IMAGE' | 'STICKER' | undefined;
   mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
   originalName?: string | undefined;
   width?: number | undefined;
@@ -3471,7 +3480,10 @@ export interface AravaDesktopApi {
     get: (token: string, query: ReportQuery) => Promise<ReportData>;
   };
   settings: {
+    clearLogo: (token: string) => Promise<void>;
     get: (token: string, key: SettingKey) => Promise<string | null>;
+    getLogo: (token: string) => Promise<BrandingLogo | undefined>;
+    selectLogo: (token: string) => Promise<BrandingLogo | undefined>;
     set: (token: string, update: SettingUpdate) => Promise<void>;
   };
   students: {

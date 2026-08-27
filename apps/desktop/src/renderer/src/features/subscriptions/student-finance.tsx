@@ -80,6 +80,7 @@ export function StudentFinance({
   const canAdjust = user?.role === 'OWNER' || user?.role === 'ADMIN';
   const queryClient = useQueryClient();
   const [issueOpen, setIssueOpen] = useState(false);
+  const [financeMenuOpen, setFinanceMenuOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [attendancePayment, setAttendancePayment] = useState<{
     amount: number;
@@ -346,31 +347,6 @@ export function StudentFinance({
           {successMessage}
         </div>
       ) : null}
-      <div className="grid grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-5">
-            <p className="text-sm text-muted-foreground">{t('subscription.active')}</p>
-            <p className="mt-2 text-3xl font-semibold">{finance.data?.activeSubscriptions ?? 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-5">
-            <p className="text-sm text-muted-foreground">{t('subscription.debt')}</p>
-            <Money
-              amount={finance.data?.totalDebt ?? 0}
-              className="mt-2 block text-3xl font-semibold"
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-5">
-            <p className="text-sm text-muted-foreground">{t('subscription.balance')}</p>
-            <p className="mt-2 text-3xl font-semibold">
-              {active.reduce((sum, item) => sum + (item.remainingLessons ?? 0), 0)}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
       {finance.data?.uncoveredAttendances.length ? (
         <Card>
           <CardHeader>
@@ -468,41 +444,17 @@ export function StudentFinance({
         </Card>
       ) : null}
       <Card>
-        <CardHeader className="flex-row items-center justify-between space-y-0">
+        <CardHeader className="flex-row items-center justify-between space-y-0 px-5 py-4">
           <div>
             <CardTitle>{t('subscription.financeSummary')}</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {t('subscription.createDescription')}
+            <p className="mt-1 text-xs text-muted-foreground">
+              {finance.data?.subscriptions.length ?? 0} абонементов · активных {active.length}
             </p>
           </div>
           {canManage ? (
-            <div className="flex gap-2">
-              <Button
-                onClick={() => {
-                  setAttendancePayment(undefined);
-                  setSubscriptionPayment(undefined);
-                  setSubscriptionSale(undefined);
-                  setError(undefined);
-                  setSuccessMessage(undefined);
-                  setPaymentOpen(true);
-                }}
-                size="small"
-                variant="outline"
-              >
-                <WalletCards className="size-4" />
-                {t('payment.action.add')}
-              </Button>
-              <Button
-                onClick={() => {
-                  setError(undefined);
-                  setIssueOpen(true);
-                }}
-                size="small"
-              >
-                <Plus className="size-4" />
-                Продать абонемент
-              </Button>
-            </div>
+            <Button onClick={() => setFinanceMenuOpen(true)} size="small">
+              <WalletCards className="size-4" /> Оплата / абонемент
+            </Button>
           ) : null}
         </CardHeader>
         <CardContent>
@@ -539,74 +491,87 @@ export function StudentFinance({
       </Card>
       {canManage ? (
         <Card>
-          <CardHeader>
-            <CardTitle>{t('payment.operation.title')}</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {t('payment.operation.description')}
-            </p>
-          </CardHeader>
-          <CardContent>
-            {paymentOperations.isLoading ? <LoadingState label={t('common.loading')} /> : null}
-            {paymentOperations.data?.length ? (
-              <div className="space-y-3">
-                {paymentOperations.data.map((operation) => (
-                  <div
-                    className="flex items-center justify-between rounded-2xl border border-border px-4 py-3"
-                    key={operation.id}
-                  >
-                    <div>
-                      <p className="font-medium">{operation.purpose}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {formatDate(operation.createdAt, {
-                          dateStyle: 'medium',
-                          timeStyle: 'short',
-                        })}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <Money amount={operation.amount} className="font-semibold" />
-                      <div className="mt-1">
+          <details>
+            <summary className="cursor-pointer list-none px-5 py-4">
+              <span className="font-semibold">{t('payment.operation.title')}</span>
+              <span className="ml-2 text-xs text-muted-foreground">
+                {paymentOperations.data?.length ?? 0} · раскрыть
+              </span>
+            </summary>
+            <CardContent className="border-t border-border px-5 pt-4">
+              {paymentOperations.isLoading ? <LoadingState label={t('common.loading')} /> : null}
+              {paymentOperations.data?.length ? (
+                <div className="divide-y divide-border rounded-xl border border-border">
+                  {paymentOperations.data.map((operation) => (
+                    <button
+                      aria-label={`Открыть детали оплаты: ${operation.purpose}`}
+                      className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-muted/40"
+                      key={operation.id}
+                      onClick={() => {
+                        setError(undefined);
+                        setGatewayPayment(undefined);
+                        setPaymentOperationId(operation.id);
+                      }}
+                      type="button"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{operation.purpose}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDate(operation.createdAt, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          })}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-3 text-right">
+                        <Money amount={operation.amount} className="text-sm font-semibold" />
                         <Badge>{t(`payment.operation.status.${operation.status}`)}</Badge>
                       </div>
-                      <Button
-                        aria-label={`Открыть детали оплаты: ${operation.purpose}`}
-                        className="mt-2"
-                        onClick={() => {
-                          setError(undefined);
-                          setGatewayPayment(undefined);
-                          setPaymentOperationId(operation.id);
-                        }}
-                        variant="ghost"
-                      >
-                        Детали
-                      </Button>
-                      {(operation.providerType === 'SBP' ||
-                        operation.providerType === 'ACQUIRING') &&
-                      ['WAITING_FOR_PAYMENT', 'PROCESSING'].includes(operation.status) ? (
-                        <Button
-                          className="mt-2"
-                          disabled={refreshAqsi.isPending}
-                          onClick={() =>
-                            void perform(
-                              () => refreshAqsi.mutateAsync(operation.id),
-                              'Не удалось проверить оплату.',
-                            )
-                          }
-                          variant="ghost"
-                        >
-                          Проверить оплату
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : paymentOperations.isLoading ? null : (
-              <p className="text-sm text-muted-foreground">{t('payment.operation.empty')}</p>
-            )}
-          </CardContent>
+                    </button>
+                  ))}
+                </div>
+              ) : paymentOperations.isLoading ? null : (
+                <p className="text-sm text-muted-foreground">{t('payment.operation.empty')}</p>
+              )}
+            </CardContent>
+          </details>
         </Card>
       ) : null}
+      <Dialog
+        closeLabel={t('common.closeDialog')}
+        onClose={() => setFinanceMenuOpen(false)}
+        open={financeMenuOpen}
+        title="Оплата и абонемент"
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Button
+            className="h-auto justify-start p-4"
+            onClick={() => {
+              setAttendancePayment(undefined);
+              setSubscriptionPayment(undefined);
+              setSubscriptionSale(undefined);
+              setError(undefined);
+              setSuccessMessage(undefined);
+              setFinanceMenuOpen(false);
+              setPaymentOpen(true);
+            }}
+            variant="outline"
+          >
+            <WalletCards className="size-5" /> {t('payment.action.add')}
+          </Button>
+          <Button
+            className="h-auto justify-start p-4"
+            onClick={() => {
+              setError(undefined);
+              setFinanceMenuOpen(false);
+              setIssueOpen(true);
+            }}
+            variant="outline"
+          >
+            <Plus className="size-5" /> Продать абонемент
+          </Button>
+        </div>
+      </Dialog>
       <SubscriptionDialog
         activeSubscriptionCount={active.length}
         error={error}

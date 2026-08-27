@@ -180,12 +180,24 @@ test('расширенный профиль объединяет работу а
     await expect(page).toHaveURL(new RegExp(`/students/${context.studentId}$`, 'u'));
     await expect(page.getByRole('link', { name: 'Группа профиля E2E', exact: true })).toBeVisible();
     await expect(page.getByText('Абонемент профиля E2E').first()).toBeVisible();
-    await expect(page.getByText(/Долг:/u).first()).toBeVisible();
+    await expect(page.getByText('Общая задолженность').locator('..')).toContainText('40');
     await expect(page.getByText('Присутствовал').first()).toBeVisible();
     await expect(page.getByText('0000042111', { exact: true })).toBeVisible();
+    await expect(page.getByText('Быстрые действия')).toHaveCount(0);
+    await expect(
+      page.locator('details').filter({ hasText: 'Операции оплаты' }),
+    ).not.toHaveAttribute('open', '');
+    await expect(page.locator('details').filter({ hasText: /^История/u })).not.toHaveAttribute(
+      'open',
+      '',
+    );
 
-    const quickActions = page.getByText('Быстрые действия').locator('..');
-    await quickActions.getByRole('button', { name: 'Принять оплату' }).click();
+    await expect(page.getByRole('button', { name: 'Записать на пробное' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Оплата / абонемент' }).first().click();
+    await page
+      .getByRole('dialog', { name: 'Оплата и абонемент' })
+      .getByRole('button', { name: 'Принять оплату' })
+      .click();
     const paymentDialog = page.getByRole('dialog', { name: 'Новый платёж' });
     await expect(paymentDialog.getByLabel('Сумма, ₽')).toHaveValue('40');
     await paymentDialog.getByRole('button', { name: 'Принять оплату', exact: true }).click();

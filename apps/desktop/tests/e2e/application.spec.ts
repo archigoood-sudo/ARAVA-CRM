@@ -85,6 +85,12 @@ test('вход, создание филиала, ученика и контак�
 
     await window.getByRole('link', { name: 'Главная', exact: true }).click();
     await expect(window.getByRole('heading', { exact: true, name: 'Сегодня' })).toBeVisible();
+    const today = window.getByRole('region', { name: 'Сегодня' });
+    await expect(today.getByText('Ожидается учеников')).toBeVisible();
+    await expect(today.getByText('Отмечено', { exact: true })).toBeVisible();
+    await expect(today.getByText('Не отмечено', { exact: true })).toBeVisible();
+    await expect(today.getByText('Выручка сегодня')).toBeVisible();
+    await expect(window.getByText('Ход дня', { exact: true })).toHaveCount(0);
     await expect(window.getByRole('heading', { name: 'Требует внимания' })).toBeVisible();
     const noSubscriptionTask = window
       .locator('article')

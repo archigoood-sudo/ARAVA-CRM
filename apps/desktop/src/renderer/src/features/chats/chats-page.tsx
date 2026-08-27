@@ -421,7 +421,9 @@ function ChatImage({
       </div>
     );
   }
-  const alternative = attachment.originalName ?? 'Изображение из чата';
+  const alternative =
+    attachment.originalName ??
+    (attachment.kind === 'STICKER' ? 'Стикер ARAVA' : 'Изображение из чата');
   return (
     <>
       <button
@@ -432,7 +434,11 @@ function ChatImage({
       >
         <img
           alt={alternative}
-          className="max-h-72 w-full object-contain"
+          className={
+            attachment.kind === 'STICKER'
+              ? 'max-h-40 max-w-40 object-contain'
+              : 'max-h-72 w-full object-contain'
+          }
           height={attachment.height}
           src={image.data.dataUrl}
           width={attachment.width}

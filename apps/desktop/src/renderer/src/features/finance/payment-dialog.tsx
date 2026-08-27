@@ -16,7 +16,7 @@ import { useForm } from 'react-hook-form';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { getSessionToken } from '../../stores/auth-store';
-import { paymentSubmitLabel } from './payment-dialog-model';
+import { paymentOperationSubscriptionId, paymentSubmitLabel } from './payment-dialog-model';
 
 function localDateTimeValue(value = new Date()): string {
   const offset = value.getTimezoneOffset() * 60_000;
@@ -190,6 +190,10 @@ export function PaymentDialog({
     setSbpBusy(true);
     setSbpError(undefined);
     try {
+      const operationSubscriptionId = paymentOperationSubscriptionId({
+        subscriptionId: values.subscriptionId,
+        subscriptionSale: Boolean(subscriptionSale),
+      });
       const operation = await getDesktopApi().paymentOperations.create(getSessionToken(), {
         amount,
         branchId: values.branchId,
@@ -203,7 +207,7 @@ export function PaymentDialog({
               ? 'Оплата картой через aQsi'
               : 'Оплата через СБП',
         studentId: values.studentId,
-        ...(values.subscriptionId ? { subscriptionId: values.subscriptionId } : {}),
+        ...(operationSubscriptionId ? { subscriptionId: operationSubscriptionId } : {}),
         ...(subscriptionSale
           ? {
               saleIntent: {

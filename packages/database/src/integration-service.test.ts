@@ -2293,6 +2293,13 @@ describe('chat image integration transport', () => {
                     type: 'image',
                     width: 640,
                   },
+                  {
+                    height: 256,
+                    id: 'sticker-one',
+                    mimeType: 'image/webp',
+                    type: 'sticker',
+                    width: 256,
+                  },
                   { id: 'video-one', mimeType: 'video/webm', type: 'video' },
                 ],
                 body: '',
@@ -2326,9 +2333,17 @@ describe('chat image integration transport', () => {
       {
         height: 480,
         id: 'image-one',
+        kind: 'IMAGE',
         mimeType: 'image/png',
         originalName: 'photo.png',
         width: 640,
+      },
+      {
+        height: 256,
+        id: 'sticker-one',
+        kind: 'STICKER',
+        mimeType: 'image/webp',
+        width: 256,
       },
     ]);
 

@@ -1,17 +1,7 @@
 import type { WebActionSummary } from '@arava/shared';
 import { formatDate } from '@arava/shared';
-import {
-  Badge,
-  Button,
-  Card,
-  CardContent,
-  Dialog,
-  EmptyState,
-  LoadingState,
-  Textarea,
-} from '@arava/ui';
+import { Badge, Button, Card, CardContent, Dialog, LoadingState, Textarea } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Globe2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { FreezeDialog } from '../subscriptions/freeze-dialog';
@@ -69,8 +59,8 @@ export function WebActionsSection() {
   const visibleActions = actions.data?.actions;
 
   return (
-    <Card className="mt-7" data-testid="web-actions-section">
-      <CardContent className="p-6">
+    <Card className="mt-5" data-testid="web-actions-section">
+      <CardContent className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-secondary">
@@ -92,13 +82,12 @@ export function WebActionsSection() {
           </p>
         ) : null}
         {!actions.isLoading && !visibleActions?.length ? (
-          <EmptyState
-            icon={Globe2}
-            title="Новых заявок нет"
-            description="Запросы с сайта появятся здесь после синхронизации."
-          />
+          <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-dashed border-border px-4 py-3">
+            <p className="text-sm font-semibold">Новых заявок нет</p>
+            <p className="text-xs text-muted-foreground">Проверка выполняется автоматически</p>
+          </div>
         ) : null}
-        <div className="mt-5 space-y-3">
+        <div className={visibleActions?.length ? 'mt-4 space-y-2' : ''}>
           {visibleActions?.map((action) => (
             <div className="rounded-2xl border border-border bg-muted/40 p-4" key={action.id}>
               <div className="flex flex-wrap items-start justify-between gap-3">

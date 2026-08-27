@@ -9,7 +9,6 @@ import {
   CardTitle,
   ErrorState,
   Money,
-  StatCard,
 } from '@arava/ui';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -200,7 +199,7 @@ export function DashboardPage() {
             <h3 className="text-xl font-semibold tracking-tight">Сегодня</h3>
             <span className="text-xs text-muted-foreground">Обновляется автоматически</span>
           </div>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
             <TodayCounter
               icon={CalendarDays}
               label="Занятий"
@@ -245,6 +244,37 @@ export function DashboardPage() {
               tone={paymentProblems ? 'critical' : 'neutral'}
               value={paymentProblems}
             />
+            <TodayCounter
+              icon={UserRoundCheck}
+              label="Ожидается учеников"
+              loading={stats.isLoading}
+              onClick={() => navigate('/attendance')}
+              value={currentStats.expectedToday}
+            />
+            <TodayCounter
+              icon={UserRoundCheck}
+              label="Отмечено"
+              loading={stats.isLoading}
+              onClick={() => navigate('/attendance')}
+              value={currentStats.attendanceMarked}
+            />
+            <TodayCounter
+              icon={CircleAlert}
+              label="Не отмечено"
+              loading={stats.isLoading}
+              onClick={() => navigate('/attendance')}
+              tone={currentStats.attendanceUnmarked ? 'warning' : 'neutral'}
+              value={currentStats.attendanceUnmarked}
+            />
+            {manager ? (
+              <TodayCounter
+                icon={CreditCard}
+                label="Выручка сегодня"
+                loading={stats.isLoading}
+                onClick={() => navigate('/finance')}
+                value={<Money amount={currentStats.revenueToday} />}
+              />
+            ) : null}
           </div>
         </section>
       )}
@@ -276,7 +306,7 @@ export function DashboardPage() {
         </section>
       ) : null}
 
-      <section className="mt-5 grid items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+      <section className="mt-5">
         <ActionQueue
           empty="На ближайшие семь дней отдельных предупреждений нет."
           icon={CalendarClock}
@@ -284,25 +314,6 @@ export function DashboardPage() {
           onNavigate={navigate}
           title="Ближайшее"
         />
-        <Card>
-          <CardHeader>
-            <CardTitle>Ход дня</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Актуальные операционные показатели.
-            </p>
-          </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-3">
-            <CompactMetric label="Ожидается учеников" value={currentStats.expectedToday} />
-            <CompactMetric label="Отмечено посещений" value={currentStats.attendanceMarked} />
-            <CompactMetric label="Не отмечено" value={currentStats.attendanceUnmarked} />
-            {manager ? (
-              <CompactMetric
-                label="Выручка сегодня"
-                value={<Money amount={currentStats.revenueToday} />}
-              />
-            ) : null}
-          </CardContent>
-        </Card>
       </section>
 
       {manager ? (
@@ -428,7 +439,7 @@ function TodayCounter({
   loading: boolean;
   onClick: () => void;
   tone?: 'critical' | 'neutral' | 'warning';
-  value: number;
+  value: ReactNode;
 }) {
   const toneClass =
     tone === 'critical'
@@ -436,9 +447,21 @@ function TodayCounter({
       : tone === 'warning'
         ? 'border-amber-200 bg-amber-50/70 dark:border-amber-500/20 dark:bg-amber-500/5'
         : '';
+  const Icon = icon;
   return (
-    <button className="min-w-0 text-left" onClick={onClick} type="button">
-      <StatCard className={toneClass} icon={icon} label={label} loading={loading} value={value} />
+    <button
+      className={`flex min-h-20 min-w-0 items-center gap-3 rounded-2xl border border-border bg-surface px-3 py-3 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-elevated ${toneClass}`}
+      onClick={onClick}
+      type="button"
+    >
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted">
+        {loading ? <span className="size-4 animate-pulse rounded bg-muted-foreground/20" /> : null}
+        {!loading ? <Icon className="size-4" /> : null}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-xs text-muted-foreground">{label}</span>
+        <span className="mt-1 block truncate text-lg font-semibold">{loading ? '—' : value}</span>
+      </span>
     </button>
   );
 }
@@ -489,14 +512,5 @@ function ActionQueue({
         ))}
       </CardContent>
     </Card>
-  );
-}
-
-function CompactMetric({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="rounded-2xl bg-muted/60 p-4">
-      <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <div className="mt-2 text-2xl font-semibold tracking-tight">{value}</div>
-    </div>
   );
 }

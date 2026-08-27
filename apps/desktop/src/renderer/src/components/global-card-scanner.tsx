@@ -18,6 +18,7 @@ import { GLOBAL_SEARCH_CLOSE_EVENT } from './global-search';
 
 export const SCANNER_MIN_LENGTH_KEY = 'arava-scanner-minimum-length';
 export const SCANNER_SETTINGS_EVENT = 'arava-scanner-settings-changed';
+const SCANNER_BURST_SETTLE_MS = 340;
 
 const feedback: Record<CardScanResult, string> = {
   ACCESS_DENIED: 'Нет доступа',
@@ -120,6 +121,7 @@ export function GlobalCardScanner() {
   const [selectedLessonId, setSelectedLessonId] = useState<string>();
   const [savingAttendance, setSavingAttendance] = useState(false);
   const hideTimer = useRef<number>();
+  const burstTimer = useRef<number>();
   const scanQueue = useRef(Promise.resolve());
 
   useEffect(() => {
@@ -141,6 +143,8 @@ export function GlobalCardScanner() {
       hideTimer.current = window.setTimeout(() => setMessage(undefined), 2800);
     };
     const reset = () => {
+      if (burstTimer.current) window.clearTimeout(burstTimer.current);
+      burstTimer.current = undefined;
       buffer.current.reset();
       editableSnapshot.current = undefined;
     };
@@ -178,6 +182,20 @@ export function GlobalCardScanner() {
         () => scan(barcode),
       );
     };
+    const completeScan = (event?: KeyboardEvent) => {
+      if (burstTimer.current) window.clearTimeout(burstTimer.current);
+      burstTimer.current = undefined;
+      const barcode = buffer.current.complete(minimumLength.current);
+      const snapshot = editableSnapshot.current;
+      editableSnapshot.current = undefined;
+      if (!barcode) return false;
+      event?.preventDefault();
+      event?.stopImmediatePropagation();
+      restoreEditable(snapshot);
+      window.dispatchEvent(new Event(GLOBAL_SEARCH_CLOSE_EVENT));
+      enqueueScan(barcode);
+      return true;
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey || event.altKey) {
         reset();
@@ -185,16 +203,7 @@ export function GlobalCardScanner() {
       }
       const occurredAt = event.timeStamp;
       if (event.key === 'Enter') {
-        const barcode = buffer.current.complete(minimumLength.current);
-        const snapshot = editableSnapshot.current;
-        editableSnapshot.current = undefined;
-        if (barcode) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          restoreEditable(snapshot);
-          window.dispatchEvent(new Event(GLOBAL_SEARCH_CLOSE_EVENT));
-          enqueueScan(barcode);
-        }
+        completeScan(event);
         return;
       }
       if (event.key.length !== 1 || event.key < '!' || event.key > '~') {
@@ -204,11 +213,14 @@ export function GlobalCardScanner() {
       if (buffer.current.shouldRestart(occurredAt)) reset();
       if (buffer.current.isEmpty()) editableSnapshot.current = snapshotEditable(event.target);
       buffer.current.append(event.key, occurredAt);
+      if (burstTimer.current) window.clearTimeout(burstTimer.current);
+      burstTimer.current = window.setTimeout(() => completeScan(), SCANNER_BURST_SETTLE_MS);
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
       if (hideTimer.current) window.clearTimeout(hideTimer.current);
+      if (burstTimer.current) window.clearTimeout(burstTimer.current);
     };
   }, [navigate, role]);
 

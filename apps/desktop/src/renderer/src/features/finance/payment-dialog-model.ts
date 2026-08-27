@@ -1,5 +1,16 @@
 import { formatMoney } from '@arava/ui';
 
+export function paymentOperationSubscriptionId({
+  subscriptionId,
+  subscriptionSale,
+}: {
+  subscriptionId?: string | undefined;
+  subscriptionSale: boolean;
+}): string | undefined {
+  if (subscriptionSale || !subscriptionId) return undefined;
+  return subscriptionId;
+}
+
 export function paymentSubmitLabel({
   amount,
   attendancePayment,

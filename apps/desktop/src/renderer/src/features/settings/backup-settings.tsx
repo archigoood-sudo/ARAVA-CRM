@@ -162,8 +162,8 @@ export function BackupSettings() {
             <div>
               <CardTitle>Резервные копии</CardTitle>
               <p className="mt-1 text-sm text-muted-foreground">
-                Резервные копии содержат базу данных ARAVA CRM и управляемые медиафайлы: слайды
-                экрана клиента и материалы публикаций.
+                Резервные копии содержат базу данных ARAVA CRM и управляемые медиафайлы: логотип,
+                слайды экрана клиента и материалы публикаций.
               </p>
             </div>
             <span className="flex size-11 items-center justify-center rounded-2xl bg-accent-soft text-accent-foreground dark:bg-accent/10 dark:text-accent">

@@ -42,15 +42,13 @@ export function StudentCommunicationCard({
       : undefined;
 
   return (
-    <Card className="mb-5" data-testid="student-communication">
-      <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
+    <Card data-testid="student-communication">
+      <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 px-4 pb-2 pt-4">
         <div>
           <CardTitle className="flex items-center gap-2">
             <MessageCircle className="size-5" /> Общение
           </CardTitle>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Личный диалог и причины, по которым нужно связаться
-          </p>
+          <p className="mt-1 text-xs text-muted-foreground">Личный диалог и причины для связи</p>
         </div>
         <Button
           aria-label="Обновить общение"
@@ -62,7 +60,7 @@ export function StudentCommunicationCard({
           <RefreshCw className={summary.isFetching ? 'size-4 animate-spin' : 'size-4'} />
         </Button>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-3 px-4 pb-4">
         {summary.isLoading ? (
           <p className="text-sm text-muted-foreground">Проверяем личную переписку…</p>
         ) : summary.isError ? (
@@ -72,11 +70,11 @@ export function StudentCommunicationCard({
         ) : null}
 
         {communicationAttention.length ? (
-          <div className="border-t border-border pt-4">
+          <div className="border-t border-border pt-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Причины для связи
             </p>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <div className="mt-2 grid gap-2">
               {communicationAttention.slice(0, 4).map((item) => (
                 <div className="rounded-xl bg-muted/60 p-3" key={item.id}>
                   <p className="text-sm font-semibold">{item.title}</p>
@@ -114,14 +112,14 @@ function SummaryState({
   if (summary.state === 'INACCESSIBLE') return null;
   if (summary.state === 'AMBIGUOUS')
     return (
-      <div className="rounded-2xl bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+      <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
         Найдено несколько связанных личных переписок. Откройте раздел «Чаты» и выберите контакт
         явно.
       </div>
     );
   if (summary.state === 'NO_CHAT')
     return (
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-muted/60 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted/60 p-3">
         <div>
           <p className="font-semibold">Личной переписки пока нет</p>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -141,7 +139,7 @@ function SummaryState({
     );
 
   return (
-    <div className="flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-border bg-background p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-border bg-background p-3">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           {summary.unreadCount ? (
@@ -168,7 +166,7 @@ function SummaryState({
       </div>
       {chatLink ? (
         <Link
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-accent px-5 text-sm font-semibold text-neutral-950 shadow-accent transition-all hover:bg-accent-strong"
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-accent px-3 text-sm font-semibold text-neutral-950 shadow-accent transition-all hover:bg-accent-strong"
           to={chatLink}
         >
           <MessageCircle className="size-4" /> Написать

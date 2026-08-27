@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { paymentSubmitLabel } from './payment-dialog-model';
+import { paymentOperationSubscriptionId, paymentSubmitLabel } from './payment-dialog-model';
 
 describe('подтверждение оплаты в ежедневном сценарии', () => {
   it('называет полную и частичную продажу по результату действия', () => {
@@ -41,5 +41,20 @@ describe('подтверждение оплаты в ежедневном сце
         subscriptionSale: false,
       }),
     ).toBe('Принять оплату');
+  });
+
+  it('не переносит выбранный старый абонемент в продажу нового', () => {
+    expect(
+      paymentOperationSubscriptionId({
+        subscriptionId: 'existing-subscription',
+        subscriptionSale: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      paymentOperationSubscriptionId({
+        subscriptionId: 'existing-subscription',
+        subscriptionSale: false,
+      }),
+    ).toBe('existing-subscription');
   });
 });
