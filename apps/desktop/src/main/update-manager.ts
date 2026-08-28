@@ -84,10 +84,13 @@ export class UpdateManager implements UpdateController {
 
     this.updater.autoDownload = false;
     this.updater.autoInstallOnAppQuit = false;
-    this.updater.allowDowngrade = false;
     const developmentChannel = this.options.channel === 'dev';
     this.updater.allowPrerelease = developmentChannel;
     if (developmentChannel) this.updater.channel = 'dev';
+    // electron-updater enables allowDowngrade when channel is assigned. Keep the
+    // development feed monotonic so a stable bridge can never install an older
+    // prerelease from the same patch line.
+    this.updater.allowDowngrade = false;
     this.bindUpdaterEvents();
 
     this.startupTimer = setTimeout(() => {

@@ -10,14 +10,26 @@ import {
 } from './update-manager';
 
 class MockUpdater extends EventEmitter {
+  private configuredChannel: string | null | undefined;
+
   public allowDowngrade = true;
   public allowPrerelease = true;
   public autoDownload = true;
   public autoInstallOnAppQuit = true;
-  public channel: string | null | undefined;
   public checkForUpdates = vi.fn(() => Promise.resolve(null));
   public downloadUpdate = vi.fn(() => Promise.resolve([] as string[]));
   public quitAndInstall = vi.fn();
+
+  public get channel(): string | null | undefined {
+    return this.configuredChannel;
+  }
+
+  public set channel(value: string | null | undefined) {
+    this.configuredChannel = value;
+    // Match electron-updater: assigning a channel enables downgrade unless the
+    // application explicitly disables it afterwards.
+    this.allowDowngrade = true;
+  }
 }
 
 function createManager(
@@ -146,6 +158,7 @@ describe('UpdateManager', () => {
     const development = createManager('OWNER', { channel: 'dev', platform: 'win32' });
     expect(development.updater.allowPrerelease).toBe(true);
     expect(development.updater.channel).toBe('dev');
+    expect(development.updater.allowDowngrade).toBe(false);
     development.manager.shutdown();
   });
 

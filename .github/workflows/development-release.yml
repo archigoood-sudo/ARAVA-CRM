@@ -60,9 +60,7 @@ jobs:
         shell: pwsh
         run: |
           $current = node -p "require('./apps/desktop/package.json').version"
-          $parts = $current.Split('.')
-          $nextPatch = [int]$parts[2] + 1
-          $version = "$($parts[0]).$($parts[1]).$nextPatch-dev.${{ github.run_number }}"
+          $version = node scripts/compute-development-version.mjs $current "${{ github.run_number }}"
           "value=$version" >> $env:GITHUB_OUTPUT
           Write-Host "Development version: $version"
       - run: npm ci
@@ -84,6 +82,15 @@ jobs:
           Set-Location apps/desktop
           npx electron-builder --config electron-builder.dev.yml --win nsis --x64 --publish always `
             --config.extraMetadata.version=${{ steps.version.outputs.value }}
+      - name: Verify development package metadata
+        shell: pwsh
+        run: |
+          $metadata = Get-Content apps/desktop/release/win-unpacked/resources/app-metadata.json | ConvertFrom-Json
+          if ($metadata.appVersion -ne '${{ steps.version.outputs.value }}') { throw 'Development app version mismatch' }
+          if ($metadata.updateChannel -ne 'dev') { throw 'Development update channel mismatch' }
+          if (-not (Select-String -Path apps/desktop/release/dev.yml -Pattern '^version: ${{ steps.version.outputs.value }}$' -Quiet)) {
+            throw 'dev.yml version mismatch'
+          }
       - name: Record installer checksum
         shell: pwsh
         run: |
