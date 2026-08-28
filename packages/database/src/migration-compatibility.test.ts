@@ -308,7 +308,8 @@ describe('Prisma and packaged runtime migration compatibility', () => {
           id !== '20260818000000_sprint_4_4a' &&
           id !== '20260818020000_sprint_4_4d' &&
           id !== '20260818030000_sprint_4_5a' &&
-          id !== '20260822000000_trainer_sync_1',
+          id !== '20260822000000_trainer_sync_1' &&
+          id !== '20260828010000_student_documents',
       )) {
         await database.$executeRawUnsafe('INSERT INTO "_AppMigration" ("id") VALUES (?)', id);
       }
@@ -341,6 +342,7 @@ describe('Prisma and packaged runtime migration compatibility', () => {
       ).toMatchObject({ value: 'true' });
       expect(await database.syncOutbox.count()).toBe(0);
       expect(await database.publication.count()).toBe(0);
+      expect(await database.studentDocument.count()).toBe(0);
       await database.branch.update({
         data: { name: 'Обновлённый филиал' },
         where: { id: 'preserved-branch' },

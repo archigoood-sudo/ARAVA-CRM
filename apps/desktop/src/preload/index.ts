@@ -409,6 +409,19 @@ const desktopApi: AravaDesktopApi = {
     updateNote: (token, noteId, input) =>
       invoke(IPC_CHANNELS.studentNoteUpdate, token, noteId, input),
   },
+  studentDocuments: {
+    changeStatus: (token, id, input) =>
+      invoke(IPC_CHANNELS.studentDocumentChangeStatus, token, id, input),
+    create: (token, studentId, input) =>
+      invoke(IPC_CHANNELS.studentDocumentCreate, token, studentId, input),
+    list: (token, studentId) => invoke(IPC_CHANNELS.studentDocumentList, token, studentId),
+    openAttachment: async (token, id) => {
+      await invoke(IPC_CHANNELS.studentDocumentOpenAttachment, token, id);
+    },
+    removeAttachment: (token, id) =>
+      invoke(IPC_CHANNELS.studentDocumentRemoveAttachment, token, id),
+    selectAttachment: (token) => invoke(IPC_CHANNELS.studentDocumentSelectAttachment, token),
+  },
   system: { information: (token) => invoke(IPC_CHANNELS.systemInformation, token) },
   updates: {
     check: (token) => invoke(IPC_CHANNELS.updateCheck, token),

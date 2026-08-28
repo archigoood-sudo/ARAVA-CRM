@@ -88,6 +88,8 @@ import {
   type StudentBulkMoveToGroupInput,
   type StudentBulkRemoveFromGroupInput,
   type StudentInput,
+  type StudentDocumentInput,
+  type StudentDocumentStatusInput,
   type StudentNoteInput,
   type StudentListQuery,
   type SubscriptionAdjustmentInput,
@@ -219,6 +221,74 @@ export const studentListQuerySchema: z.ZodType<StudentListQuery> = z.object({
 
 export const studentNoteInputSchema: z.ZodType<StudentNoteInput> = z.object({
   text: z.string().trim().min(1, 'Введите текст заметки.').max(4000),
+});
+
+const studentDocumentTypeSchema = z.enum(['CONTRACT', 'PERSONAL_DATA_CONSENT', 'MEDIA_CONSENT']);
+const studentDocumentStatusSchema = z.enum([
+  'ACTIVE',
+  'COMPLETED',
+  'CANCELLED',
+  'CONSENTED',
+  'REVOKED',
+  'NOT_PROVIDED',
+  'ALLOWED',
+  'NOT_ALLOWED',
+]);
+const studentDocumentAttachmentSchema = z.object({
+  fileName: z.string().trim().min(1).max(240),
+  mediaId: z.string().regex(/^[\da-f-]+\.(?:pdf|jpe?g|png)$/iu),
+  mimeType: z.enum(['application/pdf', 'image/jpeg', 'image/png']),
+});
+
+export const studentDocumentInputSchema: z.ZodType<StudentDocumentInput> = z
+  .object({
+    attachment: studentDocumentAttachmentSchema.optional(),
+    contractNumber: optionalText(40),
+    documentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u, 'Укажите дату документа.'),
+    documentType: studentDocumentTypeSchema,
+    note: optionalText(2000),
+    representativeContactId: z.string().min(1).max(100).optional(),
+    source: z.enum(['GENERATED', 'EXISTING']),
+    status: studentDocumentStatusSchema,
+  })
+  .superRefine((input, context) => {
+    const allowedStatuses: Record<StudentDocumentInput['documentType'], readonly string[]> = {
+      CONTRACT: ['ACTIVE', 'COMPLETED', 'CANCELLED'],
+      MEDIA_CONSENT: ['ALLOWED', 'NOT_ALLOWED', 'REVOKED', 'NOT_PROVIDED'],
+      PERSONAL_DATA_CONSENT: ['CONSENTED', 'REVOKED', 'NOT_PROVIDED'],
+    };
+    if (!allowedStatuses[input.documentType].includes(input.status)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Некорректное состояние документа.',
+        path: ['status'],
+      });
+    }
+    if (input.documentType !== 'CONTRACT' && input.contractNumber) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Номер доступен только для договора.',
+        path: ['contractNumber'],
+      });
+    }
+    if (input.documentType === 'CONTRACT' && input.source === 'EXISTING' && !input.contractNumber) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Укажите номер существующего договора.',
+        path: ['contractNumber'],
+      });
+    }
+    if (input.source === 'GENERATED' && input.documentType !== 'CONTRACT') {
+      context.addIssue({
+        code: 'custom',
+        message: 'Генерация согласий пока недоступна.',
+        path: ['source'],
+      });
+    }
+  });
+
+export const studentDocumentStatusInputSchema: z.ZodType<StudentDocumentStatusInput> = z.object({
+  status: studentDocumentStatusSchema,
 });
 
 export const studentContactInputSchema: z.ZodType<StudentContactInput> = z.object({

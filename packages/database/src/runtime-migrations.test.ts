@@ -29,6 +29,7 @@ describe('runtime migrations', () => {
       '20260825010000_unified_subscription_sale',
       '20260826000000_trial_workflow',
       '20260826010000_trial_sync',
+      '20260828010000_student_documents',
     ]);
   });
 });

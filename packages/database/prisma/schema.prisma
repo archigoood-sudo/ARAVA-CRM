@@ -22,6 +22,17 @@ enum StudentStatus {
   ARCHIVED
 }
 
+enum StudentDocumentType {
+  CONTRACT
+  PERSONAL_DATA_CONSENT
+  MEDIA_CONSENT
+}
+
+enum StudentDocumentSource {
+  GENERATED
+  EXISTING
+}
+
 enum Gender {
   FEMALE
   MALE
@@ -423,6 +434,7 @@ model Student {
   cardScans       CardScanEvent[]
   profileNotes    StudentNote[]
   trialAppointments TrialAppointment[]
+  documents       StudentDocument[]
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   archivedAt      DateTime?
@@ -1091,10 +1103,58 @@ model StudentContact {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   archivedAt     DateTime?
+  signedDocuments StudentDocument[] @relation("StudentDocumentSigner")
 
   @@index([studentId, archivedAt])
   @@index([studentId, isPrimary])
   @@index([phone])
+}
+
+model StudentDocument {
+  id                      String                @id @default(cuid())
+  studentId               String
+  student                 Student               @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  documentType            StudentDocumentType
+  documentDate            DateTime
+  status                  String
+  source                  StudentDocumentSource
+  representativeContactId String?
+  representativeContact   StudentContact?       @relation("StudentDocumentSigner", fields: [representativeContactId], references: [id], onDelete: SetNull)
+  attachmentMediaId       String?
+  attachmentFileName      String?
+  attachmentMimeType      String?
+  note                    String?
+  contractDetail          StudentContractDetail?
+  statusHistory           StudentDocumentStatusHistory[]
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+
+  @@index([studentId, documentType, documentDate])
+  @@index([representativeContactId])
+}
+
+model StudentContractDetail {
+  documentId     String          @id
+  document       StudentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  contractNumber String          @unique
+}
+
+model StudentDocumentStatusHistory {
+  id              String          @id @default(cuid())
+  documentId      String
+  document        StudentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  previousStatus  String?
+  status          String
+  changedByUserId String
+  changedAt       DateTime        @default(now())
+
+  @@index([documentId, changedAt])
+}
+
+model ContractNumberSequence {
+  year       Int      @id
+  nextNumber Int
+  updatedAt  DateTime @updatedAt
 }
 
 model StudentNote {

@@ -63,6 +63,7 @@ import { ClientWebAccessCard } from './client-web-access-card';
 import { StudentDialog } from './student-dialog';
 import { StudentBulkDialog } from './student-bulk-dialog';
 import { StudentCommunicationCard } from './student-communication-card';
+import { StudentDocumentsCard } from './student-documents-card';
 import { StudentFinance } from '../subscriptions/student-finance';
 import { StudentCard } from '../cards/student-card';
 
@@ -641,6 +642,10 @@ export function StudentProfilePage() {
             )}
           </CardContent>
         </Card>
+      ) : null}
+
+      {profile.access === 'ADMIN' ? (
+        <StudentDocumentsCard contacts={detail.contacts} studentId={studentId} />
       ) : null}
 
       <div

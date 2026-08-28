@@ -50,9 +50,10 @@ const BACKUP_FORMAT_VERSION = 1;
 const MANAGED_MEDIA_DIRECTORIES = [
   'media/branding',
   'media/customer-display',
+  'media/documents',
   'media/publications',
 ] as const;
-const ALLOWED_MEDIA_EXTENSION = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const ALLOWED_MEDIA_EXTENSION = new Set(['.jpg', '.jpeg', '.png', '.webp', '.pdf']);
 const AUTOMATIC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const SELECTION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_RETENTION_COUNT = 30;

@@ -14,6 +14,8 @@ export type DomainAction =
   | 'cards:read'
   | 'cards:scan'
   | 'contacts:manage'
+  | 'documents:manage'
+  | 'documents:read'
   | 'attendance:manage'
   | 'groups:manage'
   | 'groups:read'
@@ -55,6 +57,8 @@ const allowedRoles: Record<DomainAction, readonly UserRole[]> = {
   'cards:read': ['OWNER', 'ADMIN'],
   'cards:scan': ['OWNER', 'ADMIN', 'COACH'],
   'contacts:manage': ['OWNER', 'ADMIN'],
+  'documents:manage': ['OWNER', 'ADMIN'],
+  'documents:read': ['OWNER', 'ADMIN'],
   'groups:manage': ['OWNER', 'ADMIN'],
   'groups:read': ['OWNER', 'ADMIN', 'COACH'],
   'lessons:manage': ['OWNER', 'ADMIN'],

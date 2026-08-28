@@ -15,6 +15,7 @@ import {
   PublicationService,
   StudioService,
   StudentProfileService,
+  StudentDocumentService,
   StudentBulkService,
   TrainerProfileService,
   AttentionService,
@@ -107,6 +108,8 @@ import {
   studentInputSchema,
   studentListQuerySchema,
   studentNoteInputSchema,
+  studentDocumentInputSchema,
+  studentDocumentStatusInputSchema,
   subscriptionAdjustmentInputSchema,
   subscriptionCreateInputSchema,
   subscriptionUpdateInputSchema,
@@ -129,7 +132,7 @@ import {
 } from '@arava/shared';
 import { app, dialog, ipcMain, shell } from 'electron';
 import { basename, dirname, extname, join } from 'node:path';
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import type { EnrollmentStatus } from '@prisma/client';
@@ -209,6 +212,7 @@ export function createIpcHandlers(
   const cards = new CardService(database, service);
   const search = new GlobalSearchService(database, service);
   const studentProfiles = new StudentProfileService(database, service);
+  const studentDocuments = new StudentDocumentService(database, service);
   const studentBulk = new StudentBulkService(database, service);
   const trainerProfiles = new TrainerProfileService(database, service);
   const attention = new AttentionService(database, service);
@@ -290,6 +294,7 @@ export function createIpcHandlers(
     };
   };
   const publicationMediaDirectory = join(dirname(databasePath), 'media', 'publications');
+  const documentMediaDirectory = join(dirname(databasePath), 'media', 'documents');
   const brandingMediaDirectory = join(dirname(databasePath), 'media', 'branding');
   const readBrandingLogo = async (): Promise<BrandingLogo | undefined> => {
     const setting = await database.appSetting.findUnique({
@@ -1577,6 +1582,80 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
       ),
+    [IPC_CHANNELS.studentDocumentList]: (unsafeToken, unsafeStudentId) =>
+      studentDocuments.list(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+      ),
+    [IPC_CHANNELS.studentDocumentCreate]: (unsafeToken, unsafeStudentId, unsafeInput) =>
+      studentDocuments.create(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+        studentDocumentInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.studentDocumentChangeStatus]: (unsafeToken, unsafeId, unsafeInput) => {
+      const input = studentDocumentStatusInputSchema.parse(unsafeInput);
+      return studentDocuments.changeStatus(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        input.status,
+      );
+    },
+    [IPC_CHANNELS.studentDocumentSelectAttachment]: async (unsafeToken) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      assertPermission(await service.authenticate(token), 'documents:manage');
+      const selection = await dialog.showOpenDialog({
+        filters: [{ extensions: ['pdf', 'jpg', 'jpeg', 'png'], name: 'PDF и изображения' }],
+        properties: ['openFile'],
+        title: 'Выберите документ',
+      });
+      const source = selection.filePaths[0];
+      if (selection.canceled || !source) return undefined;
+      const bytes = await readFile(source);
+      if (!bytes.length || bytes.length > 20 * 1024 * 1024)
+        throw new Error('Документ должен быть не больше 20 МБ.');
+      const extension = extname(source).toLowerCase();
+      const signatureValid =
+        (extension === '.pdf' && bytes.subarray(0, 5).toString('ascii') === '%PDF-') ||
+        (extension === '.png' &&
+          bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+        ((extension === '.jpg' || extension === '.jpeg') &&
+          bytes.length >= 3 &&
+          bytes[0] === 255 &&
+          bytes[1] === 216 &&
+          bytes[2] === 255);
+      if (!signatureValid) throw new Error('Содержимое файла не соответствует его формату.');
+      const mediaId = `${randomUUID()}${extension}`;
+      await mkdir(documentMediaDirectory, { recursive: true });
+      await copyFile(source, join(documentMediaDirectory, mediaId));
+      return {
+        fileName: basename(source),
+        mediaId,
+        mimeType:
+          extension === '.pdf'
+            ? ('application/pdf' as const)
+            : extension === '.png'
+              ? ('image/png' as const)
+              : ('image/jpeg' as const),
+      };
+    },
+    [IPC_CHANNELS.studentDocumentOpenAttachment]: async (unsafeToken, unsafeId) => {
+      const attachment = await studentDocuments.attachment(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      );
+      if (!attachment) throw new Error('Файл документа не найден.');
+      const result = await shell.openPath(join(documentMediaDirectory, attachment.mediaId));
+      if (result) throw new Error('Не удалось открыть файл документа.');
+    },
+    [IPC_CHANNELS.studentDocumentRemoveAttachment]: async (unsafeToken, unsafeId) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      const attachment = await studentDocuments.attachment(token, id);
+      const result = await studentDocuments.removeAttachment(token, id);
+      if (attachment) await rm(join(documentMediaDirectory, attachment.mediaId), { force: true });
+      return result;
+    },
     [IPC_CHANNELS.trainerProfileGet]: (unsafeToken, unsafeId, unsafeMonth) =>
       trainerProfiles.getOverview(
         sessionTokenSchema.parse(unsafeToken),

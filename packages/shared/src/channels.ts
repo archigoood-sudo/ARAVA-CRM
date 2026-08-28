@@ -415,6 +415,12 @@ export const IPC_CHANNELS = {
   studentCreate: 'student:create',
   studentGet: 'student:get',
   studentProfileGet: 'student-profile:get',
+  studentDocumentList: 'student-document:list',
+  studentDocumentCreate: 'student-document:create',
+  studentDocumentChangeStatus: 'student-document:change-status',
+  studentDocumentSelectAttachment: 'student-document:select-attachment',
+  studentDocumentOpenAttachment: 'student-document:open-attachment',
+  studentDocumentRemoveAttachment: 'student-document:remove-attachment',
   trainerProfileGet: 'trainer-profile:get',
   studentNoteCreate: 'student-note:create',
   studentNoteUpdate: 'student-note:update',
@@ -803,6 +809,58 @@ export interface StudentProfileOverview {
   trials: TrialAppointmentSummary[];
   upcomingLessons: StudentProfileLesson[];
   warnings: StudentProfileWarning[];
+}
+
+export type StudentDocumentType = 'CONTRACT' | 'PERSONAL_DATA_CONSENT' | 'MEDIA_CONSENT';
+export type StudentDocumentSource = 'GENERATED' | 'EXISTING';
+export type ContractDocumentStatus = 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
+export type PersonalDataConsentStatus = 'CONSENTED' | 'REVOKED' | 'NOT_PROVIDED';
+export type MediaConsentStatus = 'ALLOWED' | 'NOT_ALLOWED' | 'REVOKED' | 'NOT_PROVIDED';
+export type StudentDocumentStatus =
+  ContractDocumentStatus | PersonalDataConsentStatus | MediaConsentStatus;
+
+export interface StudentDocumentAttachmentInput {
+  fileName: string;
+  mediaId: string;
+  mimeType: 'application/pdf' | 'image/jpeg' | 'image/png';
+}
+
+export interface StudentDocumentInput {
+  attachment?: StudentDocumentAttachmentInput | undefined;
+  contractNumber?: string | undefined;
+  documentDate: string;
+  documentType: StudentDocumentType;
+  note?: string | undefined;
+  representativeContactId?: string | undefined;
+  source: StudentDocumentSource;
+  status: StudentDocumentStatus;
+}
+
+export interface StudentDocumentStatusInput {
+  status: StudentDocumentStatus;
+}
+
+export interface StudentDocumentHistoryEntry {
+  changedAt: string;
+  previousStatus?: string | undefined;
+  status: string;
+}
+
+export interface StudentDocumentSummary {
+  attachment?: StudentDocumentAttachmentInput | undefined;
+  contractNumber?: string | undefined;
+  createdAt: string;
+  documentDate: string;
+  documentType: StudentDocumentType;
+  id: string;
+  note?: string | undefined;
+  representativeContactId?: string | undefined;
+  representativeName?: string | undefined;
+  source: StudentDocumentSource;
+  status: StudentDocumentStatus;
+  statusHistory: StudentDocumentHistoryEntry[];
+  studentId: string;
+  updatedAt: string;
 }
 
 export type ClientWebAccessState =
@@ -3541,6 +3599,22 @@ export interface AravaDesktopApi {
       noteId: string,
       input: StudentNoteInput,
     ) => Promise<StudentProfileNote>;
+  };
+  studentDocuments: {
+    changeStatus: (
+      token: string,
+      id: string,
+      input: StudentDocumentStatusInput,
+    ) => Promise<StudentDocumentSummary>;
+    create: (
+      token: string,
+      studentId: string,
+      input: StudentDocumentInput,
+    ) => Promise<StudentDocumentSummary>;
+    list: (token: string, studentId: string) => Promise<StudentDocumentSummary[]>;
+    openAttachment: (token: string, id: string) => Promise<void>;
+    removeAttachment: (token: string, id: string) => Promise<StudentDocumentSummary>;
+    selectAttachment: (token: string) => Promise<StudentDocumentAttachmentInput | undefined>;
   };
   system: {
     information: (token: string) => Promise<SystemInformation>;

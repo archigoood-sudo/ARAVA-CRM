@@ -790,4 +790,17 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'CREATE TRIGGER "sync_trial_appointment_update" AFTER UPDATE ON "TrialAppointment" WHEN COALESCE((SELECT "value" FROM "AppSetting" WHERE "key" = \'integration.applyingRemote\'), \'false\') != \'true\' BEGIN\n  INSERT INTO "SyncOutbox" ("id", "entityType", "entityId", "operation", "idempotencyKey", "baseRevision", "updatedAt")\n  VALUES (lower(hex(randomblob(16))), \'TRIAL_APPOINTMENT\', NEW."id", \'UPSERT\', lower(hex(randomblob(16))), COALESCE((SELECT "revision" FROM "SyncEntityState" WHERE "entityType" = \'TRIAL_APPOINTMENT\' AND "entityId" = NEW."id"), 0), CURRENT_TIMESTAMP);\nEND',
     ],
   },
+  {
+    id: '20260828010000_student_documents',
+    statements: [
+      'CREATE TABLE "StudentDocument" (\n  "id" TEXT NOT NULL PRIMARY KEY,\n  "studentId" TEXT NOT NULL,\n  "documentType" TEXT NOT NULL,\n  "documentDate" DATETIME NOT NULL,\n  "status" TEXT NOT NULL,\n  "source" TEXT NOT NULL,\n  "representativeContactId" TEXT,\n  "attachmentMediaId" TEXT,\n  "attachmentFileName" TEXT,\n  "attachmentMimeType" TEXT,\n  "note" TEXT,\n  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  "updatedAt" DATETIME NOT NULL,\n  CONSTRAINT "StudentDocument_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "Student" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT "StudentDocument_representativeContactId_fkey" FOREIGN KEY ("representativeContactId") REFERENCES "StudentContact" ("id") ON DELETE SET NULL ON UPDATE CASCADE\n)',
+      'CREATE TABLE "StudentContractDetail" (\n  "documentId" TEXT NOT NULL PRIMARY KEY,\n  "contractNumber" TEXT NOT NULL,\n  CONSTRAINT "StudentContractDetail_documentId_fkey" FOREIGN KEY ("documentId") REFERENCES "StudentDocument" ("id") ON DELETE CASCADE ON UPDATE CASCADE\n)',
+      'CREATE TABLE "StudentDocumentStatusHistory" (\n  "id" TEXT NOT NULL PRIMARY KEY,\n  "documentId" TEXT NOT NULL,\n  "previousStatus" TEXT,\n  "status" TEXT NOT NULL,\n  "changedByUserId" TEXT NOT NULL,\n  "changedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT "StudentDocumentStatusHistory_documentId_fkey" FOREIGN KEY ("documentId") REFERENCES "StudentDocument" ("id") ON DELETE CASCADE ON UPDATE CASCADE\n)',
+      'CREATE TABLE "ContractNumberSequence" (\n  "year" INTEGER NOT NULL PRIMARY KEY,\n  "nextNumber" INTEGER NOT NULL,\n  "updatedAt" DATETIME NOT NULL\n)',
+      'CREATE INDEX "StudentDocument_studentId_documentType_documentDate_idx" ON "StudentDocument"("studentId", "documentType", "documentDate")',
+      'CREATE INDEX "StudentDocument_representativeContactId_idx" ON "StudentDocument"("representativeContactId")',
+      'CREATE UNIQUE INDEX "StudentContractDetail_contractNumber_key" ON "StudentContractDetail"("contractNumber")',
+      'CREATE INDEX "StudentDocumentStatusHistory_documentId_changedAt_idx" ON "StudentDocumentStatusHistory"("documentId", "changedAt")',
+    ],
+  },
 ];

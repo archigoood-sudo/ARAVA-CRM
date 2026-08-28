@@ -123,6 +123,7 @@ export { CalendarService } from './calendar-service';
 export { CardService } from './card-service';
 export { GlobalSearchService } from './global-search-service';
 export { StudentProfileService } from './student-profile-service';
+export { StudentDocumentService } from './student-document-service';
 export { StudentBulkService } from './student-bulk-service';
 export { TrainerProfileService } from './trainer-profile-service';
 export { ChatService } from './chat-service';
