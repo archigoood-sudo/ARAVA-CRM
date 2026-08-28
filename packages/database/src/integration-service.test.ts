@@ -68,12 +68,16 @@ describe('Sprint 4.5A multi-device integration', () => {
       payload: Record<string, unknown>;
       revision: number;
       sequence: number;
+      sourceDeviceId?: string;
     }
   >;
   let changes: Record<string, unknown>[];
   let conflictSequence: number;
   let changesRequestStarted: (() => void) | undefined;
   let changesResponseGate: Promise<void> | undefined;
+  let syncRequestStarted: (() => void) | undefined;
+  let syncResponseGate: Promise<void> | undefined;
+  let syncResultsByIdempotencyKey: Map<string, Record<string, unknown>>;
   let deviceList: Record<string, unknown>[];
   let database: DatabaseClient;
   let directory: string;
@@ -111,6 +115,9 @@ describe('Sprint 4.5A multi-device integration', () => {
     conflictSequence = 0;
     changesRequestStarted = undefined;
     changesResponseGate = undefined;
+    syncRequestStarted = undefined;
+    syncResponseGate = undefined;
+    syncResultsByIdempotencyKey = new Map();
     deviceList = [];
     failedProbe = undefined;
     healthApiVersion = 'v1';
@@ -311,7 +318,7 @@ describe('Sprint 4.5A multi-device integration', () => {
                   revision: value.revision,
                   sequence: value.sequence,
                   serverUpdatedAt: now.toISOString(),
-                  sourceDeviceId: 'mock-server',
+                  sourceDeviceId: value.sourceDeviceId ?? 'mock-server',
                 };
               })
             : changes;
@@ -450,9 +457,16 @@ describe('Sprint 4.5A multi-device integration', () => {
         return;
       }
       const operations = Array.isArray(requestBody.operations) ? requestBody.operations : [];
+      if (request.method === 'POST' && request.url?.endsWith('/sync/batch')) {
+        syncRequestStarted?.();
+        if (syncResponseGate) await syncResponseGate;
+      }
       json(response, 200, {
         accepted: operations.map((operation) => {
           const value = operation as Record<string, unknown>;
+          const idempotencyKey = String(value.idempotencyKey);
+          const previousResult = syncResultsByIdempotencyKey.get(idempotencyKey);
+          if (previousResult) return previousResult;
           const key = `${String(value.entityType)}:${String(value.entityId)}`;
           const previous = canonical.get(key);
           const payload = value.payload as Record<string, unknown>;
@@ -492,7 +506,7 @@ describe('Sprint 4.5A multi-device integration', () => {
               sourceDeviceId: request.headers['x-arava-device-id'],
               status: 'OPEN',
             });
-            return {
+            const result = {
               canonicalOperation: previous.operation,
               canonicalPayload: previous.payload,
               conflictId,
@@ -503,9 +517,11 @@ describe('Sprint 4.5A multi-device integration', () => {
               status: 'CONFLICT',
               version: value.version,
             };
+            syncResultsByIdempotencyKey.set(idempotencyKey, result);
+            return result;
           }
           if (previous && JSON.stringify(payload) === JSON.stringify(previous.payload)) {
-            return {
+            const result = {
               canonicalOperation: previous.operation,
               canonicalPayload: previous.payload,
               entityId: value.entityId,
@@ -515,6 +531,8 @@ describe('Sprint 4.5A multi-device integration', () => {
               status: 'ACCEPTED',
               version: value.version,
             };
+            syncResultsByIdempotencyKey.set(idempotencyKey, result);
+            return result;
           }
           const revision = (previous?.revision ?? 0) + 1;
           const sequence = changes.length + 1;
@@ -523,6 +541,7 @@ describe('Sprint 4.5A multi-device integration', () => {
             payload,
             revision,
             sequence,
+            sourceDeviceId: String(request.headers['x-arava-device-id']),
           });
           changes.push({
             entityId: value.entityId,
@@ -534,7 +553,7 @@ describe('Sprint 4.5A multi-device integration', () => {
             serverUpdatedAt: now.toISOString(),
             sourceDeviceId: request.headers['x-arava-device-id'],
           });
-          return {
+          const result = {
             canonicalOperation: value.operation,
             canonicalPayload: payload,
             entityId: value.entityId,
@@ -544,6 +563,8 @@ describe('Sprint 4.5A multi-device integration', () => {
             status: 'ACCEPTED',
             version: value.version,
           };
+          syncResultsByIdempotencyKey.set(idempotencyKey, result);
+          return result;
         }),
         apiVersion: 'v1',
         serverTimestamp: now.toISOString(),
@@ -1821,6 +1842,283 @@ describe('Sprint 4.5A multi-device integration', () => {
       status: 'SYNCED',
     });
     expect(await database.syncLog.count({ where: { outboxId: retry.id } })).toBe(2);
+  });
+
+  it('rebases a rapid second mutation from the same device after a delayed acknowledgement', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, {
+      name: 'Последовательные изменения',
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Без конфликта',
+      status: 'ACTIVE',
+    });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 20,
+      direction: 'Контемп',
+      name: 'Без ложных конфликтов',
+      status: 'ACTIVE',
+    });
+    for (let cycle = 0; cycle < 4; cycle += 1) await integration.processPending();
+    expect(await database.syncOutbox.count({ where: { status: 'PENDING' } })).toBe(0);
+    received = [];
+
+    const membership = await studio.addEnrollment(ownerToken, group.id, {
+      joinedAt: '2030-08-18',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: student.id,
+    });
+    let releaseSync: () => void = () => undefined;
+    syncResponseGate = new Promise<void>((resolve) => {
+      releaseSync = resolve;
+    });
+    const firstSyncRequest = new Promise<void>((resolve) => {
+      syncRequestStarted = resolve;
+    });
+    const firstSync = integration.processPending();
+    await firstSyncRequest;
+    await studio.removeEnrollment(ownerToken, group.id, membership.id);
+    syncResponseGate = undefined;
+    releaseSync();
+    await firstSync;
+
+    await integration.processPending();
+
+    const membershipRequests = received
+      .filter(({ method, path }) => method === 'POST' && path === '/api/integration/v1/sync/batch')
+      .flatMap(({ operations }) =>
+        Array.isArray(operations) ? operations.map((operation: unknown) => operation) : [],
+      )
+      .filter(
+        (operation) =>
+          typeof operation === 'object' &&
+          operation !== null &&
+          (operation as Record<string, unknown>).entityType === 'GROUP_MEMBERSHIP' &&
+          (operation as Record<string, unknown>).entityId === membership.id,
+      ) as Record<string, unknown>[];
+    expect(membershipRequests.map(({ baseRevision }) => baseRevision)).toEqual([0, 1]);
+    expect(
+      await database.syncEntityState.findUnique({
+        where: {
+          entityType_entityId: {
+            entityId: membership.id,
+            entityType: 'GROUP_MEMBERSHIP',
+          },
+        },
+      }),
+    ).toMatchObject({ revision: 2, sourceDeviceId: credentials.deviceId });
+    expect(await database.syncOutbox.count({ where: { status: 'PENDING' } })).toBe(0);
+    expect(await database.syncConflict.count({ where: { status: 'OPEN' } })).toBe(0);
+    expect(managedConflicts).toHaveLength(0);
+  });
+
+  it('recognizes its own canonical pull while acknowledgement cleanup is still pending', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, {
+      name: 'Собственное подтверждение',
+    });
+    const payload = await integration.safePayload('BRANCH', branch.id);
+    const outbox = await database.syncOutbox.findFirstOrThrow({ where: { entityId: branch.id } });
+    await database.syncOutbox.update({
+      data: {
+        nextAttemptAt: new Date('2040-01-01T00:00:00.000Z'),
+        payloadJson: JSON.stringify(payload),
+      },
+      where: { id: outbox.id },
+    });
+    canonical.set(`BRANCH:${branch.id}`, {
+      operation: 'UPSERT',
+      payload,
+      revision: 1,
+      sequence: 1,
+      sourceDeviceId: credentials.deviceId,
+    });
+    await database.appSetting.upsert({
+      create: { key: 'integration.reconciliationApproved', value: 'true' },
+      update: { value: 'true' },
+      where: { key: 'integration.reconciliationApproved' },
+    });
+    changes.push({
+      entityId: branch.id,
+      entityType: 'BRANCH',
+      operation: 'UPSERT',
+      payload,
+      revision: 1,
+      sequence: 1,
+      serverUpdatedAt: now.toISOString(),
+      sourceDeviceId: credentials.deviceId,
+    });
+
+    await integration.processPending();
+
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: outbox.id } })).toMatchObject(
+      {
+        status: 'SYNCED',
+      },
+    );
+    expect(await database.syncConflict.count({ where: { status: 'OPEN' } })).toBe(0);
+    expect(
+      await database.syncEntityState.findUnique({
+        where: { entityType_entityId: { entityId: branch.id, entityType: 'BRANCH' } },
+      }),
+    ).toMatchObject({ revision: 1, sourceDeviceId: credentials.deviceId });
+  });
+
+  it('retries PROCESSING outbox rows immediately after an application restart', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Повтор после рестарта' });
+    const outbox = await database.syncOutbox.findFirstOrThrow({ where: { entityId: branch.id } });
+    await database.syncOutbox.update({
+      data: { lastAttemptAt: now, status: 'PROCESSING' },
+      where: { id: outbox.id },
+    });
+    const restarted = new IntegrationService(
+      database,
+      application,
+      credentials,
+      new IntegrationApiClient(),
+      () => now,
+    );
+
+    await restarted.initialize();
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: outbox.id } })).toMatchObject(
+      {
+        status: 'PENDING',
+      },
+    );
+    await restarted.processPending();
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: outbox.id } })).toMatchObject(
+      {
+        idempotencyKey: outbox.idempotencyKey,
+        status: 'SYNCED',
+      },
+    );
+    expect(await database.syncConflict.count({ where: { status: 'OPEN' } })).toBe(0);
+  });
+
+  it('accepts duplicate delivery with the original idempotency result and no duplicate conflict', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Идемпотентная доставка' });
+    await integration.processPending();
+    const outbox = await database.syncOutbox.findFirstOrThrow({ where: { entityId: branch.id } });
+    const changeCount = changes.length;
+    await database.syncOutbox.update({
+      data: { nextAttemptAt: now, status: 'PENDING', syncedAt: null },
+      where: { id: outbox.id },
+    });
+
+    await integration.processPending();
+
+    expect(changes).toHaveLength(changeCount);
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: outbox.id } })).toMatchObject(
+      {
+        idempotencyKey: outbox.idempotencyKey,
+        status: 'SYNCED',
+      },
+    );
+    expect(managedConflicts).toHaveLength(0);
+  });
+
+  it('reconciles only 100+ proven-converged obsolete conflicts and preserves a genuine sensitive conflict', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Совпавшая версия' });
+    await integration.processPending();
+    const payload = await integration.safePayload('BRANCH', branch.id);
+    await database.syncConflict.createMany({
+      data: Array.from({ length: 101 }, (_, index) => ({
+        baseRevision: 0,
+        candidateOperation: 'UPSERT' as const,
+        candidatePayloadJson: JSON.stringify(payload),
+        canonicalOperation: 'UPSERT',
+        canonicalPayloadJson: JSON.stringify(payload),
+        canonicalRevision: 1,
+        entityId: branch.id,
+        entityType: 'BRANCH',
+        id: `obsolete-local-${String(index)}`,
+        sourceDeviceId: credentials.deviceId,
+      })),
+    });
+    await database.syncConflict.create({
+      data: {
+        baseRevision: 0,
+        candidateOperation: 'UPSERT',
+        candidatePayloadJson: JSON.stringify(payload),
+        canonicalOperation: 'UPSERT',
+        canonicalPayloadJson: JSON.stringify(payload),
+        canonicalRevision: 1,
+        entityId: branch.id,
+        entityType: 'BRANCH',
+        serverConflictId: 'obsolete-remote',
+        sourceDeviceId: credentials.deviceId,
+      },
+    });
+    managedConflicts = [
+      {
+        baseRevision: 0,
+        candidate: payload,
+        candidateOperation: 'UPSERT',
+        canonical: payload,
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 1,
+        createdAt: now.toISOString(),
+        differences: [],
+        entityId: branch.id,
+        entityType: 'BRANCH',
+        id: 'obsolete-remote',
+        sourceDeviceId: credentials.deviceId,
+        status: 'OPEN',
+      },
+      {
+        baseRevision: 1,
+        candidate: { id: 'membership-real', status: 'LEFT' },
+        candidateOperation: 'UPSERT',
+        canonical: { id: 'membership-real', status: 'ACTIVE' },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 2,
+        createdAt: now.toISOString(),
+        differences: [{ candidate: 'LEFT', canonical: 'ACTIVE', field: 'status' }],
+        entityId: 'membership-real',
+        entityType: 'GROUP_MEMBERSHIP',
+        id: 'genuine-sensitive',
+        sourceDeviceId: 'device-b',
+        status: 'OPEN',
+      },
+    ];
+    expect(canonical.get(`BRANCH:${branch.id}`)).toMatchObject({
+      revision: 1,
+      sourceDeviceId: credentials.deviceId,
+    });
+
+    await integration.processPending();
+
+    expect(await database.syncConflict.count({ where: { status: 'OPEN' } })).toBe(0);
+    expect(await database.syncConflict.count({ where: { status: 'RESOLVED' } })).toBe(102);
+    expect(managedConflicts.map(({ id }) => id)).toEqual(['genuine-sensitive']);
+    expect(
+      await database.syncLog.findFirst({
+        where: { operation: 'CONFLICT_RECONCILE', result: 'AUTO_RESOLVED' },
+      }),
+    ).not.toBeNull();
+  });
+
+  it('converges 100 ordinary single-device actions without pending work or false conflicts', async () => {
+    await pair();
+    for (let index = 0; index < 100; index += 1) {
+      await application.createBranch(ownerToken, { name: `Филиал ${String(index + 1)}` });
+    }
+    for (let cycle = 0; cycle < 6; cycle += 1) await integration.processPending();
+
+    expect(
+      await database.syncOutbox.count({ where: { status: { in: ['PENDING', 'PROCESSING'] } } }),
+    ).toBe(0);
+    expect(await database.syncConflict.count({ where: { status: 'OPEN' } })).toBe(0);
+    expect(managedConflicts).toHaveLength(0);
+    expect([...canonical.keys()].filter((key) => key.startsWith('BRANCH:'))).toHaveLength(100);
   });
 
   it('converges two OWNER devices by server order without clock-based conflicts or an echo loop', async () => {

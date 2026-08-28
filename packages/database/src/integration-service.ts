@@ -65,7 +65,6 @@ export const INITIAL_SYNC_HISTORY_DAYS = 30;
 export const INITIAL_SYNC_FUTURE_DAYS = 180;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CHAT_IMAGE_BYTES = 15 * 1024 * 1024;
-const STUCK_PROCESSING_MS = 10 * 60_000;
 const RETRY_DELAYS_MS = [15_000, 60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000] as const;
 
 const SETTINGS = {
@@ -766,6 +765,7 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   if (isRecord(value))
     return `{${Object.keys(value)
+      .filter((key) => value[key] !== undefined)
       .sort()
       .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
       .join(',')}}`;
@@ -2561,10 +2561,9 @@ export class IntegrationService {
   }
 
   async initialize(): Promise<void> {
-    const staleBefore = new Date(this.now().getTime() - STUCK_PROCESSING_MS);
     await this.database.syncOutbox.updateMany({
       data: { nextAttemptAt: this.now(), status: 'PENDING' },
-      where: { lastAttemptAt: { lte: staleBefore }, status: 'PROCESSING' },
+      where: { status: 'PROCESSING' },
     });
     await this.database.webAction.updateMany({
       data: { status: 'PENDING' },
@@ -4042,9 +4041,18 @@ export class IntegrationService {
   ): Promise<void> {
     const context = await this.backgroundOwnerContext();
     const remoteConflicts = await this.api.listConflicts(baseUrl, deviceId, token, context);
+    const reconciledIds = await this.reconcileConvergedConflicts(
+      baseUrl,
+      deviceId,
+      token,
+      context,
+      remoteConflicts,
+    );
     const autoResolvable = remoteConflicts.filter(
       (conflict) =>
-        conflict.status === 'OPEN' && isAutoResolvableLwwEntityType(conflict.entityType),
+        conflict.status === 'OPEN' &&
+        !reconciledIds.has(conflict.id) &&
+        isAutoResolvableLwwEntityType(conflict.entityType),
     );
     const remoteIds = new Set(autoResolvable.map(({ id }) => id));
     const localOpen = await this.database.syncConflict.findMany({
@@ -4127,6 +4135,201 @@ export class IntegrationService {
         });
       }
     }
+  }
+
+  private async fetchCanonicalSnapshotForTypes(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    entityTypes: readonly InboundChange['entityType'][],
+  ): Promise<InboundChange[]> {
+    if (entityTypes.length === 0) return [];
+    const changes: InboundChange[] = [];
+    let cursor = 0;
+    for (let pageNumber = 0; pageNumber < 250; pageNumber += 1) {
+      const page = await this.api.fetchChanges(baseUrl, deviceId, token, {
+        after: cursor,
+        conflictCount: 0,
+        entityTypes,
+        pendingCount: 0,
+        snapshot: true,
+      });
+      changes.push(...page.changes);
+      if (page.cursor < cursor || (page.hasMore && page.cursor === cursor)) {
+        throw new IntegrationApiError(
+          'INVALID_RESPONSE',
+          false,
+          'Сервер вернул некорректный канонический снимок.',
+        );
+      }
+      cursor = page.cursor;
+      if (!page.hasMore) return changes;
+    }
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Канонический снимок слишком велик для одного запуска.',
+    );
+  }
+
+  private async payloadForOperation(
+    entityType: InboundChange['entityType'],
+    entityId: string,
+    operation: 'UPSERT' | 'ARCHIVE',
+  ): Promise<Record<string, unknown>> {
+    if (operation === 'ARCHIVE') return { id: entityId, missing: true };
+    return this.safePayload(entityType, entityId);
+  }
+
+  private async reconcileConvergedConflicts(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    remoteConflicts: IntegrationConflictSummary[],
+  ): Promise<Set<string>> {
+    const localOpen = await this.database.syncConflict.findMany({ where: { status: 'OPEN' } });
+    const remoteIds = new Set(remoteConflicts.map(({ id }) => id));
+    const missingRemoteIds = localOpen
+      .filter(
+        ({ serverConflictId }) =>
+          Boolean(serverConflictId) && !remoteIds.has(serverConflictId ?? ''),
+      )
+      .map(({ id }) => id);
+    if (missingRemoteIds.length > 0) {
+      await this.database.syncConflict.updateMany({
+        data: { resolvedAt: this.now(), status: 'RESOLVED' },
+        where: { id: { in: missingRemoteIds }, status: 'OPEN' },
+      });
+    }
+    const types = [
+      ...new Set(
+        [...remoteConflicts, ...localOpen]
+          .map(({ entityType }) => entityType)
+          .filter((entityType): entityType is InboundChange['entityType'] =>
+            INBOUND_ENTITY_TYPES.has(entityType as InboundChange['entityType']),
+          ),
+      ),
+    ];
+    if (types.length === 0) return new Set();
+    const snapshot = await this.fetchCanonicalSnapshotForTypes(baseUrl, deviceId, token, types);
+    const canonicalByEntity = new Map(
+      snapshot.map((change) => [`${change.entityType}:${change.entityId}`, change]),
+    );
+    const reconciledIds = new Set<string>();
+
+    for (const conflict of remoteConflicts) {
+      if (
+        conflict.status !== 'OPEN' ||
+        conflict.sourceDeviceId !== deviceId ||
+        !INBOUND_ENTITY_TYPES.has(conflict.entityType as InboundChange['entityType'])
+      )
+        continue;
+      const canonical = canonicalByEntity.get(`${conflict.entityType}:${conflict.entityId}`);
+      if (canonical === undefined) continue;
+      if (
+        canonical.revision !== conflict.canonicalRevision ||
+        canonical.sourceDeviceId !== deviceId ||
+        canonical.operation !== conflict.canonicalOperation ||
+        stableJson(canonical.payload) !== stableJson(conflict.canonical)
+      )
+        continue;
+      const localPayload = await this.payloadForOperation(
+        conflict.entityType as InboundChange['entityType'],
+        conflict.entityId,
+        canonical.operation,
+      );
+      if (stableJson(localPayload) !== stableJson(canonical.payload)) continue;
+      try {
+        const resolved = await this.api.resolveConflict(
+          baseUrl,
+          deviceId,
+          token,
+          conflict.id,
+          {
+            expectedCanonicalRevision: conflict.canonicalRevision,
+            idempotencyKey: `reconcile-converged:${conflict.id}:${String(conflict.canonicalRevision)}`,
+            resolution: 'KEEP_CANONICAL',
+          },
+          context,
+        );
+        reconciledIds.add(conflict.id);
+        await this.database.$transaction([
+          this.database.syncConflict.updateMany({
+            data: { resolvedAt: this.now(), status: 'RESOLVED' },
+            where: { serverConflictId: conflict.id, status: 'OPEN' },
+          }),
+          this.database.syncLog.create({
+            data: {
+              attemptCount: 1,
+              entityId: conflict.entityId,
+              entityType: conflict.entityType,
+              message: `strategy=PROVEN_CONVERGENCE; canonicalRevision=${String(resolved.canonicalRevision)}`,
+              operation: 'CONFLICT_RECONCILE',
+              result: 'AUTO_RESOLVED',
+            },
+          }),
+        ]);
+      } catch (error) {
+        const errorCode = error instanceof IntegrationApiError ? error.errorCode : 'UNKNOWN';
+        await this.log(
+          undefined,
+          'CONFLICT_RECONCILE',
+          'FAILED',
+          1,
+          errorCode,
+          `entityType=${conflict.entityType}; canonicalRevision=${String(conflict.canonicalRevision)}`,
+        );
+      }
+    }
+
+    const localOnlyResolved: string[] = [];
+    for (const conflict of localOpen.filter(({ serverConflictId }) => !serverConflictId)) {
+      if (
+        conflict.sourceDeviceId !== deviceId ||
+        !INBOUND_ENTITY_TYPES.has(conflict.entityType as InboundChange['entityType'])
+      )
+        continue;
+      const canonical = canonicalByEntity.get(`${conflict.entityType}:${conflict.entityId}`);
+      if (canonical === undefined) continue;
+      if (canonical.sourceDeviceId !== deviceId) continue;
+      let storedCanonical: unknown;
+      try {
+        storedCanonical = JSON.parse(conflict.canonicalPayloadJson) as unknown;
+      } catch {
+        continue;
+      }
+      if (
+        canonical.revision < conflict.canonicalRevision ||
+        stableJson(canonical.payload) !== stableJson(storedCanonical)
+      )
+        continue;
+      const localPayload = await this.payloadForOperation(
+        conflict.entityType as InboundChange['entityType'],
+        conflict.entityId,
+        canonical.operation,
+      );
+      if (stableJson(localPayload) === stableJson(canonical.payload)) {
+        localOnlyResolved.push(conflict.id);
+      }
+    }
+    if (localOnlyResolved.length > 0) {
+      await this.database.$transaction([
+        this.database.syncConflict.updateMany({
+          data: { resolvedAt: this.now(), status: 'RESOLVED' },
+          where: { id: { in: localOnlyResolved }, status: 'OPEN' },
+        }),
+        this.database.syncLog.create({
+          data: {
+            attemptCount: 1,
+            message: `strategy=PROVEN_CONVERGENCE; resolved=${String(localOnlyResolved.length)}`,
+            operation: 'CONFLICT_RECONCILE',
+            result: 'AUTO_RESOLVED',
+          },
+        }),
+      ]);
+    }
+    return reconciledIds;
   }
 
   private async autoResolveOwnerConflictsSafely(
@@ -4879,20 +5082,35 @@ export class IntegrationService {
       if (claimed.count !== selected.length) return;
       try {
         const envelopes: SyncEntityEnvelope[] = [];
+        const preparedItems: typeof selected = [];
         for (const item of selected) {
           if (item.entityType === 'PUBLICATION' && item.operation === 'UPSERT') {
             await this.preparePublicationMedia(baseUrl, deviceId, token, item.entityId);
           }
+          const state = await this.database.syncEntityState.findUnique({
+            where: {
+              entityType_entityId: {
+                entityId: item.entityId,
+                entityType: item.entityType,
+              },
+            },
+          });
+          const baseRevision =
+            state?.sourceDeviceId === deviceId && state.revision > item.baseRevision
+              ? state.revision
+              : item.baseRevision;
           const envelope = await this.buildEnvelope(
             item.entityType as SyncEntityType,
             item.entityId,
             item.operation,
             item.idempotencyKey,
-            item.baseRevision,
+            baseRevision,
           );
           envelopes.push(envelope);
+          const payloadJson = JSON.stringify(envelope.payload);
+          preparedItems.push({ ...item, baseRevision, payloadJson });
           await this.database.syncOutbox.update({
-            data: { payloadJson: JSON.stringify(envelope.payload) },
+            data: { baseRevision, payloadJson },
             where: { id: item.id },
           });
         }
@@ -4900,7 +5118,11 @@ export class IntegrationService {
         if (acknowledgement.deviceToken)
           await this.credentials.saveToken(acknowledgement.deviceToken);
         const syncedAt = new Date(acknowledgement.serverTimestamp);
-        await this.recordOutboundAcknowledgements(selected, acknowledgement.accepted, syncedAt);
+        await this.recordOutboundAcknowledgements(
+          preparedItems,
+          acknowledgement.accepted,
+          syncedAt,
+        );
         if (acknowledgement.accepted.some(({ status }) => status === 'CONFLICT')) {
           await this.autoResolveOwnerConflictsSafely(baseUrl, deviceId, token);
         }
@@ -5432,7 +5654,10 @@ export class IntegrationService {
           },
           where: { id: item.id },
         });
-        if (acknowledgement.canonicalPayload.id === item.entityId) {
+        if (
+          acknowledgement.status === 'ACCEPTED' &&
+          acknowledgement.canonicalPayload.id === item.entityId
+        ) {
           await transaction.syncEntityState.upsert({
             create: {
               entityId: item.entityId,
@@ -5450,6 +5675,16 @@ export class IntegrationService {
             },
             where: {
               entityType_entityId: { entityId: item.entityId, entityType: item.entityType },
+            },
+          });
+          await transaction.syncOutbox.updateMany({
+            data: { baseRevision: acknowledgement.revision },
+            where: {
+              baseRevision: { lt: acknowledgement.revision },
+              entityId: item.entityId,
+              entityType: item.entityType,
+              id: { not: item.id },
+              status: 'PENDING',
             },
           });
         }
@@ -5527,7 +5762,7 @@ export class IntegrationService {
           );
         }
       }
-      for (const change of page.changes) await this.applyInboundChange(change);
+      for (const change of page.changes) await this.applyInboundChange(change, deviceId);
       cursor = page.cursor;
       const synchronizedAt = this.now().toISOString();
       await this.database.$transaction([
@@ -5581,7 +5816,7 @@ export class IntegrationService {
         pendingCount: 0,
         snapshot: true,
       });
-      for (const change of page.changes) await this.applyInboundChange(change);
+      for (const change of page.changes) await this.applyInboundChange(change, deviceId);
       imported += page.changes.length;
       if (page.cursor < cursor || (page.hasMore && page.cursor === cursor)) {
         throw new IntegrationApiError(
@@ -5625,12 +5860,102 @@ export class IntegrationService {
     return counts.reduce((total, count) => total + count, 0);
   }
 
-  private async applyInboundChange(change: InboundChange): Promise<void> {
+  private async applyInboundChange(change: InboundChange, deviceId: string): Promise<void> {
     const state = await this.database.syncEntityState.findUnique({
       where: {
         entityType_entityId: { entityId: change.entityId, entityType: change.entityType },
       },
     });
+    if (change.sourceDeviceId === deviceId) {
+      const pending = await this.database.syncOutbox.findMany({
+        orderBy: { createdAt: 'asc' },
+        where: {
+          entityId: change.entityId,
+          entityType: change.entityType,
+          status: { in: ['PENDING', 'PROCESSING'] },
+        },
+      });
+      if (pending.length > 0) {
+        const canonicalJson = stableJson(change.payload);
+        const matchingIds = pending
+          .filter(({ operation, payloadJson }) => {
+            if (operation !== change.operation) return false;
+            try {
+              return stableJson(JSON.parse(payloadJson) as unknown) === canonicalJson;
+            } catch {
+              return false;
+            }
+          })
+          .map(({ id }) => id);
+        const rebasedIds = pending
+          .filter(({ id }) => !matchingIds.includes(id))
+          .map(({ id }) => id);
+        const falseConflicts = await this.database.syncConflict.findMany({
+          where: {
+            canonicalRevision: { lte: change.revision },
+            entityId: change.entityId,
+            entityType: change.entityType,
+            serverConflictId: null,
+            sourceDeviceId: deviceId,
+            status: 'OPEN',
+          },
+        });
+        const resolvedConflictIds = falseConflicts
+          .filter(({ canonicalPayloadJson }) => {
+            try {
+              return stableJson(JSON.parse(canonicalPayloadJson) as unknown) === canonicalJson;
+            } catch {
+              return false;
+            }
+          })
+          .map(({ id }) => id);
+        await this.database.$transaction(async (transaction) => {
+          if (matchingIds.length > 0) {
+            await transaction.syncOutbox.updateMany({
+              data: { status: 'SYNCED', syncedAt: new Date(change.serverUpdatedAt) },
+              where: { id: { in: matchingIds }, status: { in: ['PENDING', 'PROCESSING'] } },
+            });
+          }
+          if (rebasedIds.length > 0) {
+            await transaction.syncOutbox.updateMany({
+              data: { baseRevision: change.revision },
+              where: { id: { in: rebasedIds }, status: { in: ['PENDING', 'PROCESSING'] } },
+            });
+          }
+          if (!state || state.revision < change.revision) {
+            await transaction.syncEntityState.upsert({
+              create: {
+                entityId: change.entityId,
+                entityType: change.entityType,
+                revision: change.revision,
+                serverSequence: change.sequence,
+                serverUpdatedAt: new Date(change.serverUpdatedAt),
+                sourceDeviceId: deviceId,
+              },
+              update: {
+                revision: change.revision,
+                serverSequence: change.sequence,
+                serverUpdatedAt: new Date(change.serverUpdatedAt),
+                sourceDeviceId: deviceId,
+              },
+              where: {
+                entityType_entityId: {
+                  entityId: change.entityId,
+                  entityType: change.entityType,
+                },
+              },
+            });
+          }
+          if (resolvedConflictIds.length > 0) {
+            await transaction.syncConflict.updateMany({
+              data: { resolvedAt: this.now(), status: 'RESOLVED' },
+              where: { id: { in: resolvedConflictIds }, status: 'OPEN' },
+            });
+          }
+        });
+        return;
+      }
+    }
     if (state && state.revision >= change.revision) return;
     const pending = await this.database.syncOutbox.findFirst({
       orderBy: { createdAt: 'desc' },
@@ -5675,6 +6000,16 @@ export class IntegrationService {
       });
       return;
     }
+    const unresolvedConflict = await this.database.syncConflict.findFirst({
+      orderBy: { canonicalRevision: 'desc' },
+      select: { canonicalRevision: true },
+      where: {
+        entityId: change.entityId,
+        entityType: change.entityType,
+        status: 'OPEN',
+      },
+    });
+    if (unresolvedConflict && change.revision <= unresolvedConflict.canonicalRevision) return;
     const owner = await this.database.user.findFirst({
       orderBy: { createdAt: 'asc' },
       where: { role: 'OWNER' },
