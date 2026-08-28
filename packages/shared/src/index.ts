@@ -1,4 +1,5 @@
 export * from './channels';
+export * from './communication-templates';
 export * from './i18n';
 export * from './permissions';
 export * from './retention-rules';
@@ -26,6 +27,7 @@ export {
   cashTransferInputSchema,
   chatListQuerySchema,
   chatSendInputSchema,
+  communicationTemplateInputSchema,
   copyDayInputSchema,
   enrollmentInputSchema,
   enrollmentStatusSchema,

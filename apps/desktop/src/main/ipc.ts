@@ -33,6 +33,7 @@ import {
   attendanceWorkspaceDateSchema,
   chatListQuerySchema,
   chatSendInputSchema,
+  communicationTemplateInputSchema,
   calendarExceptionInputSchema,
   calendarRangeQuerySchema,
   barcodeSchema,
@@ -434,6 +435,38 @@ export function createIpcHandlers(
       requireChats().studentSummary(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeStudentId),
+      ),
+    [IPC_CHANNELS.chatTemplateList]: (unsafeToken, unsafeIncludeArchived) =>
+      requireChats().templateList(
+        sessionTokenSchema.parse(unsafeToken),
+        z.boolean().optional().parse(unsafeIncludeArchived),
+      ),
+    [IPC_CHANNELS.chatTemplateContext]: (unsafeToken, unsafeConversationId, unsafeStudentId) =>
+      requireChats().templateContext(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeConversationId),
+        unsafeStudentId === undefined ? undefined : identifierSchema.parse(unsafeStudentId),
+      ),
+    [IPC_CHANNELS.chatTemplateCreate]: (unsafeToken, unsafeInput) =>
+      requireChats().templateCreate(
+        sessionTokenSchema.parse(unsafeToken),
+        communicationTemplateInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.chatTemplateUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
+      requireChats().templateUpdate(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        communicationTemplateInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.chatTemplateArchive]: (unsafeToken, unsafeId) =>
+      requireChats().templateArchive(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.chatTemplateDelete]: (unsafeToken, unsafeId) =>
+      requireChats().templateDelete(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
       ),
 
     [IPC_CHANNELS.leadList]: (unsafeToken, unsafeQuery) =>

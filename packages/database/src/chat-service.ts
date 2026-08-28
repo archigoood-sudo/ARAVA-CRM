@@ -6,14 +6,76 @@ import type {
   ChatMessagePage,
   ChatSendInput,
   ChatSummary,
+  CommunicationMessagePreview,
+  CommunicationTemplate,
+  CommunicationTemplateContext,
+  CommunicationTemplateInput,
   StudentChatSummary,
 } from '@arava/shared';
+import { communicationTemplateVariables } from '@arava/shared';
+import { randomUUID } from 'node:crypto';
 
 import type { DatabaseClient } from './index';
 import type { CrmChatRequestContext, IntegrationService } from './integration-service';
 import { canAccessBranch } from './permissions';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
+import { StudentProfileService } from './student-profile-service';
+
+const CUSTOM_TEMPLATES_SETTING = 'communications.customTemplates';
+const MAX_CUSTOM_TEMPLATES = 40;
+
+export const SYSTEM_COMMUNICATION_TEMPLATES: CommunicationTemplate[] = [
+  systemTemplate(
+    'system:lesson-reminder',
+    'Напоминание о занятии',
+    'Здравствуйте! {{STUDENT_NAME}}, ждём вас на занятии группы «{{GROUP_NAME}}» {{LESSON_DATE}} в {{LESSON_TIME}}. До встречи!',
+  ),
+  systemTemplate(
+    'system:payment-reminder',
+    'Напоминание об оплате',
+    'Здравствуйте, {{STUDENT_NAME}}! Напоминаем об оплате занятий. Если уже оплатили — спасибо!',
+  ),
+  systemTemplate(
+    'system:after-trial',
+    'После пробного',
+    'Здравствуйте, {{STUDENT_NAME}}! Как прошло пробное занятие? Будем рады ответить на вопросы.',
+  ),
+  systemTemplate(
+    'system:missed-lesson',
+    'Пропустил занятие',
+    'Здравствуйте, {{STUDENT_NAME}}! Заметили, что занятие было пропущено. Всё ли в порядке?',
+  ),
+  systemTemplate(
+    'system:subscription-ending',
+    'Заканчивается абонемент',
+    'Здравствуйте, {{STUDENT_NAME}}! Абонемент скоро заканчивается. Помочь с продлением?',
+  ),
+  systemTemplate(
+    'system:return-invitation',
+    'Приглашение вернуться',
+    'Здравствуйте, {{STUDENT_NAME}}! Будем рады снова видеть вас на занятиях. Подсказать актуальное расписание?',
+  ),
+];
+
+function systemTemplate(id: string, name: string, text: string): CommunicationTemplate {
+  return {
+    id,
+    name,
+    requiredVariables: communicationTemplateVariables(text),
+    source: 'SYSTEM',
+    text,
+  };
+}
+
+interface StoredCommunicationTemplate {
+  archivedAt?: string | undefined;
+  createdAt: string;
+  id: string;
+  name: string;
+  text: string;
+  updatedAt: string;
+}
 
 export class ChatService {
   private readonly authorizedConversations = new Map<string, Map<string, ChatSummary>>();
@@ -87,6 +149,8 @@ export class ChatService {
   }
 
   async send(token: string, conversationId: string, input: ChatSendInput): Promise<ChatMessage> {
+    if (/\{\{[^{}]+\}\}/u.test(input.text))
+      throw new DomainError('VALIDATION', 'Заполните все переменные шаблона перед отправкой.');
     const actor = await this.application.authenticate(token);
     const conversation =
       this.authorizedConversations.get(this.actorCacheKey(actor))?.get(conversationId) ??
@@ -157,23 +221,36 @@ export class ChatService {
     const conversation = conversations[0];
     if (!conversation) return emptyStudentSummary('NO_CHAT');
     let latest: ChatMessage | undefined;
+    let latestInbound: ChatMessage | undefined;
+    let latestOutbound: ChatMessage | undefined;
     try {
       const page = await this.integration.getRemoteChatMessages(
         this.context(actor),
         conversation.id,
       );
       await this.assertAccess(actor, page.conversation);
-      latest = page.messages
+      const visible = page.messages
         .filter((message) => message.body.trim() || message.attachments.length)
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+      latest = visible[0];
+      latestInbound = visible.find((message) => message.senderType === 'client');
+      latestOutbound = visible.find(
+        (message) => message.senderType === 'admin' || message.senderType === 'trainer',
+      );
     } catch {
       // The list summary remains useful if only message history is temporarily unavailable.
     }
 
     const fallbackPreview = safeMessagePreview(conversation.lastMessage ?? '');
+    const profile = await new StudentProfileService(this.database, this.application).getOverview(
+      token,
+      studentId,
+    );
     return {
       canOpen: true,
       conversationId: conversation.id,
+      ...(latestInbound ? { latestInbound: communicationPreview(latestInbound) } : {}),
+      ...(latestOutbound ? { latestOutbound: communicationPreview(latestOutbound) } : {}),
       ...(latest?.createdAt || conversation.lastMessageAt
         ? { lastMessageAt: latest?.createdAt ?? conversation.lastMessageAt ?? undefined }
         : {}),
@@ -184,8 +261,122 @@ export class ChatService {
           ? { lastMessagePreview: fallbackPreview }
           : {}),
       state: 'AVAILABLE',
+      suggestedTemplateIds: suggestedTemplateIds({
+        ...profile,
+        status: profile.student.status,
+      }),
       unreadCount: conversation.unreadCount,
     };
+  }
+
+  async templateContext(
+    token: string,
+    conversationId: string,
+    requestedStudentId?: string,
+  ): Promise<CommunicationTemplateContext> {
+    const actor = await this.communicationsActor(token);
+    const conversation = await this.integration.getRemoteChat(this.context(actor), conversationId);
+    await this.assertAccess(actor, conversation);
+    const linkedStudent = requestedStudentId
+      ? conversation.linkedStudents.find(({ studentId }) => studentId === requestedStudentId)
+      : conversation.linkedStudents.length === 1
+        ? conversation.linkedStudents[0]
+        : undefined;
+    if (requestedStudentId && !linkedStudent)
+      throw new DomainError('AUTHORIZATION', 'Ученик не связан с этим чатом.');
+    if (!linkedStudent)
+      return conversation.type === 'GROUP' ? { groupName: conversation.title } : {};
+    const profile = await new StudentProfileService(this.database, this.application).getOverview(
+      token,
+      linkedStudent.studentId,
+    );
+    const nextLesson = profile.upcomingLessons[0];
+    return {
+      ...(nextLesson?.groupName ? { groupName: nextLesson.groupName } : {}),
+      ...(nextLesson
+        ? {
+            lessonDate: formatMoscow(nextLesson.startsAt, {
+              day: 'numeric',
+              month: 'long',
+            }),
+            lessonTime: formatMoscow(nextLesson.startsAt, {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+          }
+        : {}),
+      studentId: linkedStudent.studentId,
+      studentName: profile.student.firstName,
+    };
+  }
+
+  async templateList(token: string, includeArchived = false): Promise<CommunicationTemplate[]> {
+    const actor = await this.communicationsActor(token);
+    const custom = (await this.readCustomTemplates()).filter(
+      ({ archivedAt }) => !archivedAt || (includeArchived && actor.role === 'OWNER'),
+    );
+    return [
+      ...SYSTEM_COMMUNICATION_TEMPLATES,
+      ...custom.map((template) => this.customTemplate(template)),
+    ];
+  }
+
+  async templateCreate(
+    token: string,
+    input: CommunicationTemplateInput,
+  ): Promise<CommunicationTemplate> {
+    await this.owner(token);
+    const templates = await this.readCustomTemplates();
+    if (templates.length >= MAX_CUSTOM_TEMPLATES)
+      throw new DomainError('VALIDATION', 'Можно сохранить не более 40 шаблонов.');
+    const now = new Date().toISOString();
+    const template: StoredCommunicationTemplate = {
+      createdAt: now,
+      id: `custom:${randomUUID()}`,
+      name: input.name,
+      text: input.text,
+      updatedAt: now,
+    };
+    templates.push(template);
+    await this.writeCustomTemplates(templates);
+    return this.customTemplate(template);
+  }
+
+  async templateUpdate(
+    token: string,
+    id: string,
+    input: CommunicationTemplateInput,
+  ): Promise<CommunicationTemplate> {
+    await this.owner(token);
+    const templates = await this.readCustomTemplates();
+    const index = templates.findIndex((template) => template.id === id);
+    const current = templates[index];
+    if (!current) throw new DomainError('NOT_FOUND', 'Шаблон не найден.');
+    const updated = { ...current, ...input, updatedAt: new Date().toISOString() };
+    templates[index] = updated;
+    await this.writeCustomTemplates(templates);
+    return this.customTemplate(updated);
+  }
+
+  async templateArchive(token: string, id: string): Promise<CommunicationTemplate> {
+    await this.owner(token);
+    const templates = await this.readCustomTemplates();
+    const index = templates.findIndex((template) => template.id === id);
+    const current = templates[index];
+    if (!current) throw new DomainError('NOT_FOUND', 'Шаблон не найден.');
+    const now = new Date().toISOString();
+    const archived = { ...current, archivedAt: now, updatedAt: now };
+    templates[index] = archived;
+    await this.writeCustomTemplates(templates);
+    return this.customTemplate(archived);
+  }
+
+  async templateDelete(token: string, id: string): Promise<void> {
+    await this.owner(token);
+    const templates = await this.readCustomTemplates();
+    if (!templates.some((template) => template.id === id))
+      throw new DomainError('NOT_FOUND', 'Шаблон не найден.');
+    await this.writeCustomTemplates(templates.filter((template) => template.id !== id));
   }
 
   private context(actor: AuthenticatedUser): CrmChatRequestContext {
@@ -194,6 +385,50 @@ export class ChatService {
       name: actor.fullName,
       role: actor.role,
       userId: actor.id,
+    };
+  }
+
+  private async communicationsActor(token: string): Promise<AuthenticatedUser> {
+    const actor = await this.application.authenticate(token);
+    if (actor.role === 'COACH')
+      throw new DomainError('AUTHORIZATION', 'Чаты клиентов недоступны тренеру.');
+    return actor;
+  }
+
+  private async owner(token: string): Promise<AuthenticatedUser> {
+    const actor = await this.communicationsActor(token);
+    if (actor.role !== 'OWNER')
+      throw new DomainError('AUTHORIZATION', 'Управлять шаблонами может только владелец.');
+    return actor;
+  }
+
+  private async readCustomTemplates(): Promise<StoredCommunicationTemplate[]> {
+    const row = await this.database.appSetting.findUnique({
+      where: { key: CUSTOM_TEMPLATES_SETTING },
+    });
+    if (!row) return [];
+    try {
+      const parsed = JSON.parse(row.value) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(isStoredTemplate).slice(0, MAX_CUSTOM_TEMPLATES);
+    } catch {
+      return [];
+    }
+  }
+
+  private async writeCustomTemplates(templates: StoredCommunicationTemplate[]): Promise<void> {
+    await this.database.appSetting.upsert({
+      create: { key: CUSTOM_TEMPLATES_SETTING, value: JSON.stringify(templates) },
+      update: { value: JSON.stringify(templates) },
+      where: { key: CUSTOM_TEMPLATES_SETTING },
+    });
+  }
+
+  private customTemplate(template: StoredCommunicationTemplate): CommunicationTemplate {
+    return {
+      ...template,
+      requiredVariables: communicationTemplateVariables(template.text),
+      source: 'CUSTOM',
     };
   }
 
@@ -274,7 +509,64 @@ export class ChatService {
 }
 
 function emptyStudentSummary(state: StudentChatSummary['state']): StudentChatSummary {
-  return { canOpen: false, state, unreadCount: 0 };
+  return { canOpen: false, state, suggestedTemplateIds: [], unreadCount: 0 };
+}
+
+function communicationPreview(message: ChatMessage): CommunicationMessagePreview {
+  return {
+    author: messageAuthor(message.senderType),
+    createdAt: message.createdAt,
+    text: messagePreview(message),
+  };
+}
+
+function suggestedTemplateIds(profile: {
+  attentionItems: { id: string }[];
+  status?: string;
+  totalDebt?: number | undefined;
+  upcomingLessons: unknown[];
+}): string[] {
+  const ids: string[] = [];
+  const attention = profile.attentionItems.map(({ id }) => id);
+  if (profile.totalDebt && profile.totalDebt > 0) ids.push('system:payment-reminder');
+  if (profile.upcomingLessons.length > 0) ids.push('system:lesson-reminder');
+  if (attention.some((id) => id.startsWith('trial:thinking:'))) ids.push('system:after-trial');
+  if (
+    attention.some((id) => id.startsWith('trial:missed:') || id.startsWith('attendance:retention:'))
+  )
+    ids.push('system:missed-lesson');
+  if (
+    attention.some(
+      (id) =>
+        id.startsWith('subscription:expiring:') ||
+        id.startsWith('subscription:low:') ||
+        id.startsWith('subscription:ended:'),
+    )
+  )
+    ids.push('system:subscription-ending');
+  if (profile.status === 'LEFT') ids.push('system:return-invitation');
+  return [...new Set(ids)].slice(0, 3);
+}
+
+function isStoredTemplate(value: unknown): value is StoredCommunicationTemplate {
+  if (!value || typeof value !== 'object') return false;
+  const template = value as Record<string, unknown>;
+  return (
+    typeof template.id === 'string' &&
+    template.id.startsWith('custom:') &&
+    typeof template.name === 'string' &&
+    typeof template.text === 'string' &&
+    typeof template.createdAt === 'string' &&
+    typeof template.updatedAt === 'string' &&
+    (template.archivedAt === undefined || typeof template.archivedAt === 'string')
+  );
+}
+
+function formatMoscow(value: string, options: Intl.DateTimeFormatOptions): string {
+  return new Intl.DateTimeFormat('ru-RU', {
+    ...options,
+    timeZone: 'Europe/Moscow',
+  }).format(new Date(value));
 }
 
 function messageAuthor(senderType: string): NonNullable<StudentChatSummary['lastMessageAuthor']> {

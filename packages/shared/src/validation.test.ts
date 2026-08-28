@@ -5,6 +5,8 @@ import {
   attentionFiltersSchema,
   cardAssignInputSchema,
   cashTransferInputSchema,
+  chatSendInputSchema,
+  communicationTemplateInputSchema,
   expenseInputSchema,
   globalSearchQuerySchema,
   loginCredentialsSchema,
@@ -13,6 +15,35 @@ import {
   tariffInputSchema,
   weeklyScheduleInputSchema,
 } from './validation';
+
+describe('communication template validation', () => {
+  it('allows only supported placeholders and prevents raw tokens from being sent', () => {
+    expect(
+      communicationTemplateInputSchema.safeParse({
+        name: 'Занятие',
+        text: '{{STUDENT_NAME}}, ждём вас {{LESSON_DATE}}.',
+      }).success,
+    ).toBe(true);
+    expect(
+      communicationTemplateInputSchema.safeParse({
+        name: 'Опасный',
+        text: 'Токен {{SECRET_TOKEN}}',
+      }).success,
+    ).toBe(false);
+    expect(
+      communicationTemplateInputSchema.safeParse({
+        name: 'Неверный',
+        text: 'Имя {{student_name}}',
+      }).success,
+    ).toBe(false);
+    expect(
+      chatSendInputSchema.safeParse({
+        clientMessageId: 'message-one',
+        text: 'Здравствуйте, {{STUDENT_NAME}}',
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe('Sprint 4.1C card validation', () => {
   it('preserves leading zeroes and trims only surrounding whitespace', () => {

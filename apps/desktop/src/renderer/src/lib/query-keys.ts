@@ -21,6 +21,10 @@ export const queryKeys = {
   chats: (accessKey: string, query: ChatListQuery) => ['chats', accessKey, 'list', query] as const,
   chatMessages: (accessKey: string, conversationId: string) =>
     ['chats', accessKey, 'messages', conversationId] as const,
+  chatTemplateContext: (accessKey: string, conversationId: string, studentId?: string) =>
+    ['chats', accessKey, 'template-context', conversationId, studentId] as const,
+  chatTemplates: (accessKey: string, includeArchived = false) =>
+    ['chats', accessKey, 'templates', { includeArchived }] as const,
   studentCommunication: (accessKey: string, studentId: string) =>
     ['student-communication', accessKey, studentId] as const,
   branches: (includeArchived = false) => ['branches', { includeArchived }] as const,

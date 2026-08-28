@@ -10,6 +10,7 @@ import {
   Input,
   LoadingState,
   PageHeader,
+  Textarea,
 } from '@arava/ui';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ImageOff, MessageCircle, RefreshCw, Search, Send, UsersRound } from 'lucide-react';
@@ -21,6 +22,7 @@ import { getErrorMessage } from '../../lib/errors';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { safeChatReturn } from '../students/student-communication-model';
+import { ChatTemplates } from './chat-templates';
 
 const filters: { id: ChatFilter; label: string }[] = [
   { id: 'ALL', label: 'Все' },
@@ -36,8 +38,11 @@ export function ChatsPage() {
   const [filter, setFilter] = useState<ChatFilter>('ALL');
   const [search, setSearch] = useState('');
   const [searchParameters] = useSearchParams();
-  const [selectedId, setSelectedId] = useState(searchParameters.get('conversationId') ?? '');
+  const requestedConversationId = searchParameters.get('conversationId') ?? '';
+  const [selectedId, setSelectedId] = useState(requestedConversationId);
   const returnTo = safeChatReturn(searchParameters.get('returnTo'));
+  const requestedStudentId = searchParameters.get('studentId') ?? undefined;
+  const requestedTemplateId = searchParameters.get('templateId') ?? undefined;
   const query = useMemo(() => ({ filter, search: search.trim() || undefined }), [filter, search]);
   const chats = useQuery({
     queryFn: () => getDesktopApi().chats.list(getSessionToken(), query),
@@ -136,7 +141,14 @@ export function ChatsPage() {
           </div>
         </aside>
         {selected ? (
-          <ConversationView accessKey={accessKey} conversation={selected} />
+          <ConversationView
+            accessKey={accessKey}
+            conversation={selected}
+            requestedTemplateId={
+              selected.id === requestedConversationId ? requestedTemplateId : undefined
+            }
+            studentId={selected.id === requestedConversationId ? requestedStudentId : undefined}
+          />
         ) : (
           <div className="flex items-center justify-center p-10">
             <EmptyState
@@ -193,9 +205,13 @@ function ConversationButton({
 function ConversationView({
   accessKey,
   conversation,
+  requestedTemplateId,
+  studentId,
 }: {
   accessKey: string;
   conversation: ChatSummary;
+  requestedTemplateId?: string | undefined;
+  studentId?: string | undefined;
 }) {
   const client = useQueryClient();
   const [draft, setDraft] = useState('');
@@ -324,12 +340,21 @@ function ConversationView({
         }}
       >
         {sendError ? <p className="mb-2 text-sm text-red-600">{sendError}</p> : null}
-        <div className="flex gap-3">
-          <Input
+        <div className="flex flex-wrap items-end gap-3 sm:flex-nowrap">
+          <ChatTemplates
+            accessKey={accessKey}
+            conversationId={conversation.id}
+            onInsert={setDraft}
+            requestedTemplateId={requestedTemplateId}
+            studentId={studentId}
+          />
+          <Textarea
             aria-label="Сообщение"
+            className="min-h-10 flex-1 resize-y py-2"
             maxLength={1200}
             onChange={(event) => setDraft(event.target.value)}
             placeholder="Написать сообщение…"
+            rows={2}
             value={draft}
           />
           <Button disabled={!draft.trim() || send.isPending} type="submit">

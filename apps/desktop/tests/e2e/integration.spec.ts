@@ -298,6 +298,14 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     }
     if (request.url === '/api/integration/v1/leads/lead-e2e/convert' && request.method === 'POST') {
       convertedStudentId = typeof body.crmStudentId === 'string' ? body.crmStudentId : null;
+      if (convertedStudentId) {
+        chat.linkedStudents.push({
+          branchId: chat.branchId ?? '',
+          firstName: 'Мария',
+          lastName: 'Иванова',
+          studentId: convertedStudentId,
+        });
+      }
       leadStatus = 'CONVERTED';
       respond(response, { apiVersion: 'v1', lead: websiteLead() });
       return;
@@ -546,6 +554,19 @@ test('OWNER подключает сайт, выполняет initial/offline sy
         groupId: group.id,
         startsAt: '2030-08-28T16:00:00.000Z',
       });
+      await api.groups.addEnrollment(token, group.id, {
+        joinedAt: new Date().toISOString().slice(0, 10),
+        overrideCapacity: false,
+        status: 'ACTIVE',
+        studentId: student.id,
+      });
+      const upcomingStart = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      const upcomingEnd = new Date(upcomingStart.getTime() + 60 * 60 * 1000);
+      await api.lessons.create(token, {
+        endsAt: upcomingEnd.toISOString(),
+        groupId: group.id,
+        startsAt: upcomingStart.toISOString(),
+      });
       return { group, lessonA, lessonB, student };
     });
     conflictStudentId = accessFixture.student.id;
@@ -561,17 +582,53 @@ test('OWNER подключает сайт, выполняет initial/offline sy
         studentId: accessFixture.student.id,
       },
     ];
+    await page.setViewportSize({ height: 768, width: 1366 });
     await page.evaluate((studentId) => {
       window.location.hash = `#/students/${studentId}`;
     }, accessFixture.student.id);
     const communication = page.getByTestId('student-communication');
+    await expect(communication).toBeVisible();
+    await expect(communication.locator('details')).not.toHaveAttribute('open', '');
+    await communication.getByText('Коммуникация', { exact: true }).click();
     await expect(communication.getByText('1 непрочитанное', { exact: true })).toBeVisible();
-    await expect(communication.getByText('Сообщение клиента', { exact: true })).toBeVisible();
+    await expect(
+      communication.getByText('Сообщение клиента', { exact: true }).first(),
+    ).toBeVisible();
     await expect(communication.getByText(/Клиент/u)).toBeVisible();
-    await communication.getByRole('link', { name: 'Написать' }).click();
+    await expect(communication.getByRole('link', { name: 'Напомнить о занятии' })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('communications-student-1366.png') });
+    await page
+      .getByTestId('student-profile-actions')
+      .getByRole('link', { name: 'Написать' })
+      .click();
     await expect(page).toHaveURL(/\/chats\?conversationId=private-e2e/u);
     await expect(page.getByRole('heading', { level: 2, name: 'Чаты' })).toBeVisible();
     await expect(page.getByText('Анна Клиент', { exact: true }).first()).toBeVisible();
+    for (const templateName of [
+      'Напоминание о занятии',
+      'Напоминание об оплате',
+      'После пробного',
+      'Пропустил занятие',
+      'Заканчивается абонемент',
+      'Приглашение вернуться',
+    ]) {
+      await page.getByRole('button', { name: 'Шаблоны' }).click();
+      await page.getByRole('button').filter({ hasText: templateName }).click();
+      await expect(page.getByLabel('Сообщение')).not.toHaveValue('');
+      await expect(page.getByLabel('Сообщение')).not.toHaveValue(/\{\{/u);
+    }
+    expect(receivedChatMessages).toEqual([]);
+    await page.getByRole('button', { name: 'Шаблоны' }).click();
+    await expect(page.getByText('Приглашение вернуться', { exact: true })).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        ),
+      )
+      .toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('communications-chat-1366.png') });
+    await page.getByRole('button', { name: 'Шаблоны' }).click();
     await page.getByRole('link', { name: 'Вернуться к ученику' }).click();
     await expect(page).toHaveURL(new RegExp(`/students/${accessFixture.student.id}$`, 'u'));
     await expect(page.getByTestId('student-communication')).not.toContainText('непрочитанное');
@@ -697,6 +754,10 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByRole('button', { name: 'Добавить ученика' }).click();
     await expect(page.getByText('Ученик уже создан и связан.')).toBeVisible();
     expect(convertedStudentId).toBeTruthy();
+    await page.getByTestId('lead-detail').getByRole('link', { name: 'Написать' }).click();
+    await expect(page).toHaveURL(/\/chats\?conversationId=private-e2e/u);
+    await page.getByRole('link', { name: 'Заявки' }).click();
+    await page.getByText('Иванова Мария', { exact: true }).first().click();
     await expect
       .poll(async () =>
         page.evaluate(

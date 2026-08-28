@@ -62,7 +62,7 @@ import { ContactDialog } from './contact-dialog';
 import { ClientWebAccessCard } from './client-web-access-card';
 import { StudentDialog } from './student-dialog';
 import { StudentBulkDialog } from './student-bulk-dialog';
-import { StudentCommunicationCard } from './student-communication-card';
+import { StudentCommunicationCard, StudentWriteButton } from './student-communication-card';
 import { StudentDocumentsCard } from './student-documents-card';
 import { StudentFinance } from '../subscriptions/student-finance';
 import { StudentCard } from '../cards/student-card';
@@ -432,6 +432,7 @@ export function StudentProfilePage() {
               >
                 <StickyNote className="size-4" /> Заметка
               </Button>
+              <StudentWriteButton accessKey={accessKey} studentId={studentId} />
               {detail.status === 'TRIAL' ? (
                 <Button
                   className="border-white/15 bg-white/10 text-white hover:bg-white/15"
@@ -485,11 +486,7 @@ export function StudentProfilePage() {
         }
       >
         {profile.access === 'ADMIN' ? (
-          <StudentCommunicationCard
-            accessKey={accessKey}
-            attentionItems={profile.attentionItems}
-            studentId={studentId}
-          />
+          <StudentCommunicationCard accessKey={accessKey} studentId={studentId} />
         ) : null}
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           <WorkspaceMetric

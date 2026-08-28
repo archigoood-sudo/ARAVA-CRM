@@ -52,6 +52,16 @@ const desktopApi: AravaDesktopApi = {
     send: (token, conversationId, input) =>
       invoke(IPC_CHANNELS.chatSend, token, conversationId, input),
     studentSummary: (token, studentId) => invoke(IPC_CHANNELS.chatStudentSummary, token, studentId),
+    templateArchive: (token, id) => invoke(IPC_CHANNELS.chatTemplateArchive, token, id),
+    templateContext: (token, conversationId, studentId) =>
+      invoke(IPC_CHANNELS.chatTemplateContext, token, conversationId, studentId),
+    templateCreate: (token, input) => invoke(IPC_CHANNELS.chatTemplateCreate, token, input),
+    templateDelete: async (token, id) => {
+      await invoke(IPC_CHANNELS.chatTemplateDelete, token, id);
+    },
+    templateList: (token, includeArchived) =>
+      invoke(IPC_CHANNELS.chatTemplateList, token, includeArchived),
+    templateUpdate: (token, id, input) => invoke(IPC_CHANNELS.chatTemplateUpdate, token, id, input),
   },
   leads: {
     assignGroup: (token, id, input) => invoke(IPC_CHANNELS.leadAssignGroup, token, id, input),

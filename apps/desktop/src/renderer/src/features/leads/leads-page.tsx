@@ -31,6 +31,7 @@ import {
   AlertTriangle,
   CalendarClock,
   Inbox,
+  MessageCircle,
   Plus,
   RefreshCw,
   Search,
@@ -378,6 +379,7 @@ export function LeadsPage() {
           ) : null}
           {current ? (
             <LeadDetailView
+              accessKey={accessKey}
               actionError={
                 flowError ??
                 updateStatus.error ??
@@ -485,6 +487,7 @@ function LeadRow({
 }
 
 function LeadDetailView({
+  accessKey,
   actionError,
   addToGroup,
   allowDuplicate,
@@ -508,6 +511,7 @@ function LeadDetailView({
   selectedLessonId,
   trialPending,
 }: {
+  accessKey: string;
   actionError: unknown;
   addToGroup: boolean;
   allowDuplicate: boolean;
@@ -724,12 +728,15 @@ function LeadDetailView({
         <div className="mt-5 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-200">
           <b>Ученик уже создан и связан.</b>
           <div className="mt-3">
-            <Link
-              className="inline-flex h-9 items-center justify-center rounded-xl border border-border bg-surface px-3 text-sm font-semibold text-foreground hover:bg-muted"
-              to={`/students/${lead.convertedStudentCrmId}`}
-            >
-              Открыть ученика
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                className="inline-flex h-9 items-center justify-center rounded-xl border border-border bg-surface px-3 text-sm font-semibold text-foreground hover:bg-muted"
+                to={`/students/${lead.convertedStudentCrmId}`}
+              >
+                Открыть ученика
+              </Link>
+              <LeadWriteAction accessKey={accessKey} studentId={lead.convertedStudentCrmId} />
+            </div>
           </div>
         </div>
       ) : null}
@@ -776,6 +783,27 @@ function LeadDetailView({
         </p>
       ) : null}
     </div>
+  );
+}
+
+function LeadWriteAction({ accessKey, studentId }: { accessKey: string; studentId: string }) {
+  const summary = useQuery({
+    queryFn: () => getDesktopApi().chats.studentSummary(getSessionToken(), studentId),
+    queryKey: queryKeys.studentCommunication(accessKey, studentId),
+    retry: false,
+  });
+  if (summary.data?.state !== 'AVAILABLE' || !summary.data.conversationId) return null;
+  const query = new URLSearchParams({
+    conversationId: summary.data.conversationId,
+    studentId,
+  });
+  return (
+    <Link
+      className="inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-foreground px-3 text-sm font-semibold text-background hover:opacity-90"
+      to={`/chats?${query.toString()}`}
+    >
+      <MessageCircle className="size-4" /> Написать
+    </Link>
   );
 }
 

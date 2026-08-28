@@ -549,6 +549,21 @@ describe('Electron IPC boundary', () => {
       lastName: 'Чатова',
       status: 'ACTIVE',
     });
+    const coach = await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'chat-ipc-coach@arava.local',
+      fullName: 'Тренер Чата',
+      password: 'Coach!ChatIpc2026',
+      role: 'COACH',
+    });
+    const coachSession = await service.login({
+      email: coach.email,
+      password: 'Coach!ChatIpc2026',
+    });
+    await service.changePassword(coachSession.token, {
+      currentPassword: 'Coach!ChatIpc2026',
+      newPassword: 'Coach!ChatIpcChanged2026',
+    });
     const conversation = {
       branchId: branch.id,
       crmGroupId: null,
@@ -623,6 +638,22 @@ describe('Electron IPC boundary', () => {
       state: 'AVAILABLE',
       unreadCount: 1,
     });
+    await expect(handlers[IPC_CHANNELS.chatTemplateList]?.(owner.token)).resolves.toHaveLength(6);
+    await expect(
+      handlers[IPC_CHANNELS.chatTemplateCreate]?.(owner.token, {
+        name: 'Свой шаблон',
+        text: 'Здравствуйте, {{STUDENT_NAME}}!',
+      }),
+    ).resolves.toMatchObject({ name: 'Свой шаблон', source: 'CUSTOM' });
+    expect(() =>
+      handlers[IPC_CHANNELS.chatTemplateCreate]?.(owner.token, {
+        name: 'Неверный шаблон',
+        text: '{{SECRET_TOKEN}}',
+      }),
+    ).toThrow('неизвестную переменную');
+    await expect(handlers[IPC_CHANNELS.chatTemplateList]?.(coachSession.token)).rejects.toThrow(
+      'недоступны тренеру',
+    );
   });
 
   it('validates secure user, session, and owner recovery IPC operations', async () => {

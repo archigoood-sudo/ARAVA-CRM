@@ -299,6 +299,12 @@ export const IPC_CHANNELS = {
   chatRead: 'chat:read',
   chatSend: 'chat:send',
   chatStudentSummary: 'chat:student-summary',
+  chatTemplateArchive: 'chat:template-archive',
+  chatTemplateContext: 'chat:template-context',
+  chatTemplateCreate: 'chat:template-create',
+  chatTemplateDelete: 'chat:template-delete',
+  chatTemplateList: 'chat:template-list',
+  chatTemplateUpdate: 'chat:template-update',
   publicationArchive: 'publication:archive',
   publicationCreate: 'publication:create',
   publicationList: 'publication:list',
@@ -3029,11 +3035,47 @@ export type StudentChatSummaryState =
 export interface StudentChatSummary {
   canOpen: boolean;
   conversationId?: string | undefined;
+  latestInbound?: CommunicationMessagePreview | undefined;
+  latestOutbound?: CommunicationMessagePreview | undefined;
   lastMessageAt?: string | undefined;
   lastMessageAuthor?: 'ADMIN' | 'CLIENT' | 'TRAINER' | 'UNKNOWN' | undefined;
   lastMessagePreview?: string | undefined;
   state: StudentChatSummaryState;
+  suggestedTemplateIds: string[];
   unreadCount: number;
+}
+
+export interface CommunicationMessagePreview {
+  author: 'ADMIN' | 'CLIENT' | 'TRAINER' | 'UNKNOWN';
+  createdAt: string;
+  text: string;
+}
+
+export type CommunicationTemplateVariable =
+  'STUDENT_NAME' | 'GROUP_NAME' | 'LESSON_DATE' | 'LESSON_TIME';
+
+export interface CommunicationTemplate {
+  archivedAt?: string | undefined;
+  createdAt?: string | undefined;
+  id: string;
+  name: string;
+  requiredVariables: CommunicationTemplateVariable[];
+  source: 'SYSTEM' | 'CUSTOM';
+  text: string;
+  updatedAt?: string | undefined;
+}
+
+export interface CommunicationTemplateInput {
+  name: string;
+  text: string;
+}
+
+export interface CommunicationTemplateContext {
+  groupName?: string | undefined;
+  lessonDate?: string | undefined;
+  lessonTime?: string | undefined;
+  studentId?: string | undefined;
+  studentName?: string | undefined;
 }
 
 export interface ChatListQuery {
@@ -3236,6 +3278,23 @@ export interface AravaDesktopApi {
     read: (token: string, conversationId: string) => Promise<void>;
     send: (token: string, conversationId: string, input: ChatSendInput) => Promise<ChatMessage>;
     studentSummary: (token: string, studentId: string) => Promise<StudentChatSummary>;
+    templateArchive: (token: string, id: string) => Promise<CommunicationTemplate>;
+    templateContext: (
+      token: string,
+      conversationId: string,
+      studentId?: string,
+    ) => Promise<CommunicationTemplateContext>;
+    templateCreate: (
+      token: string,
+      input: CommunicationTemplateInput,
+    ) => Promise<CommunicationTemplate>;
+    templateDelete: (token: string, id: string) => Promise<void>;
+    templateList: (token: string, includeArchived?: boolean) => Promise<CommunicationTemplate[]>;
+    templateUpdate: (
+      token: string,
+      id: string,
+      input: CommunicationTemplateInput,
+    ) => Promise<CommunicationTemplate>;
   };
   publications: {
     archive: (token: string, id: string) => Promise<PublicationSummary>;

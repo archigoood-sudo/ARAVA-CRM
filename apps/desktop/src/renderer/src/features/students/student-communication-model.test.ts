@@ -45,7 +45,10 @@ describe('student communication context', () => {
 
   it('builds an exact chat deep-link and accepts only a local student return route', () => {
     expect(studentChatLink('student-a', 'chat-a')).toBe(
-      '/chats?conversationId=chat-a&returnTo=%2Fstudents%2Fstudent-a',
+      '/chats?conversationId=chat-a&returnTo=%2Fstudents%2Fstudent-a&studentId=student-a',
+    );
+    expect(studentChatLink('student-a', 'chat-a', 'system:payment-reminder')).toContain(
+      'templateId=system%3Apayment-reminder',
     );
     expect(safeChatReturn('/students/student-a')).toBe('/students/student-a');
     expect(safeChatReturn('https://example.test/students/student-a')).toBeUndefined();

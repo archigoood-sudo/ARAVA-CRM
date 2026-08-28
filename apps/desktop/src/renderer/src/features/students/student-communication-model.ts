@@ -10,9 +10,15 @@ export function isCommunicationAttention(item: AttentionItem): boolean {
   );
 }
 
-export function studentChatLink(studentId: string, conversationId: string): string {
+export function studentChatLink(
+  studentId: string,
+  conversationId: string,
+  templateId?: string,
+): string {
   const returnTo = `/students/${studentId}`;
-  return `/chats?conversationId=${encodeURIComponent(conversationId)}&returnTo=${encodeURIComponent(returnTo)}`;
+  const query = new URLSearchParams({ conversationId, returnTo, studentId });
+  if (templateId) query.set('templateId', templateId);
+  return `/chats?${query.toString()}`;
 }
 
 export function safeChatReturn(value: string | null): string | undefined {

@@ -1038,8 +1038,30 @@ export const chatSendInputSchema = z.object({
     .min(1)
     .max(160)
     .regex(/^[A-Za-z0-9_.:-]+$/u),
-  text: z.string().trim().min(1, 'Введите сообщение.').max(1200, 'Сообщение слишком длинное.'),
+  text: z
+    .string()
+    .trim()
+    .min(1, 'Введите сообщение.')
+    .max(1200, 'Сообщение слишком длинное.')
+    .refine((value) => !/\{\{[^{}]+\}\}/u.test(value), {
+      message: 'Заполните все переменные шаблона перед отправкой.',
+    }),
 });
+
+export const communicationTemplateInputSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Укажите название.').max(80),
+    text: z.string().trim().min(1, 'Введите текст шаблона.').max(1200),
+  })
+  .refine(
+    (input) =>
+      [...input.text.matchAll(/\{\{([^{}]+)\}\}/gu)].every((match) =>
+        ['STUDENT_NAME', 'GROUP_NAME', 'LESSON_DATE', 'LESSON_TIME'].includes(
+          match[1]?.trim() ?? '',
+        ),
+      ),
+    { message: 'Шаблон содержит неизвестную переменную.', path: ['text'] },
+  );
 
 export const leadStatusSchema = z.enum(LEAD_STATUSES);
 export const leadSourceSchema = z.enum(LEAD_SOURCES);

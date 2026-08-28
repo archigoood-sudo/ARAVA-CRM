@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { ChatListResult, ChatMessagePage, ChatSummary } from '@arava/shared';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
-import { ChatService } from './chat-service';
+import { ChatService, SYSTEM_COMMUNICATION_TEMPLATES } from './chat-service';
 import {
   closeDatabase,
   createDatabaseClient,
@@ -127,6 +127,13 @@ describe('ChatService', () => {
     const integration = mockIntegration([conversation]);
     const service = new ChatService(database, application, integration);
     await service.get(ownerToken, conversation.id);
+    await expect(
+      service.send(ownerToken, conversation.id, {
+        clientMessageId: 'raw-template',
+        text: 'Здравствуйте, {{STUDENT_NAME}}',
+      }),
+    ).rejects.toThrow('Заполните все переменные');
+    expect(await database.syncOutbox.count({ where: { entityType: 'CHAT_MESSAGE' } })).toBe(0);
     const remoteChat = vi
       .spyOn(integration, 'getRemoteChat')
       .mockRejectedValue(new Error('offline'));
@@ -211,6 +218,17 @@ describe('ChatService', () => {
           senderType: 'client',
           status: 'SENT',
         },
+        {
+          attachments: [],
+          body: 'Здравствуйте! Сейчас уточним.',
+          createdAt: '2026-08-18T12:30:00.000Z',
+          id: 'studio-message',
+          senderAccountId: null,
+          senderName: 'Администратор',
+          senderRole: 'ADMIN',
+          senderType: 'admin',
+          status: 'SENT',
+        },
       ],
       nextCursor: null,
     });
@@ -219,10 +237,21 @@ describe('ChatService', () => {
     await expect(service.studentSummary(ownerToken, student.id)).resolves.toEqual({
       canOpen: true,
       conversationId: conversation.id,
+      latestInbound: {
+        author: 'CLIENT',
+        createdAt: '2026-08-18T13:00:00.000Z',
+        text: 'Подскажите время занятия?',
+      },
+      latestOutbound: {
+        author: 'ADMIN',
+        createdAt: '2026-08-18T12:30:00.000Z',
+        text: 'Здравствуйте! Сейчас уточним.',
+      },
       lastMessageAt: '2026-08-18T13:00:00.000Z',
       lastMessageAuthor: 'CLIENT',
       lastMessagePreview: 'Подскажите время занятия?',
       state: 'AVAILABLE',
+      suggestedTemplateIds: [],
       unreadCount: 1,
     });
     expect(integration.listRemoteChats.mock.calls).toHaveLength(1);
@@ -275,6 +304,7 @@ describe('ChatService', () => {
     await expect(noChat.studentSummary(coachSession.token, student.id)).resolves.toEqual({
       canOpen: false,
       state: 'INACCESSIBLE',
+      suggestedTemplateIds: [],
       unreadCount: 0,
     });
 
@@ -325,8 +355,110 @@ describe('ChatService', () => {
     await expect(noChat.studentSummary(ownerToken, student.id)).resolves.toEqual({
       canOpen: false,
       state: 'OFFLINE',
+      suggestedTemplateIds: [],
       unreadCount: 0,
     });
+  });
+
+  it('supports six system templates and OWNER-only persistent custom template CRUD without sync rows', async () => {
+    const integration = mockIntegration([]);
+    const service = new ChatService(database, application, integration);
+    expect(SYSTEM_COMMUNICATION_TEMPLATES.map(({ name }) => name)).toEqual([
+      'Напоминание о занятии',
+      'Напоминание об оплате',
+      'После пробного',
+      'Пропустил занятие',
+      'Заканчивается абонемент',
+      'Приглашение вернуться',
+    ]);
+
+    const branch = await application.createBranch(ownerToken, { name: 'Шаблоны' });
+    const admin = await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'template-admin@arava.local',
+      fullName: 'Администратор Шаблонов',
+      password: 'Admin!Templates2026',
+      role: 'ADMIN',
+    });
+    const coach = await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'template-coach@arava.local',
+      fullName: 'Тренер Шаблонов',
+      password: 'Coach!Templates2026',
+      role: 'COACH',
+    });
+    const adminSession = await application.login({
+      email: admin.email,
+      password: 'Admin!Templates2026',
+    });
+    const coachSession = await application.login({
+      email: coach.email,
+      password: 'Coach!Templates2026',
+    });
+    await application.changePassword(adminSession.token, {
+      currentPassword: 'Admin!Templates2026',
+      newPassword: 'Admin!TemplatesChanged2026',
+    });
+    await application.changePassword(coachSession.token, {
+      currentPassword: 'Coach!Templates2026',
+      newPassword: 'Coach!TemplatesChanged2026',
+    });
+    const outboxBeforeTemplates = await database.syncOutbox.count();
+    const conflictsBeforeTemplates = await database.syncConflict.count();
+    const created = await service.templateCreate(ownerToken, {
+      name: 'Своя встреча',
+      text: 'Здравствуйте, {{STUDENT_NAME}}!',
+    });
+    const updated = await service.templateUpdate(ownerToken, created.id, {
+      name: 'Своя встреча — новая',
+      text: 'Добрый день, {{STUDENT_NAME}}!',
+    });
+    expect(updated.id).toBe(created.id);
+    expect(
+      (await service.templateList(adminSession.token)).some(({ id }) => id === created.id),
+    ).toBe(true);
+    await expect(
+      service.templateUpdate(adminSession.token, created.id, {
+        name: 'Запрещено',
+        text: 'Запрещено',
+      }),
+    ).rejects.toThrow('только владелец');
+    await expect(service.templateList(coachSession.token)).rejects.toThrow('недоступны тренеру');
+
+    await service.templateArchive(ownerToken, created.id);
+    expect((await service.templateList(ownerToken)).some(({ id }) => id === created.id)).toBe(
+      false,
+    );
+    expect(
+      (await service.templateList(ownerToken, true)).find(({ id }) => id === created.id)
+        ?.archivedAt,
+    ).toBeTruthy();
+    const restarted = new ChatService(database, application, integration);
+    expect(
+      (await restarted.templateList(ownerToken, true)).find(({ id }) => id === created.id)?.text,
+    ).toBe('Добрый день, {{STUDENT_NAME}}!');
+    await restarted.templateDelete(ownerToken, created.id);
+    expect(
+      (await restarted.templateList(ownerToken, true)).some(({ id }) => id === created.id),
+    ).toBe(false);
+    expect(await database.syncOutbox.count()).toBe(outboxBeforeTemplates);
+    expect(await database.syncConflict.count()).toBe(conflictsBeforeTemplates);
+  });
+
+  it('keeps rapid local template edits outside sync and conflict processing', async () => {
+    const service = new ChatService(database, application, mockIntegration([]));
+    const template = await service.templateCreate(ownerToken, { name: 'Быстрый', text: 'Текст 0' });
+    for (let index = 1; index <= 100; index += 1) {
+      await service.templateUpdate(ownerToken, template.id, {
+        name: 'Быстрый',
+        text: `Текст ${String(index)}`,
+      });
+    }
+    expect(
+      (await service.templateList(ownerToken)).find(({ id }) => id === template.id)?.text,
+    ).toBe('Текст 100');
+    expect(await database.syncOutbox.count()).toBe(0);
+    expect(await database.syncConflict.count()).toBe(0);
   });
 });
 
