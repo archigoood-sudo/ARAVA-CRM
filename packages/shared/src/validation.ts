@@ -89,6 +89,7 @@ import {
   type StudentBulkRemoveFromGroupInput,
   type StudentInput,
   type StudentDocumentInput,
+  type StudentDocumentPackInput,
   type StudentDocumentStatusInput,
   type StudentNoteInput,
   type StudentListQuery,
@@ -290,6 +291,12 @@ export const studentDocumentInputSchema: z.ZodType<StudentDocumentInput> = z
 export const studentDocumentStatusInputSchema: z.ZodType<StudentDocumentStatusInput> = z.object({
   status: studentDocumentStatusSchema,
 });
+export const studentDocumentPackInputSchema: z.ZodType<StudentDocumentPackInput> = z
+  .object({
+    attachToStudent: z.boolean().optional(),
+    representativeContactId: z.string().min(1).max(100).optional(),
+  })
+  .strict();
 
 export const studentContactInputSchema: z.ZodType<StudentContactInput> = z.object({
   email: z

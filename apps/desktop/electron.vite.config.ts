@@ -27,6 +27,14 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: internalPackages })],
   },
   renderer: {
+    build: {
+      rollupOptions: {
+        input: {
+          'document-renderer': resolve('src/renderer/document-renderer.html'),
+          index: resolve('src/renderer/index.html'),
+        },
+      },
+    },
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),

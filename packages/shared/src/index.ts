@@ -93,6 +93,7 @@ export {
   studentListQuerySchema,
   studentNoteInputSchema,
   studentDocumentInputSchema,
+  studentDocumentPackInputSchema,
   studentDocumentStatusInputSchema,
   studentStatusSchema,
   subscriptionAdjustmentInputSchema,

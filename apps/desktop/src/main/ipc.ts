@@ -109,6 +109,7 @@ import {
   studentListQuerySchema,
   studentNoteInputSchema,
   studentDocumentInputSchema,
+  studentDocumentPackInputSchema,
   studentDocumentStatusInputSchema,
   subscriptionAdjustmentInputSchema,
   subscriptionCreateInputSchema,
@@ -141,6 +142,7 @@ import { getBuildMetadata } from './build-metadata';
 import type { CustomerDisplayManager } from './customer-display-manager';
 import type { IntegrationManager } from './integration-manager';
 import type { UpdateController } from './update-manager';
+import { DocumentPackManager } from './document-pack-manager';
 
 type IpcHandler = (...arguments_: unknown[]) => unknown;
 const coachEnrollmentStatuses = ['ACTIVE', 'TRIAL', 'FROZEN'] satisfies EnrollmentStatus[];
@@ -191,6 +193,7 @@ export interface BackupIpcDependencies {
   relaunch?: () => void;
   writeFinanceExport?: (path: string, content: string) => Promise<void>;
   customerDisplay?: CustomerDisplayManager;
+  documentPacks?: Pick<DocumentPackManager, 'generate' | 'preview' | 'print'>;
   integration?: IntegrationManager;
   updates?: UpdateController;
 }
@@ -213,6 +216,7 @@ export function createIpcHandlers(
   const search = new GlobalSearchService(database, service);
   const studentProfiles = new StudentProfileService(database, service);
   const studentDocuments = new StudentDocumentService(database, service);
+  const documentPacks = backupDependencies.documentPacks ?? new DocumentPackManager();
   const studentBulk = new StudentBulkService(database, service);
   const trainerProfiles = new TrainerProfileService(database, service);
   const attention = new AttentionService(database, service);
@@ -1655,6 +1659,72 @@ export function createIpcHandlers(
       const result = await studentDocuments.removeAttachment(token, id);
       if (attachment) await rm(join(documentMediaDirectory, attachment.mediaId), { force: true });
       return result;
+    },
+    [IPC_CHANNELS.studentDocumentPackInfo]: (unsafeToken, unsafeStudentId, unsafeInput) => {
+      const input = studentDocumentPackInputSchema.parse(unsafeInput);
+      return studentDocuments.packInfo(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+        input.representativeContactId,
+      );
+    },
+    [IPC_CHANNELS.studentDocumentPackPreview]: async (
+      unsafeToken,
+      unsafeStudentId,
+      unsafeInput,
+    ) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const studentId = identifierSchema.parse(unsafeStudentId);
+      const input = studentDocumentPackInputSchema.parse(unsafeInput);
+      const info = await studentDocuments.packInfo(token, studentId, input.representativeContactId);
+      const pdf = await documentPacks.generate(info);
+      await documentPacks.preview(pdf);
+      await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_GENERATED');
+    },
+    [IPC_CHANNELS.studentDocumentPackSave]: async (unsafeToken, unsafeStudentId, unsafeInput) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const studentId = identifierSchema.parse(unsafeStudentId);
+      const input = studentDocumentPackInputSchema.parse(unsafeInput);
+      if (!input.attachToStudent) {
+        throw new Error('Подтвердите добавление PDF в документы ученика.');
+      }
+      const info = await studentDocuments.packInfo(token, studentId, input.representativeContactId);
+      const safeStudentName = info.studentName.replaceAll(/[^\p{L}\p{N}._-]+/gu, '_');
+      const selection = await dialog.showSaveDialog({
+        defaultPath: `АРАВА_${safeStudentName}_${info.contractNumber}.pdf`,
+        filters: [{ extensions: ['pdf'], name: 'PDF' }],
+        title: 'Сохранить комплект документов',
+      });
+      if (selection.canceled || !selection.filePath) return false;
+      const pdf = await documentPacks.generate(info);
+      await writeFile(selection.filePath, pdf, { flag: 'w' });
+      const mediaId = `${randomUUID()}.pdf`;
+      await mkdir(documentMediaDirectory, { recursive: true });
+      const mediaPath = join(documentMediaDirectory, mediaId);
+      await writeFile(mediaPath, pdf, { flag: 'wx' });
+      try {
+        await studentDocuments.attachGeneratedPack(token, studentId, {
+          fileName: basename(selection.filePath),
+          mediaId,
+          mimeType: 'application/pdf',
+        });
+      } catch (error) {
+        await rm(mediaPath, { force: true });
+        throw error;
+      }
+      await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_GENERATED');
+      await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_PDF_SAVED');
+      return true;
+    },
+    [IPC_CHANNELS.studentDocumentPackPrint]: async (unsafeToken, unsafeStudentId, unsafeInput) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const studentId = identifierSchema.parse(unsafeStudentId);
+      const input = studentDocumentPackInputSchema.parse(unsafeInput);
+      const info = await studentDocuments.packInfo(token, studentId, input.representativeContactId);
+      const pdf = await documentPacks.generate(info);
+      await documentPacks.print(pdf);
+      await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_GENERATED');
+      await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_PRINT_REQUESTED');
     },
     [IPC_CHANNELS.trainerProfileGet]: (unsafeToken, unsafeId, unsafeMonth) =>
       trainerProfiles.getOverview(

@@ -216,4 +216,119 @@ describe('Sprint 5.3A student documents', () => {
     });
     await expect(documents.list(adminToken, hidden.id)).rejects.toThrow('нет доступа');
   });
+
+  it('prepares child and adult packs from immutable contracts with branch permissions', async () => {
+    const { contact, otherBranch, student } = await fixture();
+    await database.student.update({
+      data: { birthDate: new Date('2015-04-12T12:00:00') },
+      where: { id: student.id },
+    });
+    const contract = await documents.create(ownerToken, student.id, {
+      documentDate: '2026-08-28',
+      documentType: 'CONTRACT',
+      source: 'GENERATED',
+      status: 'ACTIVE',
+    });
+    const child = await documents.packInfo(ownerToken, student.id, contact.id);
+    expect(child).toMatchObject({
+      contractNumber: contract.contractNumber,
+      isAdult: false,
+      representativeName: 'Анна Документова',
+      studentName: 'Документов Лев',
+    });
+    expect(child.parts).toHaveLength(4);
+
+    const adult = await application.createStudent(ownerToken, {
+      birthDate: '1990-01-10',
+      branchId: otherBranch.id,
+      firstName: 'Мария',
+      lastName: 'Взрослая',
+      status: 'ACTIVE',
+    });
+    await documents.create(ownerToken, adult.id, {
+      documentDate: '2026-08-28',
+      documentType: 'CONTRACT',
+      source: 'GENERATED',
+      status: 'ACTIVE',
+    });
+    await expect(documents.packInfo(ownerToken, adult.id)).resolves.toMatchObject({
+      isAdult: true,
+      studentName: 'Взрослая Мария',
+    });
+
+    const admin = await application.login({
+      email: 'documents-admin@arava.local',
+      password: 'Admin!Documents2026',
+    });
+    await application.changePassword(admin.token, {
+      currentPassword: 'Admin!Documents2026',
+      newPassword: 'Admin!DocumentsPack2026',
+    });
+    await expect(documents.packInfo(admin.token, student.id, contact.id)).resolves.toMatchObject({
+      isAdult: false,
+    });
+    await expect(documents.packInfo(admin.token, adult.id)).rejects.toThrow('нет доступа');
+  });
+
+  it('requires birth date, contract, and active representative and protects existing attachment', async () => {
+    const { contact, student } = await fixture();
+    await expect(documents.packInfo(ownerToken, student.id)).rejects.toThrow(
+      'Укажите дату рождения ученика.',
+    );
+    await database.student.update({
+      data: { birthDate: new Date('2016-02-10T12:00:00') },
+      where: { id: student.id },
+    });
+    await expect(documents.packInfo(ownerToken, student.id)).rejects.toThrow(
+      'Сначала оформите договор',
+    );
+    await documents.create(ownerToken, student.id, {
+      documentDate: '2026-08-28',
+      documentType: 'CONTRACT',
+      source: 'GENERATED',
+      status: 'ACTIVE',
+    });
+    await database.studentContact.update({
+      data: { archivedAt: new Date() },
+      where: { id: contact.id },
+    });
+    await expect(documents.packInfo(ownerToken, student.id, contact.id)).rejects.toThrow(
+      'Выбранный представитель недоступен.',
+    );
+    await database.studentContact.update({ data: { archivedAt: null }, where: { id: contact.id } });
+    const attached = await documents.attachGeneratedPack(ownerToken, student.id, {
+      fileName: 'Комплект.pdf',
+      mediaId: '00000000-0000-0000-0000-000000000101.pdf',
+      mimeType: 'application/pdf',
+    });
+    expect(attached.attachment?.fileName).toBe('Комплект.pdf');
+    await expect(
+      documents.attachGeneratedPack(ownerToken, student.id, {
+        fileName: 'Новый.pdf',
+        mediaId: '00000000-0000-0000-0000-000000000102.pdf',
+        mimeType: 'application/pdf',
+      }),
+    ).rejects.toThrow('У договора уже есть файл');
+    expect(
+      (await documents.list(ownerToken, student.id)).find(
+        ({ documentType }) => documentType === 'CONTRACT',
+      )?.attachment?.mediaId,
+    ).toBe('00000000-0000-0000-0000-000000000101.pdf');
+  });
+
+  it('audits pack lifecycle without document contents or personal data', async () => {
+    const { student } = await fixture();
+    await documents.auditPackAction(ownerToken, student.id, 'DOCUMENT_PACK_GENERATED');
+    await documents.auditPackAction(ownerToken, student.id, 'DOCUMENT_PACK_PDF_SAVED');
+    await documents.auditPackAction(ownerToken, student.id, 'DOCUMENT_PACK_PRINT_REQUESTED');
+    const entries = await database.auditLog.findMany({ where: { entityId: student.id } });
+    expect(entries.map(({ action }) => action)).toEqual(
+      expect.arrayContaining([
+        'DOCUMENT_PACK_GENERATED',
+        'DOCUMENT_PACK_PDF_SAVED',
+        'DOCUMENT_PACK_PRINT_REQUESTED',
+      ]),
+    );
+    expect(JSON.stringify(entries)).not.toContain('Документов Лев');
+  });
 });

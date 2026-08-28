@@ -421,6 +421,10 @@ export const IPC_CHANNELS = {
   studentDocumentSelectAttachment: 'student-document:select-attachment',
   studentDocumentOpenAttachment: 'student-document:open-attachment',
   studentDocumentRemoveAttachment: 'student-document:remove-attachment',
+  studentDocumentPackInfo: 'student-document:pack-info',
+  studentDocumentPackPreview: 'student-document:pack-preview',
+  studentDocumentPackSave: 'student-document:pack-save',
+  studentDocumentPackPrint: 'student-document:pack-print',
   trainerProfileGet: 'trainer-profile:get',
   studentNoteCreate: 'student-note:create',
   studentNoteUpdate: 'student-note:update',
@@ -861,6 +865,20 @@ export interface StudentDocumentSummary {
   statusHistory: StudentDocumentHistoryEntry[];
   studentId: string;
   updatedAt: string;
+}
+
+export interface StudentDocumentPackInfo {
+  contractNumber: string;
+  isAdult: boolean;
+  parts: string[];
+  representativeContactId?: string | undefined;
+  representativeName?: string | undefined;
+  studentName: string;
+}
+
+export interface StudentDocumentPackInput {
+  attachToStudent?: boolean | undefined;
+  representativeContactId?: string | undefined;
 }
 
 export type ClientWebAccessState =
@@ -3615,6 +3633,22 @@ export interface AravaDesktopApi {
     openAttachment: (token: string, id: string) => Promise<void>;
     removeAttachment: (token: string, id: string) => Promise<StudentDocumentSummary>;
     selectAttachment: (token: string) => Promise<StudentDocumentAttachmentInput | undefined>;
+    packInfo: (
+      token: string,
+      studentId: string,
+      input: StudentDocumentPackInput,
+    ) => Promise<StudentDocumentPackInfo>;
+    previewPack: (
+      token: string,
+      studentId: string,
+      input: StudentDocumentPackInput,
+    ) => Promise<void>;
+    savePack: (
+      token: string,
+      studentId: string,
+      input: StudentDocumentPackInput,
+    ) => Promise<boolean>;
+    printPack: (token: string, studentId: string, input: StudentDocumentPackInput) => Promise<void>;
   };
   system: {
     information: (token: string) => Promise<SystemInformation>;

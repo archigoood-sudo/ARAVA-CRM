@@ -21,6 +21,10 @@ extraResources:
     to: app-metadata.json
   - from: build/icon.png
     to: icon.png
+  - from: ../../docs/document-templates/source
+    to: document-templates
+    filter:
+      - '*.docx'
 publish:
   provider: github
   owner: archigoood-sudo

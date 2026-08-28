@@ -21,7 +21,7 @@ import {
   Textarea,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Copy, FileText, Paperclip, Plus } from 'lucide-react';
+import { Copy, Download, Eye, FileText, Paperclip, Plus, Printer } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -95,6 +95,9 @@ export function StudentDocumentsCard({
     queryKey,
   });
   const [open, setOpen] = useState(false);
+  const [packOpen, setPackOpen] = useState(false);
+  const [packRepresentativeContactId, setPackRepresentativeContactId] = useState('');
+  const [packError, setPackError] = useState<string>();
   const [source, setSource] = useState<'EXISTING' | 'GENERATED'>('EXISTING');
   const [documentType, setDocumentType] = useState<StudentDocumentType>('CONTRACT');
   const [documentDate, setDocumentDate] = useState(today());
@@ -111,6 +114,18 @@ export function StudentDocumentsCard({
     }
     return map;
   }, [documents.data]);
+  const packInput = useMemo(
+    () =>
+      packRepresentativeContactId ? { representativeContactId: packRepresentativeContactId } : {},
+    [packRepresentativeContactId],
+  );
+  const packInfo = useQuery({
+    enabled: packOpen,
+    queryFn: () =>
+      getDesktopApi().studentDocuments.packInfo(getSessionToken(), studentId, packInput),
+    queryKey: ['student-document-pack', user?.id, studentId, packRepresentativeContactId],
+    retry: false,
+  });
 
   const reset = (nextSource: 'EXISTING' | 'GENERATED', nextType: StudentDocumentType) => {
     setSource(nextSource);
@@ -179,6 +194,31 @@ export function StudentDocumentsCard({
       setError(getErrorMessage(caught, 'Не удалось сохранить документ.'));
     }
   };
+  const packAction = useMutation({
+    mutationFn: async (action: 'PREVIEW' | 'PRINT' | 'SAVE') => {
+      const api = getDesktopApi().studentDocuments;
+      const token = getSessionToken();
+      if (action === 'PREVIEW') return api.previewPack(token, studentId, packInput);
+      if (action === 'PRINT') return api.printPack(token, studentId, packInput);
+      const confirmed = window.confirm(
+        'PDF будет сохранён в выбранную папку и добавлен к договору ученика. Продолжить?',
+      );
+      if (!confirmed) return false;
+      return api.savePack(token, studentId, { ...packInput, attachToStudent: true });
+    },
+    onError: (caught) =>
+      setPackError(getErrorMessage(caught, 'Не удалось сформировать комплект документов.')),
+    onSuccess: async (result, action) => {
+      if (action === 'SAVE' && result) {
+        await queryClient.invalidateQueries({ queryKey });
+      }
+    },
+  });
+  const openPack = () => {
+    setPackError(undefined);
+    setPackRepresentativeContactId('');
+    setPackOpen(true);
+  };
 
   return (
     <Card className="mb-5" data-testid="student-documents">
@@ -190,6 +230,14 @@ export function StudentDocumentsCard({
           </p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            data-testid="generate-document-pack"
+            onClick={openPack}
+            size="small"
+            variant="outline"
+          >
+            <FileText className="size-4" /> Сформировать документы
+          </Button>
           <Button onClick={() => reset('GENERATED', 'CONTRACT')} size="small">
             <Plus className="size-4" /> Оформить новый
           </Button>
@@ -420,6 +468,111 @@ export function StudentDocumentsCard({
           </label>
           {error ? <p className="text-sm text-red-600 sm:col-span-2">{error}</p> : null}
         </div>
+      </Dialog>
+
+      <Dialog
+        closeLabel="Закрыть"
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button onClick={() => setPackOpen(false)} variant="ghost">
+              Закрыть
+            </Button>
+            <Button
+              data-testid="document-pack-preview"
+              disabled={
+                packAction.isPending ||
+                packInfo.isLoading ||
+                packInfo.isError ||
+                (packInfo.data?.isAdult === false && !packRepresentativeContactId)
+              }
+              onClick={() => packAction.mutate('PREVIEW')}
+              variant="outline"
+            >
+              <Eye className="size-4" /> Предпросмотр
+            </Button>
+            <Button
+              disabled={
+                packAction.isPending ||
+                packInfo.isLoading ||
+                packInfo.isError ||
+                (packInfo.data?.isAdult === false && !packRepresentativeContactId)
+              }
+              onClick={() => packAction.mutate('SAVE')}
+              variant="outline"
+            >
+              <Download className="size-4" /> Сохранить PDF
+            </Button>
+            <Button
+              disabled={
+                packAction.isPending ||
+                packInfo.isLoading ||
+                packInfo.isError ||
+                (packInfo.data?.isAdult === false && !packRepresentativeContactId)
+              }
+              onClick={() => packAction.mutate('PRINT')}
+            >
+              <Printer className="size-4" /> {packAction.isPending ? 'Формируем…' : 'Печать'}
+            </Button>
+          </div>
+        }
+        onClose={() => setPackOpen(false)}
+        open={packOpen}
+        title="Комплект документов"
+      >
+        {packInfo.isLoading ? (
+          <p className="text-sm text-muted-foreground">Проверяем данные ученика…</p>
+        ) : packInfo.isError ? (
+          <p className="text-sm text-red-600">
+            {getErrorMessage(packInfo.error, 'Не удалось подготовить комплект документов.')}
+          </p>
+        ) : packInfo.data ? (
+          <div className="space-y-4" data-testid="document-pack-details">
+            <div className="rounded-xl border border-border p-3 text-sm">
+              <p className="font-semibold">{packInfo.data.studentName}</p>
+              <p className="mt-1 text-muted-foreground">
+                Договор № {packInfo.data.contractNumber} ·{' '}
+                {packInfo.data.isAdult ? 'Совершеннолетний' : 'Несовершеннолетний'}
+              </p>
+            </div>
+            {!packInfo.data.isAdult ? (
+              <label className="block space-y-2">
+                <Label htmlFor="pack-representative">Родитель / законный представитель</Label>
+                <Select
+                  id="pack-representative"
+                  onChange={(event) => {
+                    setPackError(undefined);
+                    setPackRepresentativeContactId(event.target.value);
+                  }}
+                  value={packRepresentativeContactId}
+                >
+                  <option value="">Выберите представителя</option>
+                  {contacts.map((contact) => (
+                    <option key={contact.id} value={contact.id}>
+                      {contact.fullName} · {contact.relationship}
+                    </option>
+                  ))}
+                </Select>
+                {!contacts.length ? (
+                  <p className="text-sm text-amber-700">
+                    Сначала добавьте активный контакт родителя или представителя.
+                  </p>
+                ) : null}
+              </label>
+            ) : null}
+            <div>
+              <p className="text-sm font-semibold">В комплект войдут:</p>
+              <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+                {packInfo.data.parts.map((part) => (
+                  <li key={part}>{part}</li>
+                ))}
+              </ol>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Даты, подписи и остальные поля останутся пустыми для ручного заполнения.
+            </p>
+            {packError ? <p className="text-sm text-red-600">{packError}</p> : null}
+          </div>
+        ) : null}
       </Dialog>
     </Card>
   );

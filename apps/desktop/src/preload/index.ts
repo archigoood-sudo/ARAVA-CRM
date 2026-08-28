@@ -421,6 +421,16 @@ const desktopApi: AravaDesktopApi = {
     removeAttachment: (token, id) =>
       invoke(IPC_CHANNELS.studentDocumentRemoveAttachment, token, id),
     selectAttachment: (token) => invoke(IPC_CHANNELS.studentDocumentSelectAttachment, token),
+    packInfo: (token, studentId, input) =>
+      invoke(IPC_CHANNELS.studentDocumentPackInfo, token, studentId, input),
+    previewPack: async (token, studentId, input) => {
+      await invoke(IPC_CHANNELS.studentDocumentPackPreview, token, studentId, input);
+    },
+    savePack: (token, studentId, input) =>
+      invoke(IPC_CHANNELS.studentDocumentPackSave, token, studentId, input),
+    printPack: async (token, studentId, input) => {
+      await invoke(IPC_CHANNELS.studentDocumentPackPrint, token, studentId, input);
+    },
   },
   system: { information: (token) => invoke(IPC_CHANNELS.systemInformation, token) },
   updates: {

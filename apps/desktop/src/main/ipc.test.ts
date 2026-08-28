@@ -13,6 +13,7 @@ import {
   INITIAL_OWNER_PASSWORD,
   IntegrationService,
   StudioService,
+  StudentDocumentService,
   type IntegrationCredentialStore,
   toSqliteUrl,
   type DatabaseClient,
@@ -1912,5 +1913,103 @@ describe('Electron IPC boundary', () => {
       '/tmp/arava-debts.csv',
       expect.stringContaining('Должникова Ирина'),
     );
+  });
+
+  it('generates document preview through narrow IPC without creating an attachment', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!DocumentPackIpc2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Документы IPC' });
+    const student = await service.createStudent(owner.token, {
+      birthDate: '1991-03-11',
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Документова',
+      status: 'ACTIVE',
+    });
+    const documentService = new StudentDocumentService(database, service);
+    const contract = await documentService.create(owner.token, student.id, {
+      documentDate: '2026-08-28',
+      documentType: 'CONTRACT',
+      source: 'GENERATED',
+      status: 'ACTIVE',
+    });
+    const documentPacks = {
+      generate: vi.fn().mockResolvedValue(Buffer.from('%PDF-preview')),
+      preview: vi.fn().mockResolvedValue(undefined),
+      print: vi.fn().mockResolvedValue(undefined),
+    };
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'), {
+      documentPacks,
+    });
+    await expect(
+      handlers[IPC_CHANNELS.studentDocumentPackPreview]?.(owner.token, student.id, {}),
+    ).resolves.toBeUndefined();
+    expect(documentPacks.generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contractNumber: contract.contractNumber,
+        isAdult: true,
+        studentName: 'Документова Анна',
+      }),
+    );
+    expect(documentPacks.preview).toHaveBeenCalledOnce();
+    expect(
+      await database.studentDocument.findUnique({
+        select: { attachmentMediaId: true },
+        where: { id: contract.id },
+      }),
+    ).toEqual({ attachmentMediaId: null });
+  });
+
+  it('denies document pack DTO and generation to COACH through direct IPC', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!DocumentPackCoach2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Документы COACH IPC' });
+    const student = await service.createStudent(owner.token, {
+      birthDate: '1990-01-01',
+      branchId: branch.id,
+      firstName: 'Мария',
+      lastName: 'Закрытая',
+      status: 'ACTIVE',
+    });
+    await service.createUser(owner.token, {
+      branchIds: [branch.id],
+      email: 'pack-coach@arava.local',
+      fullName: 'Тренер документов',
+      password: 'Coach!PackIpc2026',
+      role: 'COACH',
+    });
+    const coach = await service.login({
+      email: 'pack-coach@arava.local',
+      password: 'Coach!PackIpc2026',
+    });
+    await service.changePassword(coach.token, {
+      currentPassword: 'Coach!PackIpc2026',
+      newPassword: 'Coach!PackReady2026',
+    });
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'), {
+      documentPacks: {
+        generate: vi.fn(),
+        preview: vi.fn(),
+        print: vi.fn(),
+      },
+    });
+    await expect(
+      handlers[IPC_CHANNELS.studentDocumentPackInfo]?.(coach.token, student.id, {}),
+    ).rejects.toThrow('недостаточно прав');
+    await expect(
+      handlers[IPC_CHANNELS.studentDocumentPackPreview]?.(coach.token, student.id, {}),
+    ).rejects.toThrow('недостаточно прав');
   });
 });

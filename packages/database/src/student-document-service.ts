@@ -1,5 +1,7 @@
 import type {
+  StudentDocumentAttachmentInput,
   StudentDocumentInput,
+  StudentDocumentPackInfo,
   StudentDocumentStatus,
   StudentDocumentSummary,
 } from '@arava/shared';
@@ -98,6 +100,151 @@ export class StudentDocumentService {
       where: { studentId },
     });
     return rows.map(summary);
+  }
+
+  async packInfo(
+    token: string,
+    studentId: string,
+    representativeContactId?: string,
+  ): Promise<StudentDocumentPackInfo> {
+    await this.actorAndStudent(token, studentId, true);
+    const student = await this.database.student.findUniqueOrThrow({
+      select: {
+        birthDate: true,
+        firstName: true,
+        lastName: true,
+        middleName: true,
+      },
+      where: { id: studentId },
+    });
+    if (!student.birthDate) {
+      throw new DomainError('VALIDATION', 'Укажите дату рождения ученика.');
+    }
+    const now = new Date();
+    let age = now.getFullYear() - student.birthDate.getFullYear();
+    if (
+      now.getMonth() < student.birthDate.getMonth() ||
+      (now.getMonth() === student.birthDate.getMonth() &&
+        now.getDate() < student.birthDate.getDate())
+    ) {
+      age -= 1;
+    }
+    const isAdult = age >= 18;
+    const contract = await this.database.studentDocument.findFirst({
+      include: { contractDetail: true },
+      orderBy: [{ documentDate: 'desc' }, { createdAt: 'desc' }],
+      where: {
+        contractDetail: { isNot: null },
+        documentType: 'CONTRACT',
+        status: { not: 'CANCELLED' },
+        studentId,
+      },
+    });
+    if (!contract?.contractDetail) {
+      throw new DomainError('VALIDATION', 'Сначала оформите договор');
+    }
+    let representative: { fullName: string; id: string } | undefined;
+    if (!isAdult && representativeContactId) {
+      representative =
+        (await this.database.studentContact.findFirst({
+          select: { fullName: true, id: true },
+          where: { archivedAt: null, id: representativeContactId, studentId },
+        })) ?? undefined;
+      if (!representative) {
+        throw new DomainError('VALIDATION', 'Выбранный представитель недоступен.');
+      }
+    }
+    const studentName = [student.lastName, student.firstName, student.middleName]
+      .filter(Boolean)
+      .join(' ');
+    return {
+      contractNumber: contract.contractDetail.contractNumber,
+      isAdult,
+      parts: isAdult
+        ? [
+            'Договор',
+            'Приложение №1 / Правила посещения',
+            'Согласие на обработку персональных данных',
+            'Согласие на фото/видео и использование изображения',
+          ]
+        : [
+            'Договор',
+            'Приложение №1 / Правила посещения',
+            'Согласие родителя на обработку персональных данных',
+            'Согласие родителя на фото/видео',
+          ],
+      ...(representative
+        ? {
+            representativeContactId: representative.id,
+            representativeName: representative.fullName,
+          }
+        : {}),
+      studentName,
+    };
+  }
+
+  async attachGeneratedPack(
+    token: string,
+    studentId: string,
+    attachment: StudentDocumentAttachmentInput,
+  ): Promise<StudentDocumentSummary> {
+    const { actor } = await this.actorAndStudent(token, studentId, true);
+    const contract = await this.database.studentDocument.findFirst({
+      include: includeDocument,
+      orderBy: [{ documentDate: 'desc' }, { createdAt: 'desc' }],
+      where: {
+        contractDetail: { isNot: null },
+        documentType: 'CONTRACT',
+        status: { not: 'CANCELLED' },
+        studentId,
+      },
+    });
+    if (!contract) throw new DomainError('VALIDATION', 'Сначала оформите договор');
+    if (contract.attachmentMediaId) {
+      throw new DomainError(
+        'CONFLICT',
+        'У договора уже есть файл. Удалите его вручную перед добавлением нового комплекта.',
+      );
+    }
+    const updated = await this.database.$transaction(async (transaction) => {
+      const document = await transaction.studentDocument.update({
+        data: {
+          attachmentFileName: attachment.fileName,
+          attachmentMediaId: attachment.mediaId,
+          attachmentMimeType: attachment.mimeType,
+        },
+        include: includeDocument,
+        where: { id: contract.id },
+      });
+      await transaction.auditLog.create({
+        data: {
+          action: 'DOCUMENT_ATTACHMENT_ADDED',
+          actorUserId: actor.id,
+          detail: JSON.stringify({ studentId }),
+          entityId: contract.id,
+          entityType: 'StudentDocument',
+        },
+      });
+      return document;
+    });
+    return summary(updated);
+  }
+
+  async auditPackAction(
+    token: string,
+    studentId: string,
+    action: 'DOCUMENT_PACK_GENERATED' | 'DOCUMENT_PACK_PDF_SAVED' | 'DOCUMENT_PACK_PRINT_REQUESTED',
+  ): Promise<void> {
+    const { actor } = await this.actorAndStudent(token, studentId, true);
+    await this.database.auditLog.create({
+      data: {
+        action,
+        actorUserId: actor.id,
+        detail: JSON.stringify({ studentId }),
+        entityId: studentId,
+        entityType: 'Student',
+      },
+    });
   }
 
   async create(
