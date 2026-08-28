@@ -1,10 +1,11 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, shell } from 'electron';
 import JSZip from 'jszip';
 import { PDFDocument } from 'pdf-lib';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { StudentDocumentPackInfo } from '@arava/shared';
+import type { StudentDocumentPackEditSession, StudentDocumentPackInfo } from '@arava/shared';
+import { randomUUID } from 'node:crypto';
 
 const TOKENS = new Set(['CONTRACT_NUMBER', 'CUSTOMER_FIO', 'PARENT_FIO', 'STUDENT_FIO']);
 export interface DocumentPackConverter {
@@ -78,6 +79,54 @@ export async function fillDocxTemplate(
   return result;
 }
 
+async function truncateDocxBefore(source: Buffer, marker: string): Promise<Buffer> {
+  const archive = await JSZip.loadAsync(source);
+  const file = archive.file('word/document.xml');
+  if (!file) throw new Error('DOCX не содержит основной документ.');
+  const xml = await file.async('string');
+  const paragraphs = [...xml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/gu)];
+  const match = paragraphs.find(({ 0: paragraph }) =>
+    [...paragraph.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/gu)]
+      .map((text) => text[1])
+      .join('')
+      .includes(marker),
+  );
+  if (!match) throw new Error('Не удалось выделить правила посещения из мастер-шаблона.');
+  archive.file(
+    'word/document.xml',
+    `${xml.slice(0, match.index)}${xml.slice(xml.indexOf('<w:sectPr', match.index))}`,
+  );
+  return Buffer.from(await archive.generateAsync({ type: 'uint8array' }));
+}
+
+interface EditableDocument {
+  id: string;
+  label: string;
+  fileName: string;
+  path: string;
+}
+
+interface EditableSession {
+  directory: string;
+  documents: EditableDocument[];
+  studentId: string;
+}
+
+async function validateEditableDocx(bytes: Buffer): Promise<void> {
+  if (bytes.length > 20 * 1024 * 1024)
+    throw new Error('Редактируемый DOCX должен быть не больше 20 МБ.');
+  let archive: JSZip;
+  try {
+    archive = await JSZip.loadAsync(bytes);
+  } catch {
+    throw new Error('Редактируемый файл повреждён или не является DOCX.');
+  }
+  const document = archive.file('word/document.xml');
+  if (!document) throw new Error('Редактируемый DOCX не содержит основной документ.');
+  if (/\{\{[^{}]+\}\}/u.test(await document.async('string')))
+    throw new Error('В редактируемом документе остались незаполненные placeholders.');
+}
+
 export class ElectronDocxConverter implements DocumentPackConverter {
   async convert(document: Buffer): Promise<Buffer> {
     const window = new BrowserWindow({
@@ -107,14 +156,21 @@ export class ElectronDocxConverter implements DocumentPackConverter {
 }
 
 export class DocumentPackManager {
+  private readonly sessions = new Map<string, EditableSession>();
+
   constructor(
     private readonly converter: DocumentPackConverter = new ElectronDocxConverter(),
     private readonly templateDirectory = resolveDocumentTemplateDirectory(
       app.isPackaged,
       process.resourcesPath,
     ),
+    private readonly openDocument: (path: string) => Promise<string> = (path) =>
+      shell.openPath(path),
   ) {}
-  async generate(info: StudentDocumentPackInfo): Promise<Buffer> {
+
+  private async filledDocuments(
+    info: StudentDocumentPackInfo,
+  ): Promise<{ fileName: string; id: string; label: string; bytes: Buffer }[]> {
     if (!info.isAdult && !info.representativeName)
       throw new Error('Выберите родителя или законного представителя.');
     const contractSource = await readFile(
@@ -132,13 +188,23 @@ export class DocumentPackManager {
       PARENT_FIO: info.representativeName ?? '',
       STUDENT_FIO: info.studentName,
     });
-    const converted = await Promise.all([
-      this.converter.convert(contract),
-      this.converter.convert(appendix),
+    const documents = [
+      {
+        bytes: contract,
+        fileName: `Договор ${info.contractNumber} ${info.studentName}.docx`,
+        id: 'contract',
+        label: 'Договор',
+      },
+      {
+        bytes: info.isAdult ? await truncateDocxBefore(appendix, 'Согласие родителя') : appendix,
+        fileName: `Приложение ${info.contractNumber} ${info.studentName}.docx`,
+        id: 'appendix',
+        label: 'Приложение и правила',
+      },
       ...(info.isAdult
         ? [
-            this.converter.convert(
-              await fillDocxTemplate(
+            {
+              bytes: await fillDocxTemplate(
                 await readFile(
                   join(
                     this.templateDirectory,
@@ -147,28 +213,90 @@ export class DocumentPackManager {
                 ),
                 { STUDENT_FIO: info.studentName },
               ),
-            ),
+              fileName: `Согласия ${info.contractNumber} ${info.studentName}.docx`,
+              id: 'adult-consents',
+              label: 'Согласия совершеннолетнего',
+            },
           ]
         : []),
-    ]);
+    ];
+    return documents.map((document) => ({
+      ...document,
+      fileName: document.fileName.replaceAll(/[\\/:*?"<>|]+/gu, '_'),
+    }));
+  }
+
+  private session(studentId: string, sessionId: string): EditableSession {
+    const session = this.sessions.get(sessionId);
+    if (session?.studentId !== studentId) throw new Error('Редактируемый документ недоступен.');
+    return session;
+  }
+
+  async createEditSession(
+    info: StudentDocumentPackInfo,
+    studentId: string,
+  ): Promise<StudentDocumentPackEditSession> {
+    const directory = await mkdtemp(join(tmpdir(), 'arava-document-edit-'));
+    const documents = await this.filledDocuments(info);
+    const editable = await Promise.all(
+      documents.map(async (document) => {
+        const path = join(directory, document.fileName);
+        await writeFile(path, document.bytes, { flag: 'wx' });
+        return { id: document.id, label: document.label, fileName: document.fileName, path };
+      }),
+    );
+    const id = randomUUID();
+    this.sessions.set(id, { directory, documents: editable, studentId });
+    return { id, parts: editable.map(({ id: partId, label }) => ({ id: partId, label })) };
+  }
+
+  async openEditable(studentId: string, sessionId: string, partId: string): Promise<void> {
+    const document = this.session(studentId, sessionId).documents.find(({ id }) => id === partId);
+    if (!document) throw new Error('Часть документа не найдена.');
+    const error = await this.openDocument(document.path);
+    if (error) throw new Error('Не удалось открыть DOCX в системном редакторе.');
+  }
+
+  async discardEditSession(studentId: string, sessionId: string): Promise<void> {
+    const session = this.session(studentId, sessionId);
+    this.sessions.delete(sessionId);
+    await rm(session.directory, { recursive: true, force: true });
+  }
+
+  async exportDocuments(
+    info: StudentDocumentPackInfo,
+    studentId: string,
+    sessionId?: string,
+  ): Promise<{ bytes: Buffer; fileName: string }[]> {
+    if (!sessionId)
+      return (await this.filledDocuments(info)).map(({ bytes, fileName }) => ({ bytes, fileName }));
+    const documents = await Promise.all(
+      this.session(studentId, sessionId).documents.map(async ({ fileName, path }) => ({
+        bytes: await readFile(path),
+        fileName,
+      })),
+    );
+    await Promise.all(documents.map(({ bytes }) => validateEditableDocx(bytes)));
+    return documents;
+  }
+
+  async generate(
+    info: StudentDocumentPackInfo,
+    studentId?: string,
+    sessionId?: string,
+  ): Promise<Buffer> {
+    const documents =
+      sessionId && studentId
+        ? await this.exportDocuments(info, studentId, sessionId)
+        : (await this.filledDocuments(info)).map(({ bytes, fileName }) => ({ bytes, fileName }));
+    const converted = await Promise.all(
+      documents.map(({ bytes }) => this.converter.convert(bytes)),
+    );
     const output = await PDFDocument.create();
-    for (const [index, bytes] of converted.entries()) {
+    for (const bytes of converted) {
       const source = await PDFDocument.load(bytes);
       const availablePages = source.getPageIndices();
-      if (index === 0 && availablePages.length !== 6) {
-        throw new Error('Неожиданная структура мастер-шаблона договора.');
-      }
-      if (index === 1 && availablePages.length !== 4) {
-        throw new Error('Неожиданная структура мастер-шаблона приложения и согласий.');
-      }
-      const pages = await output.copyPages(
-        source,
-        index === 0
-          ? availablePages.slice(0, -1)
-          : info.isAdult && index === 1
-            ? [0]
-            : availablePages,
-      );
+      const pages = await output.copyPages(source, availablePages);
       for (const page of pages) output.addPage(page);
     }
     return Buffer.from(await output.save());

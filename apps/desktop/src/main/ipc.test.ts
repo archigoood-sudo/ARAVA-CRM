@@ -1940,7 +1940,14 @@ describe('Electron IPC boundary', () => {
       status: 'ACTIVE',
     });
     const documentPacks = {
+      createEditSession: vi.fn().mockResolvedValue({
+        id: '00000000-0000-4000-8000-000000000001',
+        parts: [{ id: 'contract', label: 'Договор' }],
+      }),
+      discardEditSession: vi.fn(),
+      exportDocuments: vi.fn(),
       generate: vi.fn().mockResolvedValue(Buffer.from('%PDF-preview')),
+      openEditable: vi.fn(),
       preview: vi.fn().mockResolvedValue(undefined),
       print: vi.fn().mockResolvedValue(undefined),
     };
@@ -1956,6 +1963,8 @@ describe('Electron IPC boundary', () => {
         isAdult: true,
         studentName: 'Документова Анна',
       }),
+      student.id,
+      undefined,
     );
     expect(documentPacks.preview).toHaveBeenCalledOnce();
     expect(
@@ -1964,6 +1973,16 @@ describe('Electron IPC boundary', () => {
         where: { id: contract.id },
       }),
     ).toEqual({ attachmentMediaId: null });
+    await expect(
+      handlers[IPC_CHANNELS.studentDocumentPackEdit]?.(owner.token, student.id, {}),
+    ).resolves.toEqual({
+      id: '00000000-0000-4000-8000-000000000001',
+      parts: [{ id: 'contract', label: 'Договор' }],
+    });
+    expect(documentPacks.createEditSession).toHaveBeenCalledWith(
+      expect.objectContaining({ studentName: 'Документова Анна' }),
+      student.id,
+    );
   });
 
   it('denies document pack DTO and generation to COACH through direct IPC', async () => {
@@ -2000,7 +2019,11 @@ describe('Electron IPC boundary', () => {
     });
     const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'), {
       documentPacks: {
+        createEditSession: vi.fn(),
+        discardEditSession: vi.fn(),
+        exportDocuments: vi.fn(),
         generate: vi.fn(),
+        openEditable: vi.fn(),
         preview: vi.fn(),
         print: vi.fn(),
       },
@@ -2010,6 +2033,9 @@ describe('Electron IPC boundary', () => {
     ).rejects.toThrow('недостаточно прав');
     await expect(
       handlers[IPC_CHANNELS.studentDocumentPackPreview]?.(coach.token, student.id, {}),
+    ).rejects.toThrow('недостаточно прав');
+    await expect(
+      handlers[IPC_CHANNELS.studentDocumentPackEdit]?.(coach.token, student.id, {}),
     ).rejects.toThrow('недостаточно прав');
   });
 });

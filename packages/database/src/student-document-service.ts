@@ -233,7 +233,12 @@ export class StudentDocumentService {
   async auditPackAction(
     token: string,
     studentId: string,
-    action: 'DOCUMENT_PACK_GENERATED' | 'DOCUMENT_PACK_PDF_SAVED' | 'DOCUMENT_PACK_PRINT_REQUESTED',
+    action:
+      | 'DOCUMENT_PACK_DOCX_SAVED'
+      | 'DOCUMENT_PACK_EDIT_STARTED'
+      | 'DOCUMENT_PACK_GENERATED'
+      | 'DOCUMENT_PACK_PDF_SAVED'
+      | 'DOCUMENT_PACK_PRINT_REQUESTED',
   ): Promise<void> {
     const { actor } = await this.actorAndStudent(token, studentId, true);
     await this.database.auditLog.create({

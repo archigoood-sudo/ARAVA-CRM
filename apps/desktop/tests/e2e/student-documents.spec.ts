@@ -7,7 +7,8 @@ import {
   type TestInfo,
 } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
-import { access, stat } from 'node:fs/promises';
+import JSZip from 'jszip';
+import { access, mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const password = 'Owner!DocumentsE2E2026';
@@ -87,6 +88,24 @@ test('договор и существующее media-согласие сохр
     await packDialog
       .getByLabel('Родитель / законный представитель')
       .selectOption({ label: 'Анна Документальная · Мама' });
+    await application.evaluate(({ shell }) => {
+      shell.openPath = () => Promise.resolve('');
+    });
+    await packDialog.getByRole('button', { name: 'Редактировать' }).click();
+    await expect(packDialog.getByText('Редактируемая копия')).toBeVisible();
+    await expect(packDialog.getByRole('button', { name: 'Договор' })).toBeVisible();
+    const docxDirectory = testInfo.outputPath('docx-export');
+    await mkdir(docxDirectory, { recursive: true });
+    await application.evaluate(({ dialog }, directory) => {
+      dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [directory] });
+    }, docxDirectory);
+    await packDialog.getByRole('button', { name: 'Сохранить DOCX' }).click();
+    await expect.poll(async () => (await readdir(docxDirectory)).length).toBe(2);
+    for (const fileName of await readdir(docxDirectory)) {
+      const archive = await JSZip.loadAsync(await readFile(resolve(docxDirectory, fileName)));
+      const xml = (await archive.file('word/document.xml')?.async('string')) ?? '';
+      expect(xml).not.toMatch(/\{\{[^{}]+\}\}/u);
+    }
     await packDialog.getByRole('button', { name: 'Предпросмотр' }).click();
     await expect
       .poll(() => application.windows().some((window) => window.url().includes('/documents.pdf')))

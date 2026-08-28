@@ -319,12 +319,16 @@ describe('Sprint 5.3A student documents', () => {
   it('audits pack lifecycle without document contents or personal data', async () => {
     const { student } = await fixture();
     await documents.auditPackAction(ownerToken, student.id, 'DOCUMENT_PACK_GENERATED');
+    await documents.auditPackAction(ownerToken, student.id, 'DOCUMENT_PACK_EDIT_STARTED');
+    await documents.auditPackAction(ownerToken, student.id, 'DOCUMENT_PACK_DOCX_SAVED');
     await documents.auditPackAction(ownerToken, student.id, 'DOCUMENT_PACK_PDF_SAVED');
     await documents.auditPackAction(ownerToken, student.id, 'DOCUMENT_PACK_PRINT_REQUESTED');
     const entries = await database.auditLog.findMany({ where: { entityId: student.id } });
     expect(entries.map(({ action }) => action)).toEqual(
       expect.arrayContaining([
         'DOCUMENT_PACK_GENERATED',
+        'DOCUMENT_PACK_EDIT_STARTED',
+        'DOCUMENT_PACK_DOCX_SAVED',
         'DOCUMENT_PACK_PDF_SAVED',
         'DOCUMENT_PACK_PRINT_REQUESTED',
       ]),

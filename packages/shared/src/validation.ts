@@ -294,6 +294,7 @@ export const studentDocumentStatusInputSchema: z.ZodType<StudentDocumentStatusIn
 export const studentDocumentPackInputSchema: z.ZodType<StudentDocumentPackInput> = z
   .object({
     attachToStudent: z.boolean().optional(),
+    editSessionId: z.string().uuid().optional(),
     representativeContactId: z.string().min(1).max(100).optional(),
   })
   .strict();

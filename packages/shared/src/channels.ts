@@ -422,7 +422,11 @@ export const IPC_CHANNELS = {
   studentDocumentOpenAttachment: 'student-document:open-attachment',
   studentDocumentRemoveAttachment: 'student-document:remove-attachment',
   studentDocumentPackInfo: 'student-document:pack-info',
+  studentDocumentPackEdit: 'student-document:pack-edit',
+  studentDocumentPackEditOpen: 'student-document:pack-edit-open',
+  studentDocumentPackEditDiscard: 'student-document:pack-edit-discard',
   studentDocumentPackPreview: 'student-document:pack-preview',
+  studentDocumentPackSaveDocx: 'student-document:pack-save-docx',
   studentDocumentPackSave: 'student-document:pack-save',
   studentDocumentPackPrint: 'student-document:pack-print',
   trainerProfileGet: 'trainer-profile:get',
@@ -876,8 +880,19 @@ export interface StudentDocumentPackInfo {
   studentName: string;
 }
 
+export interface StudentDocumentPackEditPart {
+  id: string;
+  label: string;
+}
+
+export interface StudentDocumentPackEditSession {
+  id: string;
+  parts: StudentDocumentPackEditPart[];
+}
+
 export interface StudentDocumentPackInput {
   attachToStudent?: boolean | undefined;
+  editSessionId?: string | undefined;
   representativeContactId?: string | undefined;
 }
 
@@ -3638,12 +3653,29 @@ export interface AravaDesktopApi {
       studentId: string,
       input: StudentDocumentPackInput,
     ) => Promise<StudentDocumentPackInfo>;
+    editPack: (
+      token: string,
+      studentId: string,
+      input: StudentDocumentPackInput,
+    ) => Promise<StudentDocumentPackEditSession>;
+    openEditablePackPart: (
+      token: string,
+      studentId: string,
+      input: StudentDocumentPackInput,
+      partId: string,
+    ) => Promise<void>;
+    discardPackEdit: (token: string, studentId: string, editSessionId: string) => Promise<void>;
     previewPack: (
       token: string,
       studentId: string,
       input: StudentDocumentPackInput,
     ) => Promise<void>;
     savePack: (
+      token: string,
+      studentId: string,
+      input: StudentDocumentPackInput,
+    ) => Promise<boolean>;
+    savePackDocx: (
       token: string,
       studentId: string,
       input: StudentDocumentPackInput,

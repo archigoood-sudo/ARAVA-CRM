@@ -423,11 +423,21 @@ const desktopApi: AravaDesktopApi = {
     selectAttachment: (token) => invoke(IPC_CHANNELS.studentDocumentSelectAttachment, token),
     packInfo: (token, studentId, input) =>
       invoke(IPC_CHANNELS.studentDocumentPackInfo, token, studentId, input),
+    editPack: (token, studentId, input) =>
+      invoke(IPC_CHANNELS.studentDocumentPackEdit, token, studentId, input),
+    openEditablePackPart: async (token, studentId, input, partId) => {
+      await invoke(IPC_CHANNELS.studentDocumentPackEditOpen, token, studentId, input, partId);
+    },
+    discardPackEdit: async (token, studentId, editSessionId) => {
+      await invoke(IPC_CHANNELS.studentDocumentPackEditDiscard, token, studentId, editSessionId);
+    },
     previewPack: async (token, studentId, input) => {
       await invoke(IPC_CHANNELS.studentDocumentPackPreview, token, studentId, input);
     },
     savePack: (token, studentId, input) =>
       invoke(IPC_CHANNELS.studentDocumentPackSave, token, studentId, input),
+    savePackDocx: (token, studentId, input) =>
+      invoke(IPC_CHANNELS.studentDocumentPackSaveDocx, token, studentId, input),
     printPack: async (token, studentId, input) => {
       await invoke(IPC_CHANNELS.studentDocumentPackPrint, token, studentId, input);
     },

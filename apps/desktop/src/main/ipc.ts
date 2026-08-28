@@ -193,7 +193,16 @@ export interface BackupIpcDependencies {
   relaunch?: () => void;
   writeFinanceExport?: (path: string, content: string) => Promise<void>;
   customerDisplay?: CustomerDisplayManager;
-  documentPacks?: Pick<DocumentPackManager, 'generate' | 'preview' | 'print'>;
+  documentPacks?: Pick<
+    DocumentPackManager,
+    | 'createEditSession'
+    | 'discardEditSession'
+    | 'exportDocuments'
+    | 'generate'
+    | 'openEditable'
+    | 'preview'
+    | 'print'
+  >;
   integration?: IntegrationManager;
   updates?: UpdateController;
 }
@@ -1668,6 +1677,42 @@ export function createIpcHandlers(
         input.representativeContactId,
       );
     },
+    [IPC_CHANNELS.studentDocumentPackEdit]: async (unsafeToken, unsafeStudentId, unsafeInput) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const studentId = identifierSchema.parse(unsafeStudentId);
+      const input = studentDocumentPackInputSchema.parse(unsafeInput);
+      const info = await studentDocuments.packInfo(token, studentId, input.representativeContactId);
+      const session = await documentPacks.createEditSession(info, studentId);
+      await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_EDIT_STARTED');
+      return session;
+    },
+    [IPC_CHANNELS.studentDocumentPackEditOpen]: async (
+      unsafeToken,
+      unsafeStudentId,
+      unsafeInput,
+      unsafePartId,
+    ) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const studentId = identifierSchema.parse(unsafeStudentId);
+      const input = studentDocumentPackInputSchema.parse(unsafeInput);
+      await studentDocuments.packInfo(token, studentId, input.representativeContactId);
+      if (!input.editSessionId) throw new Error('Сначала откройте документ для редактирования.');
+      await documentPacks.openEditable(
+        studentId,
+        input.editSessionId,
+        identifierSchema.parse(unsafePartId),
+      );
+    },
+    [IPC_CHANNELS.studentDocumentPackEditDiscard]: async (
+      unsafeToken,
+      unsafeStudentId,
+      unsafeSessionId,
+    ) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const studentId = identifierSchema.parse(unsafeStudentId);
+      await studentDocuments.packInfo(token, studentId);
+      await documentPacks.discardEditSession(studentId, z.string().uuid().parse(unsafeSessionId));
+    },
     [IPC_CHANNELS.studentDocumentPackPreview]: async (
       unsafeToken,
       unsafeStudentId,
@@ -1677,7 +1722,7 @@ export function createIpcHandlers(
       const studentId = identifierSchema.parse(unsafeStudentId);
       const input = studentDocumentPackInputSchema.parse(unsafeInput);
       const info = await studentDocuments.packInfo(token, studentId, input.representativeContactId);
-      const pdf = await documentPacks.generate(info);
+      const pdf = await documentPacks.generate(info, studentId, input.editSessionId);
       await documentPacks.preview(pdf);
       await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_GENERATED');
     },
@@ -1696,7 +1741,7 @@ export function createIpcHandlers(
         title: 'Сохранить комплект документов',
       });
       if (selection.canceled || !selection.filePath) return false;
-      const pdf = await documentPacks.generate(info);
+      const pdf = await documentPacks.generate(info, studentId, input.editSessionId);
       await writeFile(selection.filePath, pdf, { flag: 'w' });
       const mediaId = `${randomUUID()}.pdf`;
       await mkdir(documentMediaDirectory, { recursive: true });
@@ -1716,12 +1761,48 @@ export function createIpcHandlers(
       await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_PDF_SAVED');
       return true;
     },
+    [IPC_CHANNELS.studentDocumentPackSaveDocx]: async (
+      unsafeToken,
+      unsafeStudentId,
+      unsafeInput,
+    ) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const studentId = identifierSchema.parse(unsafeStudentId);
+      const input = studentDocumentPackInputSchema.parse(unsafeInput);
+      const info = await studentDocuments.packInfo(token, studentId, input.representativeContactId);
+      const selection = await dialog.showOpenDialog({
+        properties: ['openDirectory', 'createDirectory'],
+        title: 'Сохранить DOCX-комплект',
+      });
+      const directory = selection.filePaths[0];
+      if (selection.canceled || !directory) return false;
+      const documents = await documentPacks.exportDocuments(info, studentId, input.editSessionId);
+      for (const document of documents) {
+        const path = join(directory, document.fileName);
+        try {
+          await writeFile(path, document.bytes, { flag: 'wx' });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          const confirmation = await dialog.showMessageBox({
+            buttons: ['Отмена', 'Заменить'],
+            cancelId: 0,
+            defaultId: 0,
+            message: `Файл «${document.fileName}» уже существует. Заменить?`,
+            type: 'warning',
+          });
+          if (confirmation.response !== 1) return false;
+          await writeFile(path, document.bytes, { flag: 'w' });
+        }
+      }
+      await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_DOCX_SAVED');
+      return true;
+    },
     [IPC_CHANNELS.studentDocumentPackPrint]: async (unsafeToken, unsafeStudentId, unsafeInput) => {
       const token = sessionTokenSchema.parse(unsafeToken);
       const studentId = identifierSchema.parse(unsafeStudentId);
       const input = studentDocumentPackInputSchema.parse(unsafeInput);
       const info = await studentDocuments.packInfo(token, studentId, input.representativeContactId);
-      const pdf = await documentPacks.generate(info);
+      const pdf = await documentPacks.generate(info, studentId, input.editSessionId);
       await documentPacks.print(pdf);
       await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_GENERATED');
       await studentDocuments.auditPackAction(token, studentId, 'DOCUMENT_PACK_PRINT_REQUESTED');

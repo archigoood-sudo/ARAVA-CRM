@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import { PDFDocument } from 'pdf-lib';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -76,8 +77,89 @@ describe('Sprint 5.3B document pack manager', () => {
       parts: [],
       studentName: 'Мария Совершеннолетняя',
     });
-    expect((await PDFDocument.load(child)).getPageCount()).toBe(9);
-    expect((await PDFDocument.load(adult)).getPageCount()).toBe(8);
+    expect((await PDFDocument.load(child)).getPageCount()).toBe(10);
+    expect((await PDFDocument.load(adult)).getPageCount()).toBe(12);
+  });
+
+  it('keeps master templates immutable while editing and renders the saved working DOCX', async () => {
+    const contractPath = join(templates, 'АРАВА_Договор_мастер-шаблон.docx');
+    const before = createHash('sha256')
+      .update(await readFile(contractPath))
+      .digest('hex');
+    const convertedDocuments: Buffer[] = [];
+    let openedPath = '';
+    const manager = new DocumentPackManager(
+      {
+        convert: async (document) => {
+          convertedDocuments.push(document);
+          const pdf = await PDFDocument.create();
+          pdf.addPage([595, 842]);
+          return Buffer.from(await pdf.save());
+        },
+      },
+      templates,
+      (path) => {
+        openedPath = path;
+        return Promise.resolve('');
+      },
+    );
+    const info = {
+      contractNumber: '26-0042',
+      isAdult: true,
+      parts: [],
+      studentName: 'Иванов Иван',
+    };
+    const session = await manager.createEditSession(info, 'student-1');
+    await manager.openEditable('student-1', session.id, 'contract');
+    const exported = await manager.exportDocuments(info, 'student-1', session.id);
+    const contract = exported.find(({ fileName }) => fileName.startsWith('Договор'));
+    expect(contract).toBeDefined();
+    const archive = await JSZip.loadAsync(contract?.bytes ?? Buffer.alloc(0));
+    const document = archive.file('word/document.xml');
+    const xml = (await document?.async('string')) ?? '';
+    archive.file('word/document.xml', xml.replace('Иванов Иван', 'Иванов Иван (исправлено)'));
+    const edited = Buffer.from(await archive.generateAsync({ type: 'uint8array' }));
+    await writeFile(openedPath, edited);
+    await manager.generate(info, 'student-1', session.id);
+    expect(await documentXml(convertedDocuments[0] ?? Buffer.alloc(0))).toContain('исправлено');
+    expect(
+      createHash('sha256')
+        .update(await readFile(contractPath))
+        .digest('hex'),
+    ).toBe(before);
+    await manager.discardEditSession('student-1', session.id);
+    await expect(manager.exportDocuments(info, 'student-1', session.id)).rejects.toThrow(
+      'Редактируемый документ недоступен',
+    );
+  });
+
+  it('keeps all approved masters on A4 and rejects damaged edited files', async () => {
+    for (const name of [
+      'АРАВА_Договор_мастер-шаблон.docx',
+      'АРАВА_Приложение_и_согласия_мастер-шаблон.docx',
+      'АРАВА_Согласия_совершеннолетнего_мастер-шаблон.docx',
+    ]) {
+      expect(await documentXml(await readFile(join(templates, name)))).toMatch(
+        /<w:pgSz[^>]*w:w="11906"[^>]*w:h="16838"/u,
+      );
+    }
+    let openedPath = '';
+    const manager = new DocumentPackManager(new PageFixtureConverter(), templates, (path) => {
+      openedPath = path;
+      return Promise.resolve('');
+    });
+    const info = {
+      contractNumber: '26-0004',
+      isAdult: true,
+      parts: [],
+      studentName: 'Тест Тестов',
+    };
+    const session = await manager.createEditSession(info, 'student-1');
+    await manager.openEditable('student-1', session.id, 'contract');
+    await writeFile(openedPath, Buffer.from('not-a-docx'));
+    await expect(manager.generate(info, 'student-1', session.id)).rejects.toThrow(
+      'повреждён или не является DOCX',
+    );
   });
 
   it('requires a representative for a child pack', async () => {

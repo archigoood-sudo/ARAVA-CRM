@@ -3,6 +3,7 @@ import {
   type StudentContactSummary,
   type StudentDocumentAttachmentInput,
   type StudentDocumentInput,
+  type StudentDocumentPackEditSession,
   type StudentDocumentStatus,
   type StudentDocumentSummary,
   type StudentDocumentType,
@@ -21,7 +22,7 @@ import {
   Textarea,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Copy, Download, Eye, FileText, Paperclip, Plus, Printer } from 'lucide-react';
+import { Copy, Download, Edit3, Eye, FileText, Paperclip, Plus, Printer } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -98,6 +99,7 @@ export function StudentDocumentsCard({
   const [packOpen, setPackOpen] = useState(false);
   const [packRepresentativeContactId, setPackRepresentativeContactId] = useState('');
   const [packError, setPackError] = useState<string>();
+  const [editSession, setEditSession] = useState<StudentDocumentPackEditSession>();
   const [source, setSource] = useState<'EXISTING' | 'GENERATED'>('EXISTING');
   const [documentType, setDocumentType] = useState<StudentDocumentType>('CONTRACT');
   const [documentDate, setDocumentDate] = useState(today());
@@ -115,9 +117,13 @@ export function StudentDocumentsCard({
     return map;
   }, [documents.data]);
   const packInput = useMemo(
-    () =>
-      packRepresentativeContactId ? { representativeContactId: packRepresentativeContactId } : {},
-    [packRepresentativeContactId],
+    () => ({
+      ...(editSession ? { editSessionId: editSession.id } : {}),
+      ...(packRepresentativeContactId
+        ? { representativeContactId: packRepresentativeContactId }
+        : {}),
+    }),
+    [editSession, packRepresentativeContactId],
   );
   const packInfo = useQuery({
     enabled: packOpen,
@@ -195,9 +201,20 @@ export function StudentDocumentsCard({
     }
   };
   const packAction = useMutation({
-    mutationFn: async (action: 'PREVIEW' | 'PRINT' | 'SAVE') => {
+    mutationFn: async (action: 'DOCX' | 'EDIT' | 'PREVIEW' | 'PRINT' | 'SAVE') => {
       const api = getDesktopApi().studentDocuments;
       const token = getSessionToken();
+      if (action === 'EDIT') {
+        const session = await api.editPack(token, studentId, packInput);
+        await api.openEditablePackPart(
+          token,
+          studentId,
+          { ...packInput, editSessionId: session.id },
+          session.parts[0]?.id ?? 'contract',
+        );
+        return session;
+      }
+      if (action === 'DOCX') return api.savePackDocx(token, studentId, packInput);
       if (action === 'PREVIEW') return api.previewPack(token, studentId, packInput);
       if (action === 'PRINT') return api.printPack(token, studentId, packInput);
       const confirmed = window.confirm(
@@ -209,6 +226,9 @@ export function StudentDocumentsCard({
     onError: (caught) =>
       setPackError(getErrorMessage(caught, 'Не удалось сформировать комплект документов.')),
     onSuccess: async (result, action) => {
+      if (action === 'EDIT' && typeof result === 'object') {
+        setEditSession(result);
+      }
       if (action === 'SAVE' && result) {
         await queryClient.invalidateQueries({ queryKey });
       }
@@ -217,7 +237,36 @@ export function StudentDocumentsCard({
   const openPack = () => {
     setPackError(undefined);
     setPackRepresentativeContactId('');
+    setEditSession(undefined);
     setPackOpen(true);
+  };
+  const closePack = async () => {
+    if (editSession) {
+      try {
+        await getDesktopApi().studentDocuments.discardPackEdit(
+          getSessionToken(),
+          studentId,
+          editSession.id,
+        );
+      } catch {
+        // Temporary edit sessions are also cleared by the operating system.
+      }
+    }
+    setEditSession(undefined);
+    setPackOpen(false);
+  };
+  const openEditablePart = async (partId: string) => {
+    try {
+      setPackError(undefined);
+      await getDesktopApi().studentDocuments.openEditablePackPart(
+        getSessionToken(),
+        studentId,
+        packInput,
+        partId,
+      );
+    } catch (caught) {
+      setPackError(getErrorMessage(caught, 'Не удалось открыть редактируемый DOCX.'));
+    }
   };
 
   return (
@@ -474,8 +523,32 @@ export function StudentDocumentsCard({
         closeLabel="Закрыть"
         footer={
           <div className="flex flex-wrap justify-end gap-2">
-            <Button onClick={() => setPackOpen(false)} variant="ghost">
+            <Button onClick={() => void closePack()} variant="ghost">
               Закрыть
+            </Button>
+            <Button
+              disabled={
+                packAction.isPending ||
+                packInfo.isLoading ||
+                packInfo.isError ||
+                (packInfo.data?.isAdult === false && !packRepresentativeContactId)
+              }
+              onClick={() => packAction.mutate('EDIT')}
+              variant="outline"
+            >
+              <Edit3 className="size-4" /> Редактировать
+            </Button>
+            <Button
+              disabled={
+                packAction.isPending ||
+                packInfo.isLoading ||
+                packInfo.isError ||
+                (packInfo.data?.isAdult === false && !packRepresentativeContactId)
+              }
+              onClick={() => packAction.mutate('DOCX')}
+              variant="outline"
+            >
+              <Download className="size-4" /> Сохранить DOCX
             </Button>
             <Button
               data-testid="document-pack-preview"
@@ -515,7 +588,7 @@ export function StudentDocumentsCard({
             </Button>
           </div>
         }
-        onClose={() => setPackOpen(false)}
+        onClose={() => void closePack()}
         open={packOpen}
         title="Комплект документов"
       >
@@ -534,10 +607,32 @@ export function StudentDocumentsCard({
                 {packInfo.data.isAdult ? 'Совершеннолетний' : 'Несовершеннолетний'}
               </p>
             </div>
+            {editSession ? (
+              <div className="rounded-xl border border-border p-3">
+                <p className="text-sm font-semibold">Редактируемая копия</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Изменения сохраняются только в этом комплекте. После правок сохраните файл в
+                  редакторе и вернитесь в CRM.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {editSession.parts.map((part) => (
+                    <Button
+                      key={part.id}
+                      onClick={() => void openEditablePart(part.id)}
+                      size="small"
+                      variant="outline"
+                    >
+                      <Edit3 className="size-4" /> {part.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {!packInfo.data.isAdult ? (
               <label className="block space-y-2">
                 <Label htmlFor="pack-representative">Родитель / законный представитель</Label>
                 <Select
+                  disabled={Boolean(editSession)}
                   id="pack-representative"
                   onChange={(event) => {
                     setPackError(undefined);
