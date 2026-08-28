@@ -54,6 +54,10 @@ import type { ApplicationService } from './services';
 import { FinanceService } from './finance-service';
 import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
 import { StudioService } from './studio-service';
+import {
+  AUTO_RESOLVE_LWW_ENTITY_TYPES,
+  isAutoResolvableLwwEntityType,
+} from './sync-conflict-policy';
 
 export const INTEGRATION_API_VERSION = 'v1';
 export const INTEGRATION_BATCH_SIZE = 25;
@@ -2381,6 +2385,21 @@ export class IntegrationService {
     };
   }
 
+  private async backgroundOwnerContext(): Promise<CrmChatRequestContext> {
+    const owner = await this.database.user.findFirst({
+      orderBy: { createdAt: 'asc' },
+      select: { fullName: true, id: true },
+      where: { role: 'OWNER' },
+    });
+    if (!owner) throw new IntegrationApiError('LOCAL_STATE', false, 'В базе нет владельца.');
+    return {
+      branchIds: [],
+      name: owner.fullName,
+      role: 'OWNER',
+      userId: owner.id,
+    };
+  }
+
   private actorContext(actor: AuthenticatedUser): CrmChatRequestContext {
     return {
       branchIds: actor.branchIds,
@@ -3232,7 +3251,12 @@ export class IntegrationService {
       this.setting(SETTINGS.lastSuccessfulSync),
       this.setting(SETTINGS.lastState),
       this.setting(SETTINGS.lastError),
-      this.database.syncConflict.count({ where: { status: 'OPEN' } }),
+      this.database.syncConflict.count({
+        where: {
+          entityType: { notIn: [...AUTO_RESOLVE_LWW_ENTITY_TYPES] },
+          status: 'OPEN',
+        },
+      }),
       this.setting(SETTINGS.inboundCursor),
       this.setting(SETTINGS.lastInboundSync),
       this.setting(SETTINGS.lastOutboundSync),
@@ -3322,7 +3346,12 @@ export class IntegrationService {
         by: ['status'],
         where: { status: { in: ['PENDING', 'PROCESSING', 'FAILED'] } },
       }),
-      this.database.syncConflict.count({ where: { status: 'OPEN' } }),
+      this.database.syncConflict.count({
+        where: {
+          entityType: { notIn: [...AUTO_RESOLVE_LWW_ENTITY_TYPES] },
+          status: 'OPEN',
+        },
+      }),
     ]);
     const values = new Map(settings.map(({ key, value }) => [key, value]));
     const count = (status: 'PENDING' | 'PROCESSING' | 'FAILED') =>
@@ -4006,6 +4035,120 @@ export class IntegrationService {
     });
   }
 
+  private async autoResolveOwnerConflicts(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+  ): Promise<void> {
+    const context = await this.backgroundOwnerContext();
+    const remoteConflicts = await this.api.listConflicts(baseUrl, deviceId, token, context);
+    const autoResolvable = remoteConflicts.filter(
+      (conflict) =>
+        conflict.status === 'OPEN' && isAutoResolvableLwwEntityType(conflict.entityType),
+    );
+    const remoteIds = new Set(autoResolvable.map(({ id }) => id));
+    const localOpen = await this.database.syncConflict.findMany({
+      select: { id: true, serverConflictId: true },
+      where: {
+        entityType: { in: [...AUTO_RESOLVE_LWW_ENTITY_TYPES] },
+        serverConflictId: { not: null },
+        status: 'OPEN',
+      },
+    });
+    const alreadyResolvedIds = localOpen
+      .filter(
+        ({ serverConflictId }) =>
+          Boolean(serverConflictId) && !remoteIds.has(serverConflictId ?? ''),
+      )
+      .map(({ id }) => id);
+    if (alreadyResolvedIds.length > 0) {
+      await this.database.syncConflict.updateMany({
+        data: { resolvedAt: this.now(), status: 'RESOLVED' },
+        where: { id: { in: alreadyResolvedIds }, status: 'OPEN' },
+      });
+    }
+    for (const conflict of autoResolvable) {
+      const idempotencyKey = `auto-lww:${conflict.id}:${String(conflict.canonicalRevision)}`;
+      try {
+        const resolved = await this.api.resolveConflict(
+          baseUrl,
+          deviceId,
+          token,
+          conflict.id,
+          {
+            expectedCanonicalRevision: conflict.canonicalRevision,
+            idempotencyKey,
+            resolution: 'ACCEPT_CANDIDATE',
+          },
+          context,
+        );
+        await this.database.$transaction([
+          this.database.syncConflict.updateMany({
+            data: { resolvedAt: this.now(), status: 'RESOLVED' },
+            where: { serverConflictId: conflict.id },
+          }),
+          this.database.syncLog.create({
+            data: {
+              attemptCount: 1,
+              entityId: conflict.entityId,
+              entityType: conflict.entityType,
+              message: [
+                'strategy=LWW',
+                `winningServerRevision=${String(resolved.canonicalRevision)}`,
+                `losingRevision=${String(conflict.canonicalRevision)}`,
+                ...(conflict.sourceDeviceId
+                  ? [`candidateDeviceId=${conflict.sourceDeviceId}`]
+                  : []),
+              ].join('; '),
+              operation: 'CONFLICT_AUTO_RESOLVE',
+              result: 'AUTO_RESOLVED',
+            },
+          }),
+        ]);
+      } catch (error) {
+        const errorCode = error instanceof IntegrationApiError ? error.errorCode : 'UNKNOWN';
+        if (errorCode === 'NOT_FOUND') {
+          await this.database.syncConflict.updateMany({
+            data: { resolvedAt: this.now(), status: 'RESOLVED' },
+            where: { serverConflictId: conflict.id },
+          });
+          continue;
+        }
+        await this.database.syncLog.create({
+          data: {
+            attemptCount: 1,
+            entityId: conflict.entityId,
+            entityType: conflict.entityType,
+            errorCode,
+            message: `strategy=LWW; canonicalRevision=${String(conflict.canonicalRevision)}`,
+            operation: 'CONFLICT_AUTO_RESOLVE',
+            result: 'FAILED',
+          },
+        });
+      }
+    }
+  }
+
+  private async autoResolveOwnerConflictsSafely(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+  ): Promise<void> {
+    try {
+      await this.autoResolveOwnerConflicts(baseUrl, deviceId, token);
+    } catch (error) {
+      const errorCode = error instanceof IntegrationApiError ? error.errorCode : 'UNKNOWN';
+      await this.log(
+        undefined,
+        'CONFLICT_AUTO_RESOLVE',
+        'FAILED',
+        1,
+        errorCode,
+        'Автоматическое разрешение конфликтов будет повторено.',
+      );
+    }
+  }
+
   async listConflicts(token: string): Promise<IntegrationConflictSummary[]> {
     const actor = await this.assertOwner(token);
     const connection = await this.integrationConnection();
@@ -4015,7 +4158,9 @@ export class IntegrationService {
       connection.token,
       this.ownerContext(actor),
     );
-    return this.humanizeConflicts(conflicts);
+    return this.humanizeConflicts(
+      conflicts.filter(({ entityType }) => !isAutoResolvableLwwEntityType(entityType)),
+    );
   }
 
   async resolveConflict(
@@ -4670,6 +4815,7 @@ export class IntegrationService {
     if (enabled !== 'true' || !baseUrl || !token) return;
     this.processing = true;
     try {
+      await this.autoResolveOwnerConflictsSafely(baseUrl, deviceId, token);
       await this.pullWebActions(baseUrl, deviceId, token);
       await this.processTrainerAttendanceActions();
       await this.processClientProfileUpdateActions();
@@ -4755,6 +4901,9 @@ export class IntegrationService {
           await this.credentials.saveToken(acknowledgement.deviceToken);
         const syncedAt = new Date(acknowledgement.serverTimestamp);
         await this.recordOutboundAcknowledgements(selected, acknowledgement.accepted, syncedAt);
+        if (acknowledgement.accepted.some(({ status }) => status === 'CONFLICT')) {
+          await this.autoResolveOwnerConflictsSafely(baseUrl, deviceId, token);
+        }
         await this.setSetting(SETTINGS.lastOutboundSync, syncedAt.toISOString());
         for (const item of selected) {
           await this.log(item, item.operation, 'SYNCED', item.attemptCount + 1);
@@ -5352,7 +5501,12 @@ export class IntegrationService {
     for (let pageNumber = 0; pageNumber < 25; pageNumber += 1) {
       const [pendingCount, conflictCount] = await Promise.all([
         this.database.syncOutbox.count({ where: { status: { in: ['PENDING', 'PROCESSING'] } } }),
-        this.database.syncConflict.count({ where: { status: 'OPEN' } }),
+        this.database.syncConflict.count({
+          where: {
+            entityType: { notIn: [...AUTO_RESOLVE_LWW_ENTITY_TYPES] },
+            status: 'OPEN',
+          },
+        }),
       ]);
       const page = await this.api.fetchChanges(baseUrl, deviceId, token, {
         after: cursor,
@@ -5487,6 +5641,25 @@ export class IntegrationService {
       },
     });
     if (pending) {
+      if (isAutoResolvableLwwEntityType(change.entityType)) {
+        await this.database.syncLog.create({
+          data: {
+            attemptCount: pending.attemptCount,
+            entityId: change.entityId,
+            entityType: change.entityType,
+            message: [
+              'strategy=LWW',
+              `canonicalRevision=${String(change.revision)}`,
+              `candidateBaseRevision=${String(pending.baseRevision)}`,
+              `canonicalDeviceId=${change.sourceDeviceId}`,
+            ].join('; '),
+            operation: 'CONFLICT_AUTO_RESOLVE',
+            outboxId: pending.id,
+            result: 'DEFERRED_TO_SERVER',
+          },
+        });
+        return;
+      }
       await this.database.syncConflict.create({
         data: {
           baseRevision: pending.baseRevision,

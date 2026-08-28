@@ -11,6 +11,7 @@ import { ATTENTION_RULES, DAY_MS, isExpiringSoon } from './attention-rules';
 import { accessibleBranchIds, assertBranchAccess } from './permissions';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
+import { AUTO_RESOLVE_LWW_ENTITY_TYPES } from './sync-conflict-policy';
 
 const ACTIVE_ENROLLMENTS = ['ACTIVE', 'TRIAL', 'FROZEN'] as const;
 const ACTIVE_SUBSCRIPTIONS = ['ACTIVE', 'FROZEN'] as const;
@@ -786,7 +787,12 @@ export class AttentionService {
             where: { status: { in: ['PENDING', 'PROCESSING'] } },
           }),
           this.database.syncOutbox.count({ where: { status: { in: ['PENDING', 'PROCESSING'] } } }),
-          this.database.syncConflict.count({ where: { status: 'OPEN' } }),
+          this.database.syncConflict.count({
+            where: {
+              entityType: { notIn: [...AUTO_RESOLVE_LWW_ENTITY_TYPES] },
+              status: 'OPEN',
+            },
+          }),
         ]);
       const integrationSetting = new Map(integrationSettings.map(({ key, value }) => [key, value]));
       if (integrationSetting.get('integration.enabled') === 'true') {

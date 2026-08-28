@@ -20,6 +20,7 @@ import { CustomerDisplayManager } from './customer-display-manager';
 import { createMainWindow, getMainWindow } from './window';
 import { createIntegrationCredentialStore, IntegrationManager } from './integration-manager';
 import { isDesktopUpdateSupported, UpdateManager } from './update-manager';
+import { getDesktopUpdateChannel } from './build-metadata';
 
 const { autoUpdater } = electronUpdater;
 
@@ -79,6 +80,7 @@ async function bootstrap(): Promise<void> {
   customerDisplay = new CustomerDisplayManager(database, service);
   await customerDisplay.initialize();
   updates = new UpdateManager(service, autoUpdater, {
+    channel: getDesktopUpdateChannel(),
     currentVersion: app.getVersion(),
     openExternal: (url) => shell.openExternal(url),
     platform: process.platform,

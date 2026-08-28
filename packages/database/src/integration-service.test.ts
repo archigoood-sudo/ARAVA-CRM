@@ -71,6 +71,7 @@ describe('Sprint 4.5A multi-device integration', () => {
     }
   >;
   let changes: Record<string, unknown>[];
+  let conflictSequence: number;
   let changesRequestStarted: (() => void) | undefined;
   let changesResponseGate: Promise<void> | undefined;
   let deviceList: Record<string, unknown>[];
@@ -107,6 +108,7 @@ describe('Sprint 4.5A multi-device integration', () => {
     credentials = new MemoryCredentials();
     canonical = new Map();
     changes = [];
+    conflictSequence = 0;
     changesRequestStarted = undefined;
     changesResponseGate = undefined;
     deviceList = [];
@@ -355,6 +357,11 @@ describe('Sprint 4.5A multi-device integration', () => {
           json(response, 404, { code: 'NOT_FOUND', message: 'conflict not found' });
           return;
         }
+        if (Number(conflict.resolveFailuresRemaining ?? 0) > 0) {
+          conflict.resolveFailuresRemaining = Number(conflict.resolveFailuresRemaining) - 1;
+          json(response, 503, { code: 'TEMPORARY', message: 'temporary failure' });
+          return;
+        }
         if (conflict.simulateCanonicalChange === true) {
           const selectedPayload =
             requestBody.resolution === 'ACCEPT_CANDIDATE'
@@ -455,10 +462,40 @@ describe('Sprint 4.5A multi-device integration', () => {
             baseRevision !== previous.revision &&
             JSON.stringify(payload) !== JSON.stringify(previous.payload)
           ) {
+            conflictSequence += 1;
+            const conflictId = `conflict-${String(conflictSequence)}`;
+            const fields = [
+              ...new Set([...Object.keys(previous.payload), ...Object.keys(payload)]),
+            ];
+            managedConflicts.push({
+              baseRevision,
+              candidate: payload,
+              candidateOperation: value.operation,
+              canonical: previous.payload,
+              canonicalOperation: previous.operation,
+              canonicalRevision: previous.revision,
+              createdAt: now.toISOString(),
+              differences: fields
+                .filter(
+                  (field) =>
+                    JSON.stringify(payload[field]) !== JSON.stringify(previous.payload[field]),
+                )
+                .map((field) => ({
+                  candidate: payload[field],
+                  canonical: previous.payload[field],
+                  field,
+                })),
+              entityId: value.entityId,
+              entityType: value.entityType,
+              id: conflictId,
+              simulateCanonicalChange: true,
+              sourceDeviceId: request.headers['x-arava-device-id'],
+              status: 'OPEN',
+            });
             return {
               canonicalOperation: previous.operation,
               canonicalPayload: previous.payload,
-              conflictId: `conflict-${String(changes.length + 1)}`,
+              conflictId,
               entityId: value.entityId,
               idempotencyKey: value.idempotencyKey,
               revision: previous.revision,
@@ -961,8 +998,8 @@ describe('Sprint 4.5A multi-device integration', () => {
         canonicalRevision: 2,
         createdAt: now.toISOString(),
         differences: [{ candidate: 'Устройство', canonical: 'Сервер', field: 'name' }],
-        entityId: 'branch-1',
-        entityType: 'BRANCH',
+        entityId: 'trial-1',
+        entityType: 'TRIAL_APPOINTMENT',
         id: 'conflict-1',
         sourceDeviceId: 'device-b',
         status: 'OPEN',
@@ -982,6 +1019,62 @@ describe('Sprint 4.5A multi-device integration', () => {
           method === 'POST' && String(path).endsWith('/conflicts/conflict-1/resolve'),
       ),
     ).toHaveLength(1);
+  });
+
+  it('retries an OWNER scalar conflict with one idempotency key and keeps it out of Conflict Center', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Последняя версия' });
+    await database.syncOutbox.deleteMany();
+    const candidate = await integration.safePayload('BRANCH', branch.id);
+    managedConflicts = [
+      {
+        baseRevision: 1,
+        candidate,
+        candidateOperation: 'UPSERT',
+        canonical: { ...candidate, name: 'Предыдущая версия' },
+        canonicalOperation: 'UPSERT',
+        canonicalRevision: 2,
+        createdAt: now.toISOString(),
+        differences: [
+          { candidate: 'Последняя версия', canonical: 'Предыдущая версия', field: 'name' },
+        ],
+        entityId: branch.id,
+        entityType: 'BRANCH',
+        id: 'auto-branch-conflict',
+        resolveFailuresRemaining: 1,
+        simulateCanonicalChange: true,
+        sourceDeviceId: 'device-b',
+        status: 'OPEN',
+      },
+    ];
+
+    expect(await integration.listConflicts(ownerToken)).toEqual([]);
+    await integration.processPending();
+    expect(managedConflicts).toHaveLength(1);
+    await integration.processPending();
+    await integration.processPending();
+
+    expect(managedConflicts).toHaveLength(0);
+    expect(await database.branch.findUnique({ where: { id: branch.id } })).toMatchObject({
+      name: 'Последняя версия',
+    });
+    const resolutions = received.filter(
+      ({ method, path }) =>
+        method === 'POST' && String(path).endsWith('/conflicts/auto-branch-conflict/resolve'),
+    );
+    expect(resolutions).toHaveLength(2);
+    expect(new Set(resolutions.map(({ idempotencyKey }) => idempotencyKey))).toEqual(
+      new Set(['auto-lww:auto-branch-conflict:2']),
+    );
+    expect(resolutions.every(({ resolution }) => resolution === 'ACCEPT_CANDIDATE')).toBe(true);
+    expect(
+      resolutions.every(({ expectedCanonicalRevision }) => expectedCanonicalRevision === 2),
+    ).toBe(true);
+    expect(
+      await database.syncLog.count({
+        where: { entityId: branch.id, operation: 'CONFLICT_AUTO_RESOLVE', result: 'AUTO_RESOLVED' },
+      }),
+    ).toBe(1);
   });
 
   it('humanizes trial conflicts without exposing relation ids in the primary presentation', async () => {
@@ -1126,14 +1219,13 @@ describe('Sprint 4.5A multi-device integration', () => {
     ];
     const humanized = await integration.listConflicts(ownerToken);
     expect(humanized.map(({ display }) => display.title)).toEqual([
-      'Данные ученика изменены одновременно',
       'Состав группы изменён на двух устройствах',
       'Посещение изменено одновременно',
       'Данные: данные изменены одновременно',
     ]);
-    expect(humanized[1]?.display.candidateLines).toContain('Группа: KDS BABY');
-    expect(humanized[2]?.display.candidateLines).toContain('Посещение: Присутствовал');
-    expect(humanized[3]?.display.canonicalLines).toContain('Изменённое значение: Нет');
+    expect(humanized[0]?.display.candidateLines).toContain('Группа: KDS BABY');
+    expect(humanized[1]?.display.candidateLines).toContain('Посещение: Присутствовал');
+    expect(humanized[2]?.display.canonicalLines).toContain('Изменённое значение: Нет');
   });
 
   it('creates a backup and replaces sync-managed local data from the server without pushing', async () => {
@@ -1326,13 +1418,38 @@ describe('Sprint 4.5A multi-device integration', () => {
 
   it('runs a fresh canonical pull after a concurrent background cycle finishes', async () => {
     await pair();
-    const branch = await application.createBranch(ownerToken, { name: 'Локальная версия' });
+    const branch = await application.createBranch(ownerToken, { name: 'Пробный конфликт' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 10,
+      direction: 'Контемп',
+      name: 'Пробный конфликт',
+      status: 'RECRUITING',
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Анна',
+      lastName: 'Конфликтова',
+      status: 'TRIAL',
+    });
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: '2030-08-27T16:00:00.000Z',
+      groupId: group.id,
+      startsAt: '2030-08-27T15:00:00.000Z',
+    });
+    const trials = new LeadService(database, application, integration, studio);
+    const trial = await trials.scheduleTrial(ownerToken, {
+      groupId: group.id,
+      startsAt: lesson.startsAt,
+      studentId: student.id,
+    });
     await database.syncOutbox.deleteMany();
-    const candidate = await integration.safePayload('BRANCH', branch.id);
+    const candidate = await integration.safePayload('TRIAL_APPOINTMENT', trial.id);
     await database.syncEntityState.create({
       data: {
-        entityId: branch.id,
-        entityType: 'BRANCH',
+        entityId: trial.id,
+        entityType: 'TRIAL_APPOINTMENT',
         revision: 2,
         serverSequence: 0,
         serverUpdatedAt: now,
@@ -1344,15 +1461,13 @@ describe('Sprint 4.5A multi-device integration', () => {
         baseRevision: 1,
         candidate,
         candidateOperation: 'UPSERT',
-        canonical: { ...candidate, name: 'Серверная версия' },
+        canonical: { ...candidate, outcome: 'DECLINED' },
         canonicalOperation: 'UPSERT',
         canonicalRevision: 2,
         createdAt: now.toISOString(),
-        differences: [
-          { candidate: 'Локальная версия', canonical: 'Серверная версия', field: 'name' },
-        ],
-        entityId: branch.id,
-        entityType: 'BRANCH',
+        differences: [{ candidate: null, canonical: 'DECLINED', field: 'outcome' }],
+        entityId: trial.id,
+        entityType: 'TRIAL_APPOINTMENT',
         id: 'conflict-concurrent-sync',
         simulateCanonicalChange: true,
         sourceDeviceId: credentials.deviceId,
@@ -1378,8 +1493,8 @@ describe('Sprint 4.5A multi-device integration', () => {
     releaseChanges();
     await Promise.all([background, resolution]);
 
-    expect(await database.branch.findUnique({ where: { id: branch.id } })).toMatchObject({
-      name: 'Серверная версия',
+    expect(await database.trialAppointment.findUnique({ where: { id: trial.id } })).toMatchObject({
+      outcome: 'DECLINED',
     });
     expect(
       received.filter(
@@ -1527,7 +1642,7 @@ describe('Sprint 4.5A multi-device integration', () => {
         canonicalPayloadJson: '{}',
         canonicalRevision: 1,
         entityId: 'diagnostic-entity',
-        entityType: 'BRANCH',
+        entityType: 'ATTENDANCE',
         serverConflictId: 'diagnostic-conflict',
       },
     });
@@ -1708,7 +1823,7 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(await database.syncLog.count({ where: { outboxId: retry.id } })).toBe(2);
   });
 
-  it('synchronizes one entity A to server to B and back without an echo loop', async () => {
+  it('converges two OWNER devices by server order without clock-based conflicts or an echo loop', async () => {
     await pair();
     const branch = await application.createBranch(ownerToken, { name: 'Устройство А' });
     const student = await application.createStudent(ownerToken, {
@@ -1793,10 +1908,20 @@ describe('Sprint 4.5A multi-device integration', () => {
         lastName: 'Два устройства',
         status: 'ACTIVE',
       });
+      await database.student.update({
+        data: { updatedAt: new Date('2040-01-01T00:00:00.000Z') },
+        where: { id: student.id },
+      });
+      await secondDatabase.student.update({
+        data: { updatedAt: new Date('2020-01-01T00:00:00.000Z') },
+        where: { id: student.id },
+      });
+      await integration.processPending();
+      await secondIntegration.processPending();
       await integration.processPending();
       await secondIntegration.processPending();
       expect(await database.student.findUnique({ where: { id: student.id } })).toMatchObject({
-        firstName: 'Анна А',
+        firstName: 'Анна Б',
       });
       expect(await secondDatabase.student.findUnique({ where: { id: student.id } })).toMatchObject({
         firstName: 'Анна Б',
@@ -1805,7 +1930,55 @@ describe('Sprint 4.5A multi-device integration', () => {
         await secondDatabase.syncConflict.count({
           where: { entityId: student.id, entityType: 'STUDENT_IDENTITY', status: 'OPEN' },
         }),
-      ).toBe(1);
+      ).toBe(0);
+      expect(await integration.listConflicts(ownerToken)).toEqual([]);
+      expect(
+        await secondDatabase.syncLog.findFirst({
+          where: {
+            entityId: student.id,
+            entityType: 'STUDENT_IDENTITY',
+            result: 'AUTO_RESOLVED',
+          },
+        }),
+      ).toMatchObject({ operation: 'CONFLICT_AUTO_RESOLVE' });
+
+      // Device A now works offline. Device B reaches the server first; when A reconnects,
+      // its later server submission wins regardless of either device's local clock.
+      await application.updateStudent(ownerToken, student.id, {
+        branchId: branch.id,
+        firstName: 'Анна после офлайна',
+        lastName: 'Два устройства',
+        status: 'ACTIVE',
+      });
+      await secondApplication.updateStudent(secondLogin.token, student.id, {
+        branchId: branch.id,
+        firstName: 'Анна онлайн',
+        lastName: 'Два устройства',
+        status: 'ACTIVE',
+      });
+      await database.student.update({
+        data: { updatedAt: new Date('2050-01-01T00:00:00.000Z') },
+        where: { id: student.id },
+      });
+      await secondDatabase.student.update({
+        data: { updatedAt: new Date('2010-01-01T00:00:00.000Z') },
+        where: { id: student.id },
+      });
+      await secondIntegration.processPending();
+      await integration.processPending();
+      await secondIntegration.processPending();
+      await integration.processPending();
+      expect(await database.student.findUnique({ where: { id: student.id } })).toMatchObject({
+        firstName: 'Анна после офлайна',
+      });
+      expect(await secondDatabase.student.findUnique({ where: { id: student.id } })).toMatchObject({
+        firstName: 'Анна после офлайна',
+      });
+      expect(
+        await secondDatabase.syncConflict.count({
+          where: { entityId: student.id, entityType: 'STUDENT_IDENTITY', status: 'OPEN' },
+        }),
+      ).toBe(0);
       expect(await database.syncOutbox.count({ where: { entityId: membership.id } })).toBe(0);
     } finally {
       await closeDatabase(secondDatabase);

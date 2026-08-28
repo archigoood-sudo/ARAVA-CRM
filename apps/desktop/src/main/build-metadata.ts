@@ -8,6 +8,8 @@ export interface BuildMetadata {
   buildDate: string;
 }
 
+export type DesktopUpdateChannel = 'dev' | 'latest';
+
 function getFallbackDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -57,4 +59,8 @@ export function getBuildMetadata(): BuildMetadata {
         ? metadata.buildDate
         : getFallbackDate(),
   };
+}
+
+export function getDesktopUpdateChannel(): DesktopUpdateChannel {
+  return readMetadataFile(resolveMetadataPath())?.updateChannel === 'dev' ? 'dev' : 'latest';
 }

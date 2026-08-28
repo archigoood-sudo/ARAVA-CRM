@@ -1,0 +1,104 @@
+name: Windows Development Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact Quality-approved main commit to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-development-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    permissions:
+      actions: read
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.commit }}
+      - name: Verify exact current main commit
+        id: verified
+        shell: pwsh
+        env:
+          REQUESTED_COMMIT: ${{ inputs.commit }}
+        run: |
+          git fetch origin main
+          $requested = $env:REQUESTED_COMMIT
+          $head = git rev-parse HEAD
+          $main = git rev-parse origin/main
+          if ($head -ne $requested -or $main -ne $requested) {
+            throw "Requested commit must exactly equal current origin/main"
+          }
+          "commit=$head" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: 22
+      - name: Require successful Quality run for this commit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED_COMMIT: ${{ steps.verified.outputs.commit }}
+        run: |
+          $requested = $env:REQUESTED_COMMIT
+          $runs = gh api "repos/${{ github.repository }}/actions/workflows/quality.yml/runs?head_sha=$requested&status=success&event=push&per_page=1" | ConvertFrom-Json
+          if ($runs.total_count -lt 1) {
+            throw "No successful Quality push run exists for $requested"
+          }
+      - name: Compute monotonic development version
+        id: version
+        shell: pwsh
+        run: |
+          $current = node -p "require('./apps/desktop/package.json').version"
+          $parts = $current.Split('.')
+          $nextPatch = [int]$parts[2] + 1
+          $version = "$($parts[0]).$($parts[1]).$nextPatch-dev.${{ github.run_number }}"
+          "value=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Development version: $version"
+      - run: npm ci
+      - name: Build exact approved commit
+        env:
+          ARAVA_BUILD_COMMIT: ${{ steps.verified.outputs.commit }}
+          ARAVA_BUILD_VERSION: ${{ steps.version.outputs.value }}
+          ARAVA_UPDATE_CHANNEL: dev
+        run: npm run build
+      - name: Publish Windows development prerelease
+        env:
+          ARAVA_BUILD_COMMIT: ${{ steps.verified.outputs.commit }}
+          ARAVA_BUILD_VERSION: ${{ steps.version.outputs.value }}
+          ARAVA_UPDATE_CHANNEL: dev
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          npm run prepackage:win -w @arava/desktop
+          Set-Location apps/desktop
+          npx electron-builder --config electron-builder.dev.yml --win nsis --x64 --publish always `
+            -c.extraMetadata.version=${{ steps.version.outputs.value }}
+      - name: Record installer checksum
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem apps/desktop/release/ARAVA-CRM-*-x64.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Development installer was not produced' }
+          $hash = Get-FileHash $installer.FullName -Algorithm SHA256
+          "Installer: $($installer.Name)" | Tee-Object -FilePath development-release.txt
+          "SHA-256: $($hash.Hash.ToLowerInvariant())" | Tee-Object -FilePath development-release.txt -Append
+          "Commit: ${{ steps.verified.outputs.commit }}" | Tee-Object -FilePath development-release.txt -Append
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arava-crm-windows-development-${{ steps.verified.outputs.commit }}
+          path: |
+            apps/desktop/release/ARAVA-CRM-*-x64.exe
+            apps/desktop/release/ARAVA-CRM-*-x64.exe.blockmap
+            apps/desktop/release/dev.yml
+            development-release.txt
+          if-no-files-found: error

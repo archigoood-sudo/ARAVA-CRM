@@ -68,12 +68,70 @@ test('OWNER подключает сайт, выполняет initial/offline sy
   let targetGroupId: string | null = null;
   const receivedPaymentPaths: string[] = [];
   let clientAccessState: 'ACTIVE' | 'INVITED' | 'NOT_ISSUED' = 'NOT_ISSUED';
-  const openConflictIds = new Set(['conflict-local-e2e', 'conflict-server-e2e']);
+  const openConflictIds = new Set(['auto-branch-e2e', 'conflict-local-e2e', 'conflict-server-e2e']);
   const receivedConflictResolutions: Record<string, unknown>[] = [];
   let conflictStudentId = 'student-conflict-pending';
   let conflictGroupId = 'group-conflict-pending';
   let conflictLessonAId = 'lesson-conflict-a-pending';
   let conflictLessonBId = 'lesson-conflict-b-pending';
+  const conflict = (id: string, status: 'OPEN' | 'RESOLVED' = 'OPEN') =>
+    id === 'auto-branch-e2e'
+      ? {
+          baseRevision: 1,
+          candidate: { id: 'branch-auto-e2e', name: 'Последнее изменение' },
+          candidateOperation: 'UPSERT',
+          canonical: { id: 'branch-auto-e2e', name: 'Предыдущее изменение' },
+          canonicalOperation: 'UPSERT',
+          canonicalRevision: 2,
+          createdAt: new Date().toISOString(),
+          differences: [
+            {
+              candidate: 'Последнее изменение',
+              canonical: 'Предыдущее изменение',
+              field: 'name',
+            },
+          ],
+          entityId: 'branch-auto-e2e',
+          entityType: 'BRANCH',
+          id,
+          sourceDeviceId: 'other-device',
+          status,
+        }
+      : {
+          baseRevision: 0,
+          candidate: {
+            groupId: conflictGroupId,
+            lessonId: conflictLessonAId,
+            outcome: 'THINKING',
+            status: 'BOOKED',
+            studentId: conflictStudentId,
+          },
+          candidateOperation: 'UPSERT',
+          canonical: {
+            groupId: conflictGroupId,
+            lessonId: conflictLessonBId,
+            outcome: 'DECLINED',
+            status: 'BOOKED',
+            studentId: conflictStudentId,
+          },
+          canonicalOperation: 'UPSERT',
+          canonicalRevision: 1,
+          createdAt: new Date().toISOString(),
+          differences: [
+            {
+              candidate: conflictLessonAId,
+              canonical: conflictLessonBId,
+              field: 'lessonId',
+            },
+            { candidate: 'THINKING', canonical: 'DECLINED', field: 'outcome' },
+          ],
+          entityId: `trial-${id}`,
+          entityType: 'TRIAL_APPOINTMENT',
+          id,
+          sourceDeviceId: 'other-device',
+          sourceDeviceName: 'Второй компьютер',
+          status,
+        };
   let recoveryMode = false;
   const receivedChatMessages: string[] = [];
   const receivedChatImages: string[] = [];
@@ -345,44 +403,9 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       return;
     }
     if (request.method === 'GET' && request.url?.endsWith('/conflicts')) {
-      const conflict = (id: string) => ({
-        baseRevision: 0,
-        candidate: {
-          groupId: conflictGroupId,
-          lessonId: conflictLessonAId,
-          outcome: 'THINKING',
-          status: 'BOOKED',
-          studentId: conflictStudentId,
-        },
-        candidateOperation: 'UPSERT',
-        canonical: {
-          groupId: conflictGroupId,
-          lessonId: conflictLessonBId,
-          outcome: 'DECLINED',
-          status: 'BOOKED',
-          studentId: conflictStudentId,
-        },
-        canonicalOperation: 'UPSERT',
-        canonicalRevision: 1,
-        createdAt: new Date().toISOString(),
-        differences: [
-          {
-            candidate: conflictLessonAId,
-            canonical: conflictLessonBId,
-            field: 'lessonId',
-          },
-          { candidate: 'THINKING', canonical: 'DECLINED', field: 'outcome' },
-        ],
-        entityId: `trial-${id}`,
-        entityType: 'TRIAL_APPOINTMENT',
-        id,
-        sourceDeviceId: 'other-device',
-        sourceDeviceName: 'Второй компьютер',
-        status: 'OPEN',
-      });
       respond(response, {
         apiVersion: 'v1',
-        conflicts: [...openConflictIds].map(conflict),
+        conflicts: [...openConflictIds].map((id) => conflict(id)),
       });
       return;
     }
@@ -392,40 +415,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
       receivedConflictResolutions.push({ conflictId, ...body });
       respond(response, {
         apiVersion: 'v1',
-        conflict: {
-          baseRevision: 0,
-          candidate: {
-            groupId: conflictGroupId,
-            lessonId: conflictLessonAId,
-            outcome: 'THINKING',
-            status: 'BOOKED',
-            studentId: conflictStudentId,
-          },
-          candidateOperation: 'UPSERT',
-          canonical: {
-            groupId: conflictGroupId,
-            lessonId: conflictLessonBId,
-            outcome: 'DECLINED',
-            status: 'BOOKED',
-            studentId: conflictStudentId,
-          },
-          canonicalOperation: 'UPSERT',
-          canonicalRevision: 1,
-          createdAt: new Date().toISOString(),
-          differences: [
-            {
-              candidate: conflictLessonAId,
-              canonical: conflictLessonBId,
-              field: 'lessonId',
-            },
-            { candidate: 'THINKING', canonical: 'DECLINED', field: 'outcome' },
-          ],
-          entityId: `trial-${conflictId}`,
-          entityType: 'TRIAL_APPOINTMENT',
-          id: conflictId,
-          sourceDeviceId: 'other-device',
-          status: 'RESOLVED',
-        },
+        conflict: conflict(conflictId, 'RESOLVED'),
       });
       return;
     }
@@ -603,6 +593,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByRole('button', { name: 'Проверить соединение' }).click();
     await expect(page.getByText('Соединение с сайтом установлено.')).toBeVisible();
     const conflictCenter = page.getByTestId('integration-conflicts');
+    await expect(page.getByTestId('integration-conflict-auto-branch-e2e')).toHaveCount(0);
     await expect(
       conflictCenter.getByText('Пробное занятие изменено на другом устройстве').first(),
     ).toBeVisible();
@@ -624,16 +615,23 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await expect(serverConflict).toHaveCount(0);
     await expect
       .poll(() => receivedConflictResolutions)
-      .toEqual([
-        expect.objectContaining({
-          conflictId: 'conflict-local-e2e',
-          resolution: 'ACCEPT_CANDIDATE',
-        }),
-        expect.objectContaining({
-          conflictId: 'conflict-server-e2e',
-          resolution: 'KEEP_CANONICAL',
-        }),
-      ]);
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            conflictId: 'auto-branch-e2e',
+            resolution: 'ACCEPT_CANDIDATE',
+          }),
+          expect.objectContaining({
+            conflictId: 'conflict-local-e2e',
+            resolution: 'ACCEPT_CANDIDATE',
+          }),
+          expect.objectContaining({
+            conflictId: 'conflict-server-e2e',
+            resolution: 'KEEP_CANONICAL',
+          }),
+        ]),
+      );
+    expect(receivedConflictResolutions).toHaveLength(3);
     await page.getByRole('button', { name: 'Сверить данные' }).click();
     await expect(page.getByTestId('integration-reconciliation')).toContainText('Совпадает: 0');
     await page.getByRole('link', { name: 'Чаты' }).click();

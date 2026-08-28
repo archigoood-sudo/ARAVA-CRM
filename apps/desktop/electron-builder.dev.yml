@@ -1,0 +1,7 @@
+extends: ./electron-builder.yml
+publish:
+  provider: github
+  owner: archigoood-sudo
+  repo: ARAVA-CRM
+  channel: dev
+  releaseType: prerelease

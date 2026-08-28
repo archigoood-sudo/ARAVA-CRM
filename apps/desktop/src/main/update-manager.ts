@@ -20,6 +20,7 @@ export interface UpdateController {
 }
 
 interface UpdateManagerOptions {
+  channel?: 'dev' | 'latest';
   currentVersion: string;
   intervalMs?: number;
   now?: () => Date;
@@ -84,7 +85,9 @@ export class UpdateManager implements UpdateController {
     this.updater.autoDownload = false;
     this.updater.autoInstallOnAppQuit = false;
     this.updater.allowDowngrade = false;
-    this.updater.allowPrerelease = false;
+    const developmentChannel = this.options.channel === 'dev';
+    this.updater.allowPrerelease = developmentChannel;
+    if (developmentChannel) this.updater.channel = 'dev';
     this.bindUpdaterEvents();
 
     this.startupTimer = setTimeout(() => {

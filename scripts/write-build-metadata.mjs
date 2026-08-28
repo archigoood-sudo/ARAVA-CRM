@@ -6,7 +6,8 @@ const projectRoot = resolve(import.meta.dirname, '..');
 const metadataPath = resolve(projectRoot, 'apps/desktop/build/app-metadata.json');
 const packageMetadataPath = resolve(projectRoot, 'apps/desktop/package.json');
 const packageMetadata = JSON.parse(await readFile(packageMetadataPath, 'utf8'));
-const version = packageMetadata.version ?? '0.4.5';
+const version = process.env.ARAVA_BUILD_VERSION?.trim() || packageMetadata.version || '0.4.5';
+const updateChannel = process.env.ARAVA_UPDATE_CHANNEL?.trim() === 'dev' ? 'dev' : 'latest';
 
 function getCommit() {
   const envCommit =
@@ -30,6 +31,7 @@ const metadata = {
   appVersion: version,
   buildCommit: getCommit(),
   buildDate: getDate(),
+  updateChannel,
 };
 
 await mkdir(join(projectRoot, 'apps/desktop/build'), { recursive: true });

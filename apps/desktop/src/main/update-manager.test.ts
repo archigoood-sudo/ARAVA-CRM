@@ -14,6 +14,7 @@ class MockUpdater extends EventEmitter {
   public allowPrerelease = true;
   public autoDownload = true;
   public autoInstallOnAppQuit = true;
+  public channel: string | null | undefined;
   public checkForUpdates = vi.fn(() => Promise.resolve(null));
   public downloadUpdate = vi.fn(() => Promise.resolve([] as string[]));
   public quitAndInstall = vi.fn();
@@ -26,6 +27,7 @@ function createManager(
     platform?: NodeJS.Platform;
     prepareForInstall?: () => Promise<void>;
     supported?: boolean;
+    channel?: 'dev' | 'latest';
   } = {},
 ) {
   const updater = new MockUpdater();
@@ -35,6 +37,7 @@ function createManager(
   const platform = overrides.platform ?? 'darwin';
   const openExternal = overrides.openExternal ?? vi.fn(() => Promise.resolve());
   const manager = new UpdateManager(authorization, updater as unknown as AppUpdater, {
+    ...(overrides.channel ? { channel: overrides.channel } : {}),
     currentVersion: '0.4.6',
     now: () => new Date('2026-08-25T10:00:00.000Z'),
     openExternal,
@@ -132,6 +135,18 @@ describe('UpdateManager', () => {
     });
     expect(updater.downloadUpdate).not.toHaveBeenCalled();
     manager.shutdown();
+  });
+
+  it('uses the isolated prerelease feed only for an explicitly built development client', () => {
+    const stable = createManager('OWNER', { platform: 'win32' });
+    expect(stable.updater.allowPrerelease).toBe(false);
+    expect(stable.updater.channel).toBeUndefined();
+    stable.manager.shutdown();
+
+    const development = createManager('OWNER', { channel: 'dev', platform: 'win32' });
+    expect(development.updater.allowPrerelease).toBe(true);
+    expect(development.updater.channel).toBe('dev');
+    development.manager.shutdown();
   });
 
   it('publishes download progress and the downloaded state', async () => {
