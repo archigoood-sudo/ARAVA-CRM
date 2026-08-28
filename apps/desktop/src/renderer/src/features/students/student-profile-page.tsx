@@ -310,48 +310,57 @@ export function StudentProfilePage() {
       </Link>
 
       <Card className="mb-5 overflow-hidden">
-        <div className="relative flex flex-wrap items-center gap-5 bg-sidebar px-5 py-7 text-white md:px-7 md:py-8">
+        <div className="relative bg-sidebar px-5 py-7 text-white md:px-7 md:py-8">
           <span className="absolute right-0 top-0 h-full w-48 bg-[radial-gradient(circle_at_top_right,rgba(156,255,46,0.22),transparent_66%)]" />
-          <Avatar className="ring-4 ring-white/10" name={fullName} size="large" />
-          <div className="relative min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-3">
-              <h2 className="truncate text-4xl font-semibold tracking-[-0.045em]">{fullName}</h2>
-              <Badge className={statusStyles[detail.status]}>{t(`status.${detail.status}`)}</Badge>
-            </div>
-            <p className="mt-2 flex items-center gap-2 text-sm text-neutral-400">
-              <MapPin className="size-4 text-accent" /> {detail.branchName}
-            </p>
-            {detail.phone ? (
-              <p className="mt-1 flex items-center gap-2 text-sm text-neutral-400">
-                <Phone className="size-4 text-accent" /> {detail.phone}
-              </p>
-            ) : null}
-            <div className="mt-3 flex flex-wrap gap-2">
-              {age !== undefined ? (
-                <Badge className="border-white/10 bg-white/10 text-white">{age} лет</Badge>
-              ) : null}
-              {profile.groups.slice(0, 2).map((group) => (
-                <Badge className="border-white/10 bg-white/10 text-white" key={group.groupId}>
-                  {group.groupName}
+          <div className="relative flex items-start gap-5" data-testid="student-profile-identity">
+            <Avatar className="shrink-0 ring-4 ring-white/10" name={fullName} size="large" />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-3">
+                <h2 className="break-words text-3xl font-semibold tracking-[-0.045em] md:text-4xl">
+                  {fullName}
+                </h2>
+                <Badge className={statusStyles[detail.status]}>
+                  {t(`status.${detail.status}`)}
                 </Badge>
-              ))}
-              {profile.card ? (
-                <Badge className="border-white/10 bg-white/10 text-white">
-                  Карта · {cardStatusLabel(profile.card.status)}
-                </Badge>
+              </div>
+              <p className="mt-2 flex items-center gap-2 text-sm text-neutral-400">
+                <MapPin className="size-4 text-accent" /> {detail.branchName}
+              </p>
+              {detail.phone ? (
+                <p className="mt-1 flex items-center gap-2 text-sm text-neutral-400">
+                  <Phone className="size-4 text-accent" /> {detail.phone}
+                </p>
               ) : null}
-              {profile.totalDebt ? (
-                <Badge className="bg-red-500 text-white">Есть долг</Badge>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {age !== undefined ? (
+                  <Badge className="border-white/10 bg-white/10 text-white">{age} лет</Badge>
+                ) : null}
+                {profile.groups.slice(0, 2).map((group) => (
+                  <Badge className="border-white/10 bg-white/10 text-white" key={group.groupId}>
+                    {group.groupName}
+                  </Badge>
+                ))}
+                {profile.card ? (
+                  <Badge className="border-white/10 bg-white/10 text-white">
+                    Карта · {cardStatusLabel(profile.card.status)}
+                  </Badge>
+                ) : null}
+                {profile.totalDebt ? (
+                  <Badge className="bg-red-500 text-white">Есть долг</Badge>
+                ) : null}
+              </div>
+              {openedByCard ? (
+                <p className="mt-3 inline-flex rounded-full bg-accent px-3 py-1 text-xs font-semibold text-neutral-950">
+                  Открыто по карте
+                </p>
               ) : null}
             </div>
-            {openedByCard ? (
-              <p className="mt-3 inline-flex rounded-full bg-accent px-3 py-1 text-xs font-semibold text-neutral-950">
-                Открыто по карте
-              </p>
-            ) : null}
           </div>
           {canManage ? (
-            <div className="relative flex max-w-xl flex-wrap justify-end gap-1.5">
+            <div
+              className="relative mt-5 flex flex-wrap gap-1.5 border-t border-white/10 pt-4"
+              data-testid="student-profile-actions"
+            >
               {profile.primaryAction ? (
                 <Button
                   className="bg-accent text-neutral-950 hover:bg-accent/90"

@@ -76,6 +76,7 @@ test('расширенный профиль объединяет работу а
         branchId: branch.id,
         firstName: 'Анна',
         lastName: 'Профильная E2E',
+        middleName: 'Александровна-Сверхдлинная',
         status: 'ACTIVE',
       });
       const hiddenStudent = await api.students.create(token, {
@@ -178,6 +179,32 @@ test('расширенный профиль объединяет работу а
     await search.getByLabel('Поиск по приложению').fill('Профильная E2E Анна');
     await search.getByRole('button', { name: /Профильная E2E Анна/u }).click();
     await expect(page).toHaveURL(new RegExp(`/students/${context.studentId}$`, 'u'));
+    await page.setViewportSize({ height: 768, width: 900 });
+    const identity = page.getByTestId('student-profile-identity');
+    const actions = page.getByTestId('student-profile-actions');
+    await expect(
+      identity.getByRole('heading', {
+        name: 'Профильная E2E Анна Александровна-Сверхдлинная',
+      }),
+    ).toBeVisible();
+    await expect(actions.getByRole('button', { name: 'Оплата / абонемент' })).toBeVisible();
+    const headerLayout = await page.evaluate(() => {
+      const identityElement = document.querySelector('[data-testid="student-profile-identity"]');
+      const actionsElement = document.querySelector('[data-testid="student-profile-actions"]');
+      const nameElement = identityElement?.querySelector('h2');
+      if (!identityElement || !actionsElement || !nameElement) return null;
+      const identityRect = identityElement.getBoundingClientRect();
+      const actionsRect = actionsElement.getBoundingClientRect();
+      return {
+        actionsTop: actionsRect.top,
+        identityBottom: identityRect.bottom,
+        nameTextOverflow: getComputedStyle(nameElement).textOverflow,
+      };
+    });
+    expect(headerLayout).not.toBeNull();
+    expect(headerLayout?.actionsTop).toBeGreaterThanOrEqual(headerLayout?.identityBottom ?? 0);
+    expect(headerLayout?.nameTextOverflow).not.toBe('ellipsis');
+    await page.setViewportSize({ height: 900, width: 1440 });
     await expect(page.getByRole('link', { name: 'Группа профиля E2E', exact: true })).toBeVisible();
     await expect(page.getByText('Абонемент профиля E2E').first()).toBeVisible();
     await expect(page.getByText('Общая задолженность').locator('..')).toContainText('40');
