@@ -83,7 +83,7 @@ jobs:
           npm run prepackage:win -w @arava/desktop
           Set-Location apps/desktop
           npx electron-builder --config electron-builder.dev.yml --win nsis --x64 --publish always `
-            -c.extraMetadata.version=${{ steps.version.outputs.value }}
+            --config.extraMetadata.version=${{ steps.version.outputs.value }}
       - name: Record installer checksum
         shell: pwsh
         run: |
