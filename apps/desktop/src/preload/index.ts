@@ -262,6 +262,8 @@ const desktopApi: AravaDesktopApi = {
       invoke(IPC_CHANNELS.substitutionAssign, token, id, input),
   },
   attendance: {
+    confirmScan: (token, lessonId, studentId) =>
+      invoke(IPC_CHANNELS.attendanceScanConfirm, token, lessonId, studentId),
     get: (token, lessonId) => invoke(IPC_CHANNELS.attendanceGet, token, lessonId),
     manualSave: (token, lessonId, entry) =>
       invoke(IPC_CHANNELS.attendanceManualSave, token, lessonId, entry),

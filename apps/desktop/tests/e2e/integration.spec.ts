@@ -63,6 +63,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
 }, testInfo) => {
   test.setTimeout(process.env.CI ? 300_000 : 150_000);
   let receivedOperations = 0;
+  const receivedAttendanceCheckins: Record<string, unknown>[] = [];
   let leadStatus = 'NEW';
   let convertedStudentId: string | null = null;
   let targetGroupId: string | null = null;
@@ -186,6 +187,16 @@ test('OWNER подключает сайт, выполняет initial/offline sy
         apiVersion: 'v1',
         deviceStatus: 'ACTIVE',
         serverTimestamp: new Date().toISOString(),
+      });
+      return;
+    }
+    if (request.method === 'POST' && request.url?.endsWith('/notifications/attendance-checkin')) {
+      receivedAttendanceCheckins.push(body);
+      respond(response, {
+        notificationsCreated: receivedAttendanceCheckins.length === 1 ? 1 : 0,
+        outcome: receivedAttendanceCheckins.length === 1 ? 'CREATED' : 'ALREADY_NOTIFIED',
+        push: { delivered: 1, failed: 0, skipped: 0 },
+        recipients: 1,
       });
       return;
     }
@@ -567,7 +578,18 @@ test('OWNER подключает сайт, выполняет initial/offline sy
         groupId: group.id,
         startsAt: upcomingStart.toISOString(),
       });
-      return { group, lessonA, lessonB, student };
+      const checkinStart = new Date(Date.now() - 15 * 60 * 1000);
+      const checkinLesson = await api.lessons.create(token, {
+        endsAt: new Date(checkinStart.getTime() + 60 * 60 * 1000).toISOString(),
+        groupId: group.id,
+        startsAt: checkinStart.toISOString(),
+      });
+      await api.cards.assign(token, {
+        barcode: '0000095401',
+        registerIfUnknown: true,
+        studentId: student.id,
+      });
+      return { checkinLesson, group, lessonA, lessonB, student };
     });
     conflictStudentId = accessFixture.student.id;
     conflictGroupId = accessFixture.group.id;
@@ -586,6 +608,48 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.evaluate((studentId) => {
       window.location.hash = `#/students/${studentId}`;
     }, accessFixture.student.id);
+    await page.keyboard.type('0000095401', { delay: 120 });
+    await page.keyboard.press('Enter');
+    const checkinDialog = page.getByRole('dialog');
+    await expect(
+      checkinDialog.getByText('Подтвердите посещение сегодняшнего занятия'),
+    ).toBeVisible();
+    await checkinDialog.getByRole('button', { name: 'Отметить присутствие' }).click();
+    await expect(page.getByText('Посещение отмечено', { exact: true })).toBeVisible();
+    await expect
+      .poll(
+        async () => {
+          await page.evaluate(async () => {
+            const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+              state?: { token?: string };
+            };
+            const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+            await api.integration.syncNow(persisted.state?.token ?? '');
+          });
+          return receivedAttendanceCheckins.length;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(1);
+    expect(receivedAttendanceCheckins[0]).toMatchObject({
+      crmStudentId: accessFixture.student.id,
+      lessonId: accessFixture.checkinLesson.id,
+    });
+    await checkinDialog.getByRole('button', { name: 'Отмена' }).click();
+    await page.keyboard.type('0000095401', { delay: 120 });
+    await page.keyboard.press('Enter');
+    await expect(
+      checkinDialog.getByRole('button', { name: 'Уже отмечен', exact: true }),
+    ).toBeDisabled();
+    await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      await api.integration.syncNow(persisted.state?.token ?? '');
+    });
+    expect(receivedAttendanceCheckins).toHaveLength(1);
+    await checkinDialog.getByRole('button', { name: 'Отмена' }).click();
     const communication = page.getByTestId('student-communication');
     await expect(communication).toBeVisible();
     await expect(communication.locator('details')).not.toHaveAttribute('open', '');

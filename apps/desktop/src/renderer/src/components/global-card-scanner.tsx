@@ -238,9 +238,11 @@ export function GlobalCardScanner() {
     if (!attendancePrompt || !selectedLesson || selectedLesson.currentStatus === 'PRESENT') return;
     setSavingAttendance(true);
     try {
-      await getDesktopApi().attendance.save(getSessionToken(), selectedLesson.lessonId, [
-        { status: 'PRESENT', studentId: attendancePrompt.studentId },
-      ]);
+      await getDesktopApi().attendance.confirmScan(
+        getSessionToken(),
+        selectedLesson.lessonId,
+        attendancePrompt.studentId,
+      );
       setAttendancePrompt({
         ...attendancePrompt,
         lessons: attendancePrompt.lessons.map((lesson) =>

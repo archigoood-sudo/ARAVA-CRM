@@ -331,6 +331,7 @@ export const IPC_CHANNELS = {
   attendanceManualSave: 'attendance:manual-save',
   attendanceOpenOccurrence: 'attendance:open-occurrence',
   attendanceSave: 'attendance:save',
+  attendanceScanConfirm: 'attendance:scan-confirm',
   attendanceScanOptions: 'attendance:scan-options',
   attendanceToday: 'attendance:today',
   tariffArchive: 'tariff:archive',
@@ -3478,6 +3479,11 @@ export interface AravaDesktopApi {
     ) => Promise<AttendanceLessonDetail>;
     openOccurrence: (token: string, input: AttendanceOccurrenceInput) => Promise<LessonSummary>;
     scanOptions: (token: string, studentId: string, date: string) => Promise<AttendanceScanOptions>;
+    confirmScan: (
+      token: string,
+      lessonId: string,
+      studentId: string,
+    ) => Promise<AttendanceLessonDetail>;
     save: (
       token: string,
       lessonId: string,

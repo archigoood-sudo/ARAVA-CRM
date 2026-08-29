@@ -108,6 +108,13 @@ export interface CrmChatRequestContext {
   userId: string;
 }
 
+interface AttendanceCheckinAcknowledgement {
+  notificationsCreated: number;
+  outcome: 'ALREADY_NOTIFIED' | 'CREATED' | 'NO_LINKED_CLIENT';
+  push: { delivered: number; failed: number; skipped: number };
+  recipients: number;
+}
+
 function sanitizeDisplayName(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new DomainError('VALIDATION', 'Укажите имя устройства.');
@@ -2078,6 +2085,50 @@ export class IntegrationApiClient {
       input,
       context,
     );
+  }
+
+  async sendAttendanceCheckin(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    input: { checkedInAt: string; crmStudentId: string; lessonId: string },
+  ): Promise<AttendanceCheckinAcknowledgement> {
+    const payload = await this.request(
+      baseUrl,
+      'notifications/attendance-checkin',
+      deviceId,
+      token,
+      'POST',
+      input,
+      context,
+    );
+    if (
+      !isRecord(payload) ||
+      !['ALREADY_NOTIFIED', 'CREATED', 'NO_LINKED_CLIENT'].includes(String(payload.outcome)) ||
+      typeof payload.notificationsCreated !== 'number' ||
+      typeof payload.recipients !== 'number' ||
+      !isRecord(payload.push) ||
+      typeof payload.push.delivered !== 'number' ||
+      typeof payload.push.failed !== 'number' ||
+      typeof payload.push.skipped !== 'number'
+    ) {
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер не подтвердил уведомление о посещении.',
+      );
+    }
+    return {
+      notificationsCreated: payload.notificationsCreated,
+      outcome: payload.outcome as AttendanceCheckinAcknowledgement['outcome'],
+      push: {
+        delivered: payload.push.delivered,
+        failed: payload.push.failed,
+        skipped: payload.push.skipped,
+      },
+      recipients: payload.recipients,
+    };
   }
 
   async markChatRead(
@@ -5042,6 +5093,14 @@ export class IntegrationService {
         take: INTEGRATION_BATCH_SIZE * 4,
         where: { status: 'PENDING' },
       });
+      const pendingAttendanceCheckin = await this.database.syncOutbox.findFirst({
+        orderBy: { createdAt: 'asc' },
+        where: {
+          entityType: 'ATTENDANCE_CHECKIN',
+          nextAttemptAt: { lte: this.now() },
+          status: 'PENDING',
+        },
+      });
       const pendingChat = candidates.find(
         (item) => item.entityType === 'CHAT_MESSAGE' && item.nextAttemptAt <= this.now(),
       );
@@ -5050,7 +5109,10 @@ export class IntegrationService {
         await this.processInboundSafely(baseUrl, deviceId, token);
         return;
       }
-      const due = candidates.filter(({ nextAttemptAt }) => nextAttemptAt <= this.now());
+      const due = candidates.filter(
+        ({ entityType, nextAttemptAt }) =>
+          entityType !== 'ATTENDANCE_CHECKIN' && nextAttemptAt <= this.now(),
+      );
       const latestByEntity = new Map<string, (typeof due)[number]>();
       for (const item of due) latestByEntity.set(`${item.entityType}:${item.entityId}`, item);
       const superseded = due.filter(
@@ -5071,6 +5133,8 @@ export class IntegrationService {
         )
         .slice(0, INTEGRATION_BATCH_SIZE);
       if (selected.length === 0) {
+        if (pendingAttendanceCheckin)
+          await this.processPendingAttendanceCheckin(pendingAttendanceCheckin);
         await this.processInboundSafely(baseUrl, deviceId, token);
         return;
       }
@@ -5133,6 +5197,8 @@ export class IntegrationService {
       } catch (error) {
         await this.failBatch(selected, error);
       }
+      if (pendingAttendanceCheckin)
+        await this.processPendingAttendanceCheckin(pendingAttendanceCheckin);
       await this.processInboundSafely(baseUrl, deviceId, token);
     } finally {
       this.processing = false;
@@ -6636,6 +6702,76 @@ export class IntegrationService {
         }),
       ]);
       await this.log(item, 'CHAT_SEND', 'SYNCED', item.attemptCount + 1);
+    } catch (error) {
+      await this.failBatch([item], error);
+    }
+  }
+
+  private async processPendingAttendanceCheckin(item: {
+    attemptCount: number;
+    entityId: string;
+    entityType: string;
+    id: string;
+    idempotencyKey: string;
+    operation: SyncOperation;
+    payloadJson: string;
+  }): Promise<void> {
+    const claimed = await this.database.syncOutbox.updateMany({
+      data: { lastAttemptAt: this.now(), status: 'PROCESSING' },
+      where: { id: item.id, status: 'PENDING' },
+    });
+    if (claimed.count !== 1) return;
+    try {
+      const payload = JSON.parse(item.payloadJson) as unknown;
+      if (!isRecord(payload) || !isRecord(payload.context)) {
+        throw new IntegrationApiError(
+          'INVALID_PAYLOAD',
+          false,
+          'Отложенное уведомление повреждено.',
+        );
+      }
+      const checkedInAt = optionalString(payload.checkedInAt);
+      const crmStudentId = optionalString(payload.crmStudentId);
+      const lessonId = optionalString(payload.lessonId);
+      if (!checkedInAt || !crmStudentId || !lessonId || Number.isNaN(Date.parse(checkedInAt))) {
+        throw new IntegrationApiError(
+          'INVALID_PAYLOAD',
+          false,
+          'Отложенное уведомление повреждено.',
+        );
+      }
+      const connection = await this.chatConnection();
+      const acknowledgement = await this.api.sendAttendanceCheckin(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        payload.context as unknown as CrmChatRequestContext,
+        { checkedInAt, crmStudentId, lessonId },
+      );
+      await this.database.$transaction([
+        this.database.syncOutbox.update({
+          data: { lastErrorCode: null, status: 'SYNCED', syncedAt: this.now() },
+          where: { id: item.id },
+        }),
+        this.database.appSetting.upsert({
+          create: { key: SETTINGS.lastState, value: 'CONNECTED' },
+          update: { value: 'CONNECTED' },
+          where: { key: SETTINGS.lastState },
+        }),
+      ]);
+      await this.log(
+        item,
+        'ATTENDANCE_CHECKIN',
+        'SYNCED',
+        item.attemptCount + 1,
+        undefined,
+        JSON.stringify({
+          notificationsCreated: acknowledgement.notificationsCreated,
+          outcome: acknowledgement.outcome,
+          push: acknowledgement.push,
+          recipients: acknowledgement.recipients,
+        }),
+      );
     } catch (error) {
       await this.failBatch([item], error);
     }

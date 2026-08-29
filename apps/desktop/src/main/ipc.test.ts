@@ -1337,7 +1337,9 @@ describe('Electron IPC boundary', () => {
       groupId: group.id,
       startsAt: '2026-08-23T18:00:00',
     });
-    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    const scheduleIntegration = vi.fn();
+    const integration = { schedule: scheduleIntegration } as unknown as IntegrationManager;
+    const handlers = createIpcHandlers(database, service, '/test/arava.db', { integration });
     expect(() => handlers[IPC_CHANNELS.attendanceToday]?.(owner.token, '23.08.2026')).toThrow();
     const day = (await handlers[IPC_CHANNELS.attendanceToday]?.(
       owner.token,
@@ -1388,6 +1390,11 @@ describe('Electron IPC boundary', () => {
     )) as AttendanceScanOptions;
     expect(options.lessons).toEqual([expect.objectContaining({ lessonId: lesson.id })]);
     expect(await database.attendance.count()).toBe(0);
+    await handlers[IPC_CHANNELS.attendanceScanConfirm]?.(owner.token, lesson.id, student.id);
+    expect(scheduleIntegration).toHaveBeenCalledOnce();
+    expect(await database.syncOutbox.count({ where: { entityType: 'ATTENDANCE_CHECKIN' } })).toBe(
+      1,
+    );
     const manualStudent = await service.createStudent(owner.token, {
       branchId: branch.id,
       firstName: 'Гость',

@@ -960,6 +960,33 @@ export class StudioService {
     return this.getAttendance(token, lessonId);
   }
 
+  async confirmScannedAttendance(
+    token: string,
+    lessonId: string,
+    studentId: string,
+  ): Promise<AttendanceLessonDetail> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'attendance:manage');
+    if (actor.role === 'COACH')
+      throw new DomainError('AUTHORIZATION', t('domain.authorization.permissionDenied'));
+    const lesson = await this.requireLesson(lessonId);
+    this.assertLessonRead(actor, lesson);
+    if (lesson.status === 'CANCELLED')
+      throw new DomainError('VALIDATION', t('domain.validation.attendanceCancelled'));
+    const allowedStudents = await this.attendanceStudentIds(lesson);
+    await this.persistAttendance(
+      actor,
+      lesson,
+      [{ status: 'PRESENT', studentId }],
+      allowedStudents,
+      undefined,
+      false,
+      new Set<string>(),
+      new Set([studentId]),
+    );
+    return this.getAttendance(token, lessonId);
+  }
+
   async saveManualAttendance(
     token: string,
     lessonId: string,
@@ -1075,6 +1102,7 @@ export class StudioService {
     webActionId?: string,
     allowCoachCorrection = false,
     manuallyAddedStudents: Set<string> = new Set<string>(),
+    scannerCheckinStudents: Set<string> = new Set<string>(),
   ): Promise<void> {
     if (new Set(entries.map(({ studentId }) => studentId)).size !== entries.length)
       throw new DomainError('VALIDATION', t('domain.validation.attendanceUnique'));
@@ -1108,18 +1136,19 @@ export class StudioService {
             actor.id,
             t('ledger.comment.attendanceCorrection'),
           );
+        const markedAt = new Date();
         await transaction.attendance.upsert({
           create: {
             comment: optionalValue(entry.comment),
             lessonId: lesson.id,
-            markedAt: new Date(),
+            markedAt,
             markedByUserId: actor.id,
             status: entry.status,
             studentId: entry.studentId,
           },
           update: {
             comment: optionalValue(entry.comment),
-            markedAt: new Date(),
+            markedAt,
             markedByUserId: actor.id,
             status: entry.status,
           },
@@ -1143,6 +1172,36 @@ export class StudioService {
             lessonStartsAt: lesson.startsAt,
             studentId: entry.studentId,
           });
+        if (
+          scannerCheckinStudents.has(entry.studentId) &&
+          entry.status === 'PRESENT' &&
+          previous?.status !== 'PRESENT'
+        ) {
+          const idempotencyKey = `attendance-checkin:${lesson.id}:${entry.studentId}`;
+          await transaction.syncOutbox.upsert({
+            create: {
+              entityId: `${lesson.id}:${entry.studentId}`,
+              entityType: 'ATTENDANCE_CHECKIN',
+              idempotencyKey,
+              nextAttemptAt: markedAt,
+              operation: 'UPSERT',
+              payloadJson: JSON.stringify({
+                checkedInAt: markedAt.toISOString(),
+                context: {
+                  branchIds: actor.branchIds,
+                  name: actor.fullName,
+                  role: actor.role,
+                  userId: actor.id,
+                },
+                crmStudentId: entry.studentId,
+                lessonId: lesson.id,
+              }),
+              status: 'PENDING',
+            },
+            update: {},
+            where: { idempotencyKey },
+          });
+        }
         if (previous && previous.status !== entry.status)
           await this.audit(
             transaction,

@@ -14,6 +14,7 @@ import {
   type DatabaseClient,
 } from './index';
 import {
+  INTEGRATION_BATCH_SIZE,
   IntegrationApiClient,
   IntegrationService,
   validateIntegrationBaseUrl,
@@ -72,6 +73,7 @@ describe('Sprint 4.5A multi-device integration', () => {
     }
   >;
   let changes: Record<string, unknown>[];
+  let checkinFailuresRemaining: number;
   let conflictSequence: number;
   let changesRequestStarted: (() => void) | undefined;
   let changesResponseGate: Promise<void> | undefined;
@@ -112,6 +114,7 @@ describe('Sprint 4.5A multi-device integration', () => {
     credentials = new MemoryCredentials();
     canonical = new Map();
     changes = [];
+    checkinFailuresRemaining = 0;
     conflictSequence = 0;
     changesRequestStarted = undefined;
     changesResponseGate = undefined;
@@ -454,6 +457,20 @@ describe('Sprint 4.5A multi-device integration', () => {
           }
         }
         json(response, 200, { apiVersion: 'v1' });
+        return;
+      }
+      if (request.method === 'POST' && request.url?.endsWith('/notifications/attendance-checkin')) {
+        if (checkinFailuresRemaining > 0) {
+          checkinFailuresRemaining -= 1;
+          json(response, 503, { code: 'TEMPORARY_ERROR', message: 'later' });
+          return;
+        }
+        json(response, 200, {
+          notificationsCreated: 1,
+          outcome: 'CREATED',
+          push: { delivered: 1, failed: 0, skipped: 0 },
+          recipients: 1,
+        });
         return;
       }
       const operations = Array.isArray(requestBody.operations) ? requestBody.operations : [];
@@ -2496,6 +2513,156 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(
       JSON.parse(Buffer.from(encodedContext['x-arava-crm-context'] ?? '', 'base64url').toString()),
     ).toEqual(context);
+  });
+
+  it('delivers a durable attendance check-in with authenticated context exactly once', async () => {
+    await pair();
+    const context = {
+      branchIds: ['branch-checkin'],
+      name: 'Владелец',
+      role: 'OWNER' as const,
+      userId: 'owner-checkin-test',
+    };
+    const row = await database.syncOutbox.create({
+      data: {
+        entityId: 'lesson-checkin:student-checkin',
+        entityType: 'ATTENDANCE_CHECKIN',
+        idempotencyKey: 'attendance-checkin:lesson-checkin:student-checkin',
+        nextAttemptAt: now,
+        operation: 'UPSERT',
+        payloadJson: JSON.stringify({
+          checkedInAt: '2030-08-18T10:27:00.000Z',
+          context,
+          crmStudentId: 'student-checkin',
+          lessonId: 'lesson-checkin',
+        }),
+      },
+    });
+
+    await integration.processPending();
+    await integration.processPending();
+
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+      attemptCount: 0,
+      status: 'SYNCED',
+    });
+    const requests = received.filter(
+      (entry) => entry.path === '/api/integration/v1/notifications/attendance-checkin',
+    );
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      checkedInAt: '2030-08-18T10:27:00.000Z',
+      crmStudentId: 'student-checkin',
+      lessonId: 'lesson-checkin',
+    });
+    expect(requests[0]?.headers).toMatchObject({
+      authorization: 'Bearer device-secret',
+      'x-arava-api-version': 'v1',
+      'x-arava-device-id': credentials.deviceId,
+    });
+    const encodedContext = requests[0]?.headers as Record<string, string | undefined>;
+    expect(
+      JSON.parse(Buffer.from(encodedContext['x-arava-crm-context'] ?? '', 'base64url').toString()),
+    ).toEqual(context);
+  });
+
+  it('delivers a check-in in the current cycle when the regular sync candidate window is full', async () => {
+    await pair();
+    const regularCount = INTEGRATION_BATCH_SIZE * 4 + 1;
+    const createdAt = new Date(now.getTime() - 60_000);
+    const branches = Array.from({ length: regularCount }, (_, index) => ({
+      address: '',
+      createdAt,
+      description: '',
+      id: `branch-starvation-${String(index).padStart(3, '0')}`,
+      name: `Филиал ${String(index).padStart(3, '0')}`,
+      phone: '',
+      updatedAt: createdAt,
+    }));
+    await database.branch.createMany({ data: branches });
+    const checkin = await database.syncOutbox.create({
+      data: {
+        createdAt: now,
+        entityId: 'lesson-starvation:student-starvation',
+        entityType: 'ATTENDANCE_CHECKIN',
+        idempotencyKey: 'attendance-checkin:lesson-starvation:student-starvation',
+        nextAttemptAt: now,
+        operation: 'UPSERT',
+        payloadJson: JSON.stringify({
+          checkedInAt: now.toISOString(),
+          context: { branchIds: [], name: 'Владелец', role: 'OWNER', userId: 'owner-starvation' },
+          crmStudentId: 'student-starvation',
+          lessonId: 'lesson-starvation',
+        }),
+      },
+    });
+
+    await integration.processPending();
+
+    expect(
+      await database.syncOutbox.findUniqueOrThrow({ where: { id: checkin.id } }),
+    ).toMatchObject({ status: 'SYNCED' });
+    expect(
+      received.filter(
+        ({ path }) => path === '/api/integration/v1/notifications/attendance-checkin',
+      ),
+    ).toHaveLength(1);
+    const regularBatches = received.filter(({ path }) => path === '/api/integration/v1/sync/batch');
+    expect(regularBatches).toHaveLength(1);
+    expect(regularBatches[0]?.operations).toHaveLength(INTEGRATION_BATCH_SIZE);
+    expect(
+      await database.syncOutbox.count({
+        where: { entityType: 'BRANCH', status: 'PENDING' },
+      }),
+    ).toBe(regularCount - INTEGRATION_BATCH_SIZE);
+  });
+
+  it('retries an offline check-in after restart without changing its idempotency key', async () => {
+    await pair();
+    const row = await database.syncOutbox.create({
+      data: {
+        entityId: 'lesson-offline:student-offline',
+        entityType: 'ATTENDANCE_CHECKIN',
+        idempotencyKey: 'attendance-checkin:lesson-offline:student-offline',
+        nextAttemptAt: now,
+        operation: 'UPSERT',
+        payloadJson: JSON.stringify({
+          checkedInAt: '2030-08-18T10:27:00.000Z',
+          context: { branchIds: [], name: 'Владелец', role: 'OWNER', userId: 'owner-offline' },
+          crmStudentId: 'student-offline',
+          lessonId: 'lesson-offline',
+        }),
+      },
+    });
+    checkinFailuresRemaining = 1;
+
+    await integration.processPending();
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+      attemptCount: 1,
+      idempotencyKey: 'attendance-checkin:lesson-offline:student-offline',
+      status: 'PENDING',
+    });
+
+    now = new Date(now.getTime() + 60_000);
+    const restarted = new IntegrationService(
+      database,
+      application,
+      credentials,
+      new IntegrationApiClient(),
+      () => now,
+    );
+    await restarted.initialize();
+    await restarted.processPending();
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+      attemptCount: 1,
+      idempotencyKey: 'attendance-checkin:lesson-offline:student-offline',
+      status: 'SYNCED',
+    });
+    expect(
+      received.filter(
+        (entry) => entry.path === '/api/integration/v1/notifications/attendance-checkin',
+      ),
+    ).toHaveLength(2);
   });
 
   it('keeps permanent failures visible and disconnects a revoked device without losing work', async () => {

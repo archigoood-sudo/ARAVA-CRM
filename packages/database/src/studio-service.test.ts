@@ -226,4 +226,54 @@ describe('Sprint 2 studio service', () => {
     ]);
     expect(await database.auditLog.count({ where: { action: 'ATTENDANCE_CORRECTED' } })).toBe(1);
   });
+
+  it('queues one durable check-in only for scanner-confirmed PRESENT', async () => {
+    const { branch, coach, group } = await branchAndCoach();
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Маша',
+      lastName: 'Петрова',
+      status: 'ACTIVE',
+    });
+    await studio.addEnrollment(ownerToken, group.id, {
+      joinedAt: '2026-08-01',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: student.id,
+    });
+    const lesson = await studio.createLesson(ownerToken, {
+      coachId: coach.id,
+      endsAt: '2026-08-29T18:30:00',
+      groupId: group.id,
+      startsAt: '2026-08-29T17:30:00',
+    });
+
+    await studio.confirmScannedAttendance(ownerToken, lesson.id, student.id);
+    await studio.confirmScannedAttendance(ownerToken, lesson.id, student.id);
+
+    expect(
+      await database.syncOutbox.findMany({ where: { entityType: 'ATTENDANCE_CHECKIN' } }),
+    ).toEqual([
+      expect.objectContaining({
+        entityId: `${lesson.id}:${student.id}`,
+        idempotencyKey: `attendance-checkin:${lesson.id}:${student.id}`,
+        status: 'PENDING',
+      }),
+    ]);
+    expect(
+      await database.attendance.findUnique({
+        where: { lessonId_studentId: { lessonId: lesson.id, studentId: student.id } },
+      }),
+    ).toMatchObject({ status: 'PRESENT' });
+
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'ABSENT', studentId: student.id },
+    ]);
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    expect(await database.syncOutbox.count({ where: { entityType: 'ATTENDANCE_CHECKIN' } })).toBe(
+      1,
+    );
+  });
 });
