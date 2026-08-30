@@ -52,17 +52,24 @@ test('вход, создание филиала, ученика и контак�
     await expect(roomDialog).toBeVisible();
     const roomNameField = roomDialog.locator('input').nth(0);
     const roomCapacityField = roomDialog.locator('input').nth(1);
+    const saveRoomButton = roomDialog.getByRole('button', { name: 'Сохранить' });
+    const fillRoomWhenReady = async (name: string, capacity: string) => {
+      await expect
+        .poll(async () => {
+          await roomNameField.fill(name);
+          await roomCapacityField.fill(capacity);
+          return saveRoomButton.isEnabled();
+        })
+        .toBe(true);
+    };
     await expect(roomNameField).toBeEditable();
-    await roomNameField.fill('Зал E2E');
-    await roomCapacityField.fill('20');
-    await expect(roomDialog.getByRole('button', { name: 'Сохранить' })).toBeEnabled();
-    await roomDialog.getByRole('button', { name: 'Сохранить' }).click();
+    await fillRoomWhenReady('Зал E2E', '20');
+    await saveRoomButton.click();
     await expect(window.getByText('Зал E2E')).toBeVisible();
     await addRoomButton.click();
     await expect(roomDialog).toBeVisible();
-    await roomNameField.fill('Зал 2 E2E');
-    await roomCapacityField.fill('15');
-    await roomDialog.getByRole('button', { name: 'Сохранить' }).click();
+    await fillRoomWhenReady('Зал 2 E2E', '15');
+    await saveRoomButton.click();
     await expect(window.getByText('Зал 2 E2E')).toBeVisible();
 
     await window.getByRole('link', { name: 'Ученики' }).click();
