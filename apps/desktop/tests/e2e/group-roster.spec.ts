@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test, type Page } from '@playwright/test';
+import { launchElectron } from './electron-launch';
+import { expect, test, type Page } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import { resolve } from 'node:path';
 
@@ -31,8 +32,8 @@ test('профиль группы показывает состав и выпо�
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const userDataArgument = `--user-data-dir=${testInfo.outputPath('group-roster-user-data')}`;
   const application = executablePath
-    ? await electron.launch({ args: [userDataArgument], executablePath })
-    : await electron.launch({
+    ? await launchElectron({ args: [userDataArgument], executablePath })
+    : await launchElectron({
         args: ['.', userDataArgument],
         cwd: resolve(import.meta.dirname, '../..'),
       });

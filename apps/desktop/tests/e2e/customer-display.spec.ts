@@ -1,6 +1,7 @@
+import { launchElectron } from './electron-launch';
 /// <reference lib="dom" />
 
-import { _electron as electron, expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -153,8 +154,8 @@ test('предпросмотр экрана клиента получает бе
   const slideMediaId = `${randomUUID()}.png`;
   const slideMediaPath = resolve(userDataDir, 'media', 'customer-display', slideMediaId);
   const application = executablePath
-    ? await electron.launch({ args: [userDataArgument], executablePath })
-    : await electron.launch({
+    ? await launchElectron({ args: [userDataArgument], executablePath })
+    : await launchElectron({
         args: ['.', userDataArgument],
         cwd: resolve(import.meta.dirname, '../..'),
       });

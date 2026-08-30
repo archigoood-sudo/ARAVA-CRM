@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from '@playwright/test';
+import { launchElectron } from './electron-launch';
+import { expect, test } from '@playwright/test';
 import { resolve } from 'node:path';
 
 test('OWNER создаёт и публикует новость без сети', async ({ request: _request }, testInfo) => {
@@ -6,8 +7,8 @@ test('OWNER создаёт и публикует новость без сети'
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const args = [`--user-data-dir=${testInfo.outputPath('publication-user-data')}`];
   const application = executablePath
-    ? await electron.launch({ args, executablePath })
-    : await electron.launch({ args: ['.', ...args], cwd: resolve(import.meta.dirname, '../..') });
+    ? await launchElectron({ args, executablePath })
+    : await launchElectron({ args: ['.', ...args], cwd: resolve(import.meta.dirname, '../..') });
   try {
     const page = await application.firstWindow();
     await page.getByLabel('Электронная почта').fill('owner@arava.local');

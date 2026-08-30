@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
+import { launchElectron } from './electron-launch';
+import { expect, test, type ElectronApplication } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
@@ -120,8 +121,8 @@ test('записывает заявку на пробное и автомати�
     env: { ...process.env, ARAVA_E2E_INTEGRATION_CREDENTIALS: 'memory' },
   };
   const application = executablePath
-    ? await electron.launch({ ...launch, executablePath })
-    : await electron.launch({
+    ? await launchElectron({ ...launch, executablePath })
+    : await launchElectron({
         ...launch,
         args: ['.', ...launch.args],
         cwd: resolve(import.meta.dirname, '../..'),

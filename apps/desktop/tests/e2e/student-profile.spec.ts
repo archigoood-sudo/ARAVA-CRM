@@ -1,11 +1,5 @@
-import {
-  _electron as electron,
-  expect,
-  test,
-  type ElectronApplication,
-  type Page,
-  type TestInfo,
-} from '@playwright/test';
+import { launchElectron } from './electron-launch';
+import { expect, test, type ElectronApplication, type Page, type TestInfo } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import { resolve } from 'node:path';
 
@@ -31,8 +25,8 @@ async function launchApplication(testInfo: TestInfo): Promise<ElectronApplicatio
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const userDataArgument = `--user-data-dir=${testInfo.outputPath(`student-profile-user-data-${String(attempt)}`)}`;
     const application = executablePath
-      ? await electron.launch({ args: [userDataArgument], executablePath })
-      : await electron.launch({
+      ? await launchElectron({ args: [userDataArgument], executablePath })
+      : await launchElectron({
           args: ['.', userDataArgument],
           cwd: resolve(import.meta.dirname, '../..'),
         });

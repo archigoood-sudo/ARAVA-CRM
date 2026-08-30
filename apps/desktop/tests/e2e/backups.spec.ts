@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test, type Page } from '@playwright/test';
+import { launchElectron } from './electron-launch';
+import { expect, test, type Page } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import { resolve } from 'node:path';
 
@@ -21,8 +22,8 @@ test('OWNER создаёт, проверяет и безопасно восст�
   const userDataArgument = `--user-data-dir=${testInfo.outputPath('backup-user-data')}`;
   const environment = { ...process.env, ARAVA_E2E_NO_RELAUNCH: '1' };
   const application = executablePath
-    ? await electron.launch({ args: [userDataArgument], env: environment, executablePath })
-    : await electron.launch({
+    ? await launchElectron({ args: [userDataArgument], env: environment, executablePath })
+    : await launchElectron({
         args: ['.', userDataArgument],
         cwd: resolve(import.meta.dirname, '../..'),
         env: environment,

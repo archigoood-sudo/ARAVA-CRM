@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from '@playwright/test';
+import { launchElectron } from './electron-launch';
+import { expect, test } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import { resolve } from 'node:path';
 
@@ -9,8 +10,8 @@ test('журнал финансов показывает оплаты, возв�
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const userData = `--user-data-dir=${testInfo.outputPath('finance-journal-user-data')}`;
   const application = executablePath
-    ? await electron.launch({ args: [userData], executablePath })
-    : await electron.launch({ args: ['.', userData], cwd: resolve(import.meta.dirname, '../..') });
+    ? await launchElectron({ args: [userData], executablePath })
+    : await launchElectron({ args: ['.', userData], cwd: resolve(import.meta.dirname, '../..') });
   try {
     const page = await application.firstWindow();
     await page.getByLabel('Электронная почта').fill('owner@arava.local');

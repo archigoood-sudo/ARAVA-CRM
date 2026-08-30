@@ -33,7 +33,10 @@
     "postinstall": "npm run db:generate",
     "test": "vitest run",
     "test:e2e": "npm run test:e2e -w @arava/desktop",
+    "test:e2e:debug": "npm run test:e2e:debug -w @arava/desktop",
+    "test:e2e:headed": "npm run test:e2e:headed -w @arava/desktop",
     "test:e2e:packaged": "npm run build && npm run package -w @arava/desktop && node scripts/run-packaged-e2e.mjs",
+    "test:e2e:packaged:headed": "npm run build && npm run package -w @arava/desktop && node scripts/run-packaged-e2e.mjs --headed",
     "typecheck": "tsc -b --pretty false"
   },
   "devDependencies": {

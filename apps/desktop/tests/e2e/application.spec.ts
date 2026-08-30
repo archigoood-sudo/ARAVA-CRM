@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from '@playwright/test';
+import { launchElectron } from './electron-launch';
+import { expect, test } from '@playwright/test';
 import { resolve } from 'node:path';
 
 const ownerEmail = 'owner@arava.local';
@@ -12,8 +13,8 @@ test('вход, создание филиала, ученика и контак�
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const userDataArgument = `--user-data-dir=${testInfo.outputPath('user-data')}`;
   const application = executablePath
-    ? await electron.launch({ args: [userDataArgument], executablePath })
-    : await electron.launch({
+    ? await launchElectron({ args: [userDataArgument], executablePath })
+    : await launchElectron({
         args: ['.', userDataArgument],
         cwd: resolve(import.meta.dirname, '../..'),
       });

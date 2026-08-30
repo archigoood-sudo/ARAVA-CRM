@@ -1,4 +1,5 @@
-import { _electron as electron, expect, test } from '@playwright/test';
+import { launchElectron } from './electron-launch';
+import { expect, test } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import { resolve } from 'node:path';
 
@@ -10,8 +11,8 @@ test('платёжная операция становится одним под
   const userData = `--user-data-dir=${testInfo.outputPath('payment-foundation-user-data')}`;
   const environment = { ...process.env, ARAVA_E2E_PAYMENT_PROVIDER: 'memory' };
   const application = executablePath
-    ? await electron.launch({ args: [userData], env: environment, executablePath })
-    : await electron.launch({
+    ? await launchElectron({ args: [userData], env: environment, executablePath })
+    : await launchElectron({
         args: ['.', userData],
         cwd: resolve(import.meta.dirname, '../..'),
         env: environment,

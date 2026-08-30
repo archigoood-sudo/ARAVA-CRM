@@ -1,11 +1,5 @@
-import {
-  _electron as electron,
-  expect,
-  test,
-  type ElectronApplication,
-  type Page,
-  type TestInfo,
-} from '@playwright/test';
+import { launchElectron } from './electron-launch';
+import { expect, test, type ElectronApplication, type Page, type TestInfo } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import JSZip from 'jszip';
 import { access, mkdir, readFile, readdir, stat } from 'node:fs/promises';
@@ -16,8 +10,8 @@ const password = 'Owner!DocumentsE2E2026';
 async function launch(userData: string): Promise<ElectronApplication> {
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   return executablePath
-    ? electron.launch({ args: [`--user-data-dir=${userData}`], executablePath })
-    : electron.launch({
+    ? launchElectron({ args: [`--user-data-dir=${userData}`], executablePath })
+    : launchElectron({
         args: ['.', `--user-data-dir=${userData}`],
         cwd: resolve(import.meta.dirname, '../..'),
       });
