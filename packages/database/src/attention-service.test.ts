@@ -235,6 +235,35 @@ describe('Sprint 4.2B attention center', () => {
     items = await attention.listItems(ownerToken, { category: 'SUBSCRIPTIONS' });
     const lowBalance = items.find(({ id }) => id === `subscription:low:${active.id}`);
     expect(lowBalance?.title).toContain('осталось 1 занятие');
+
+    const next = await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: coach.id,
+        expiresAt: at(50),
+        lessonLimit: 10,
+        purchasedAt: NOW,
+        salePrice: 10_000,
+        sequenceAfterSubscriptionId: active.id,
+        startsAt: at(21),
+        status: 'PENDING',
+        studentId: student.id,
+        tariffId: tariff.id,
+      },
+    });
+    await database.payment.create({
+      data: {
+        amount: 10_000,
+        branchId: branch.id,
+        createdByUserId: coach.id,
+        paidAt: NOW,
+        paymentMethod: 'CARD',
+        studentId: student.id,
+        subscriptionId: next.id,
+      },
+    });
+    items = await attention.listItems(ownerToken, { category: 'SUBSCRIPTIONS' });
+    expect(items.some(({ id }) => id === `subscription:low:${active.id}`)).toBe(false);
   });
 
   it('creates one retention signal after three explicit consecutive absences', async () => {

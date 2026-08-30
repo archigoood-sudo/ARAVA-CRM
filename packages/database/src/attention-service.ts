@@ -402,6 +402,14 @@ export class AttentionService {
           subscription.startsAt <= now &&
           (!subscription.expiresAt || subscription.expiresAt >= now),
       );
+      const paidUpcomingSubscriptions = student.subscriptions.filter((subscription) => {
+        const paid = subscription.payments.reduce((sum, payment) => sum + paymentNet(payment), 0);
+        return subscription.status === 'PENDING' && paid >= subscription.salePrice;
+      });
+      const paidNextFor = (subscriptionId: string) =>
+        paidUpcomingSubscriptions.some(
+          ({ sequenceAfterSubscriptionId }) => sequenceAfterSubscriptionId === subscriptionId,
+        );
       const recentlyExpired = student.subscriptions.find(
         (subscription) =>
           subscription.expiresAt &&
@@ -424,6 +432,7 @@ export class AttentionService {
       if (
         student.status === 'ACTIVE' &&
         !activeSubscriptions.length &&
+        !paidUpcomingSubscriptions.length &&
         !recentlyExpired &&
         !recentlyUsedUp
       )
@@ -441,6 +450,7 @@ export class AttentionService {
         });
 
       for (const subscription of activeSubscriptions) {
+        const renewalAlreadyPaid = paidNextFor(subscription.id);
         const paid = subscription.payments.reduce((sum, payment) => sum + paymentNet(payment), 0);
         if (
           actor.role === 'OWNER' &&
@@ -463,11 +473,11 @@ export class AttentionService {
           subscription.lessonLimit === null
             ? undefined
             : Math.max(0, subscription.lessonLimit - subscription.lessonsUsed);
-        if (remaining === 0)
+        if (remaining === 0 && !renewalAlreadyPaid)
           add({
             ...common,
-            actionLabel: 'Открыть ученика',
-            actionRoute: `/students/${student.id}?section=subscription`,
+            actionLabel: 'Продлить абонемент',
+            actionRoute: `/students/${student.id}?action=subscription&renewalOf=${subscription.id}`,
             category: 'SUBSCRIPTIONS',
             description: `В абонементе «${subscription.tariff.name}» не осталось занятий.`,
             entityId: subscription.id,
@@ -476,11 +486,14 @@ export class AttentionService {
             severity: 'CRITICAL',
             title: `${name}: занятия закончились`,
           });
-        else if (remaining === RETENTION_RULES.lowSubscriptionRemainingLessons)
+        else if (
+          remaining === RETENTION_RULES.lowSubscriptionRemainingLessons &&
+          !renewalAlreadyPaid
+        )
           add({
             ...common,
-            actionLabel: 'Открыть ученика',
-            actionRoute: `/students/${student.id}?section=subscription`,
+            actionLabel: 'Продлить абонемент',
+            actionRoute: `/students/${student.id}?action=subscription&renewalOf=${subscription.id}`,
             category: 'SUBSCRIPTIONS',
             description: `В абонементе «${subscription.tariff.name}» осталось 1 занятие.`,
             entityId: subscription.id,
@@ -489,11 +502,15 @@ export class AttentionService {
             severity: 'WARNING',
             title: `${name}: осталось 1 занятие`,
           });
-        if (subscription.expiresAt && isExpiringSoon(subscription.expiresAt, now))
+        if (
+          !renewalAlreadyPaid &&
+          subscription.expiresAt &&
+          isExpiringSoon(subscription.expiresAt, now)
+        )
           add({
             ...common,
             actionLabel: 'Продлить абонемент',
-            actionRoute: `/students/${student.id}?action=subscription`,
+            actionRoute: `/students/${student.id}?action=subscription&renewalOf=${subscription.id}`,
             category: 'SUBSCRIPTIONS',
             description: `Абонемент «${subscription.tariff.name}» заканчивается ${subscription.expiresAt.toLocaleDateString('ru-RU')}.`,
             dueAt: subscription.expiresAt.toISOString(),
@@ -505,15 +522,20 @@ export class AttentionService {
           });
       }
 
-      if (retentionEligible && !activeSubscriptions.length && endedSubscription) {
+      if (
+        retentionEligible &&
+        !activeSubscriptions.length &&
+        !paidUpcomingSubscriptions.length &&
+        endedSubscription
+      ) {
         const expiredByDate = endedSubscription.status !== 'USED_UP';
         const endedOn = endedSubscription.expiresAt
           ? endedSubscription.expiresAt.toLocaleDateString('ru-RU')
           : endedSubscription.updatedAt.toLocaleDateString('ru-RU');
         add({
           ...common,
-          actionLabel: 'Продать абонемент',
-          actionRoute: `/students/${student.id}?action=subscription`,
+          actionLabel: 'Продлить абонемент',
+          actionRoute: `/students/${student.id}?action=subscription&renewalOf=${endedSubscription.id}`,
           category: 'SUBSCRIPTIONS',
           description: `Абонемент «${endedSubscription.tariff.name}» закончился ${endedOn}.`,
           dueAt: endedSubscription.expiresAt?.toISOString(),

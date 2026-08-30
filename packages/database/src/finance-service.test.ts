@@ -20,6 +20,11 @@ import { StudioService } from './studio-service';
 
 const DAY_MS = 86_400_000;
 const dateString = (value: Date) => value.toISOString().slice(0, 10);
+const freezeInput = (days: number, reason = 'Отпуск ученика') => ({
+  endsAt: dateString(new Date(Date.now() + (days - 1) * DAY_MS)),
+  reason,
+  startsAt: dateString(new Date()),
+});
 
 describe('Sprint 3 finance service', () => {
   let application: ApplicationService;
@@ -170,17 +175,17 @@ describe('Sprint 3 finance service', () => {
   it('enforces freeze limits, extends expiry, and audits freeze lifecycle', async () => {
     const { subscription } = await tariffAndSubscription({ freezeDays: 5 });
     const originalExpiry = new Date(subscription.expiresAt ?? 0).getTime();
-    const frozen = await finance.freezeSubscription(ownerToken, subscription.id, { days: 3 });
+    const frozen = await finance.freezeSubscription(ownerToken, subscription.id, freezeInput(3));
     expect(frozen.status).toBe('FROZEN');
     await expect(
-      finance.freezeSubscription(ownerToken, subscription.id, { days: 1 }),
+      finance.freezeSubscription(ownerToken, subscription.id, freezeInput(1)),
     ).rejects.toThrow(t('domain.validation.freezeActiveOnly'));
     const active = await finance.unfreezeSubscription(ownerToken, subscription.id);
     expect(active.status).toBe('ACTIVE');
     expect(active.frozenDaysUsed).toBe(1);
     expect(new Date(active.expiresAt ?? 0).getTime()).toBe(originalExpiry + DAY_MS);
     await expect(
-      finance.freezeSubscription(ownerToken, subscription.id, { days: 5 }),
+      finance.freezeSubscription(ownerToken, subscription.id, freezeInput(5)),
     ).rejects.toThrow(t('domain.validation.freezeLimit'));
     expect(
       await database.auditLog.count({
@@ -417,6 +422,7 @@ describe('Sprint 3 finance service', () => {
     expect(
       (
         await finance.updateSubscription(ownerToken, pending.id, {
+          reason: 'Проверка защиты активации',
           startsAt: dateString(startsAt),
           tariffId: tariff.id,
         })
@@ -570,6 +576,146 @@ describe('Sprint 3 finance service', () => {
     expect(unlimitedResult.remainingLessons).toBeUndefined();
   });
 
+  it('renews atomically and consumes Current then Next exactly once per attendance', async () => {
+    const { branch, group, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      freezeDays: 10,
+      isActive: true,
+      lessonCount: 8,
+      name: '8 занятий · 3300 ₽',
+      price: 330_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    });
+    const issue = (input: { idempotencyKey: string; sequenceAfterSubscriptionId?: string }) =>
+      finance.createSubscription(ownerToken, {
+        idempotencyKey: input.idempotencyKey,
+        initialPayment: {
+          amount: tariff.price,
+          paidAt: new Date().toISOString(),
+          paymentMethod: 'CARD',
+        },
+        salePrice: tariff.price,
+        ...(input.sequenceAfterSubscriptionId
+          ? { sequenceAfterSubscriptionId: input.sequenceAfterSubscriptionId }
+          : {}),
+        startsAt: dateString(new Date(Date.now() - DAY_MS)),
+        studentId: student.id,
+        tariffId: tariff.id,
+      });
+    const current = await issue({ idempotencyKey: 'renew-current-3300' });
+    await finance.updateSubscription(ownerToken, current.id, {
+      reason: 'Подготовка реалистичного остатка перед продлением',
+      remainingLessons: 2,
+      startsAt: dateString(new Date(Date.now() - DAY_MS)),
+      tariffId: tariff.id,
+    });
+    const nextInput = {
+      idempotencyKey: 'renew-next-3300',
+      sequenceAfterSubscriptionId: current.id,
+    };
+    const next = await issue(nextInput);
+    const retried = await issue(nextInput);
+    expect(retried.id).toBe(next.id);
+    expect(await database.payment.count()).toBe(2);
+    expect(await database.subscription.count()).toBe(2);
+    expect((await finance.listStudentSubscriptions(ownerToken, student.id)).subscriptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: current.id, lifecyclePosition: 'CURRENT' }),
+        expect.objectContaining({ id: next.id, lifecyclePosition: 'NEXT', paymentStatus: 'PAID' }),
+      ]),
+    );
+
+    const mark = async (offset: number) => {
+      const startsAt = new Date(Date.now() + offset * 60_000);
+      const lesson = await studio.createLesson(ownerToken, {
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000).toISOString(),
+        groupId: group.id,
+        startsAt: startsAt.toISOString(),
+      });
+      await studio.saveAttendance(ownerToken, lesson.id, [
+        { status: 'PRESENT', studentId: student.id },
+      ]);
+      await studio.saveAttendance(ownerToken, lesson.id, [
+        { status: 'PRESENT', studentId: student.id },
+      ]);
+      expect(
+        await database.subscriptionLedger.count({
+          where: { attendanceId: `${lesson.id}:${student.id}`, type: 'LESSON_WRITE_OFF' },
+        }),
+      ).toBe(1);
+    };
+    await mark(60);
+    expect(await finance.getSubscription(ownerToken, current.id)).toMatchObject({
+      debt: 0,
+      remainingLessons: 1,
+    });
+    expect((await finance.getSubscription(ownerToken, next.id)).remainingLessons).toBe(8);
+    await mark(120);
+    expect(await finance.getSubscription(ownerToken, current.id)).toMatchObject({
+      debt: 0,
+      remainingLessons: 0,
+      status: 'USED_UP',
+    });
+    expect((await finance.getSubscription(ownerToken, next.id)).remainingLessons).toBe(8);
+    await mark(180);
+    expect(await finance.getSubscription(ownerToken, next.id)).toMatchObject({
+      debt: 0,
+      remainingLessons: 7,
+      status: 'ACTIVE',
+    });
+  });
+
+  it('blocks frozen write-offs and records OWNER correction with a required reason', async () => {
+    const { group, student, subscription, tariff } = await tariffAndSubscription({
+      freezeDays: 5,
+      lessonCount: 8,
+      price: 330_000,
+    });
+    const originalExpiry = new Date(subscription.expiresAt ?? 0).getTime();
+    const frozen = await finance.freezeSubscription(ownerToken, subscription.id, freezeInput(3));
+    expect(frozen.status).toBe('FROZEN');
+    const startsAt = new Date();
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(startsAt.getTime() + 30 * 60_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(0);
+    expect(
+      (await finance.listStudentSubscriptions(ownerToken, student.id)).uncoveredAttendances,
+    ).toHaveLength(1);
+    const unfrozen = await finance.unfreezeSubscription(ownerToken, subscription.id);
+    expect(unfrozen.frozenDaysUsed).toBe(1);
+    expect(new Date(unfrozen.expiresAt ?? 0).getTime()).toBe(originalExpiry + DAY_MS);
+    await expect(
+      finance.updateSubscription(ownerToken, subscription.id, {
+        reason: ' ',
+        remainingLessons: 6,
+        startsAt: dateString(new Date(subscription.startsAt)),
+        tariffId: tariff.id,
+      }),
+    ).rejects.toThrow(t('validation.adjustmentReason'));
+    const corrected = await finance.updateSubscription(ownerToken, subscription.id, {
+      reason: 'Компенсация отменённого занятия',
+      remainingLessons: 6,
+      startsAt: dateString(new Date(subscription.startsAt)),
+      tariffId: tariff.id,
+    });
+    expect(corrected.remainingLessons).toBe(6);
+    expect(
+      corrected.history?.some(
+        ({ summary, type }) =>
+          type === 'CORRECTION' && summary.includes('Компенсация отменённого занятия'),
+      ),
+    ).toBe(true);
+  });
+
   it('writes off attendance once, reverses corrections, and reverses a cancelled lesson', async () => {
     const { branch, group, student, subscription } = await tariffAndSubscription({
       lessonCount: 2,
@@ -658,6 +804,7 @@ describe('Sprint 3 finance service', () => {
     expect(covered.totalDebt).toBe(0);
     await finance.updateSubscription(ownerToken, subscription.id, {
       expiresAt: dateString(new Date(lessonStartsAt.getTime() + 10 * DAY_MS)),
+      reason: 'Уточнение срока действия',
       startsAt: dateString(new Date(lessonStartsAt.getTime() - DAY_MS)),
       tariffId: pack.id,
     });
@@ -802,6 +949,7 @@ describe('Sprint 3 finance service', () => {
       where: { subscriptionId: subscription.id },
     });
     const updated = await finance.updateSubscription(ownerToken, subscription.id, {
+      reason: 'Исправление даты начала',
       startsAt: dateString(new Date(lessonStartsAt.getTime() + 2 * DAY_MS)),
       tariffId: tariff.id,
     });
@@ -895,6 +1043,23 @@ describe('Sprint 3 finance service', () => {
       finance.adjustSubscription(manager.token, subscription.id, {
         comment: 'Нет полномочий на корректировку',
         lessonDelta: 1,
+      }),
+    ).rejects.toThrow(t('domain.authorization.permissionDenied'));
+    await expect(
+      finance.updateSubscription(manager.token, subscription.id, {
+        expiresAt: subscription.expiresAt?.slice(0, 10),
+        reason: 'Допустимое исправление даты администратором',
+        startsAt: subscription.startsAt.slice(0, 10),
+        tariffId: subscription.tariffId,
+      }),
+    ).resolves.toMatchObject({ id: subscription.id });
+    await expect(
+      finance.updateSubscription(manager.token, subscription.id, {
+        expiresAt: subscription.expiresAt?.slice(0, 10),
+        reason: 'Администратор не меняет остаток занятий',
+        remainingLessons: subscription.remainingLessons,
+        startsAt: subscription.startsAt.slice(0, 10),
+        tariffId: subscription.tariffId,
       }),
     ).rejects.toThrow(t('domain.authorization.permissionDenied'));
     await expect(

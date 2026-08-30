@@ -263,7 +263,13 @@ test('вход, создание филиала, ученика и контак�
     await expect(window.getByText('Использовано 0 из 4')).toBeVisible();
     await window.getByRole('button', { name: 'Заморозить' }).click();
     const freezeDialog = window.getByRole('dialog');
-    await freezeDialog.getByLabel('Количество дней').fill('3');
+    const freezeEnd = new Date();
+    freezeEnd.setDate(freezeEnd.getDate() + 2);
+    const freezeEndOffset = freezeEnd.getTimezoneOffset() * 60_000;
+    await freezeDialog
+      .getByLabel('Последний день заморозки')
+      .fill(new Date(freezeEnd.getTime() - freezeEndOffset).toISOString().slice(0, 10));
+    await freezeDialog.getByLabel('Причина / комментарий').fill('Семейная поездка');
     await freezeDialog.getByRole('button', { name: 'Заморозить' }).click();
     await expect(window.getByText('Заморожен').first()).toBeVisible();
 

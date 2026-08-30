@@ -1066,6 +1066,7 @@ export interface SubscriptionCreateInput {
   initialPayment?: InitialPaymentInput | undefined;
   notes?: string | undefined;
   salePrice: number;
+  sequenceAfterSubscriptionId?: string | undefined;
   startsAt: string;
   studentId: string;
   tariffId: string;
@@ -1075,6 +1076,7 @@ export interface SubscriptionSaleIntentInput {
   expiresAt?: string | undefined;
   notes?: string | undefined;
   salePrice: number;
+  sequenceAfterSubscriptionId?: string | undefined;
   startsAt: string;
   tariffId: string;
 }
@@ -1084,12 +1086,27 @@ export type SubscriptionPaymentStatus = 'PAID' | 'PARTIALLY_PAID' | 'REFUNDED' |
 export interface SubscriptionUpdateInput {
   expiresAt?: string | undefined;
   notes?: string | undefined;
+  reason: string;
+  remainingLessons?: number | undefined;
   startsAt: string;
   tariffId: string;
 }
 
 export interface SubscriptionFreezeInput {
-  days: number;
+  endsAt: string;
+  reason: string;
+  startsAt: string;
+}
+
+export type SubscriptionLifecyclePosition = 'CURRENT' | 'NEXT' | 'OVERLAP' | 'HISTORY';
+
+export interface SubscriptionHistoryEvent {
+  actorName?: string | undefined;
+  amount?: number | undefined;
+  occurredAt: string;
+  remainingLessons?: number | undefined;
+  summary: string;
+  type: 'PURCHASE' | 'ATTENDANCE' | 'FREEZE' | 'UNFREEZE' | 'CORRECTION';
 }
 
 export interface SubscriptionAdjustmentInput {
@@ -1109,6 +1126,7 @@ export interface SubscriptionSummary {
   frozenDaysUsed: number;
   id: string;
   lessonLimit?: number | undefined;
+  lifecyclePosition?: SubscriptionLifecyclePosition | undefined;
   lessonsUsed: number;
   lowBalance: boolean;
   notes?: string | undefined;
@@ -1117,6 +1135,7 @@ export interface SubscriptionSummary {
   purchasedAt: string;
   remainingLessons?: number | undefined;
   salePrice: number;
+  sequenceAfterSubscriptionId?: string | undefined;
   startsAt: string;
   status: SubscriptionStatus;
   studentId: string;
@@ -1137,11 +1156,14 @@ export interface LedgerEntrySummary {
   id: string;
   lessonDelta: number;
   lessonId?: string | undefined;
+  periodEndsAt?: string | undefined;
+  periodStartsAt?: string | undefined;
   reversesLedgerId?: string | undefined;
   type: LedgerOperationType;
 }
 
 export interface SubscriptionDetail extends SubscriptionSummary {
+  history?: SubscriptionHistoryEvent[] | undefined;
   ledger: LedgerEntrySummary[];
   payments: PaymentSummary[];
 }

@@ -99,6 +99,9 @@ function summary(operation: OperationRecord): PaymentOperationSummary {
             ...(operation.saleExpiresAt ? { expiresAt: localDate(operation.saleExpiresAt) } : {}),
             ...(operation.saleNotes ? { notes: operation.saleNotes } : {}),
             salePrice: operation.salePrice,
+            ...(operation.saleSequenceAfterSubscriptionId
+              ? { sequenceAfterSubscriptionId: operation.saleSequenceAfterSubscriptionId }
+              : {}),
             startsAt: localDate(operation.saleStartsAt),
             tariffId: operation.saleTariffId,
           },
@@ -131,7 +134,9 @@ function sameRequest(operation: OperationRecord, input: PaymentOperationCreateIn
       input.saleIntent?.startsAt &&
     (operation.saleExpiresAt ? localDate(operation.saleExpiresAt) : undefined) ===
       input.saleIntent?.expiresAt &&
-    operation.saleNotes === optionalText(input.saleIntent?.notes)
+    operation.saleNotes === optionalText(input.saleIntent?.notes) &&
+    operation.saleSequenceAfterSubscriptionId ===
+      (input.saleIntent?.sequenceAfterSubscriptionId ?? null)
   );
 }
 
@@ -244,6 +249,7 @@ export class PaymentOperationService {
               : null,
             saleNotes: optionalText(input.saleIntent?.notes),
             salePrice: input.saleIntent?.salePrice ?? null,
+            saleSequenceAfterSubscriptionId: input.saleIntent?.sequenceAfterSubscriptionId ?? null,
             saleStartsAt: input.saleIntent ? dateOnly(input.saleIntent.startsAt) : null,
             saleTariffId: input.saleIntent?.tariffId ?? null,
           },
@@ -418,6 +424,9 @@ export class PaymentOperationService {
               idempotencyKey: locked.idempotencyKey,
               ...(locked.saleNotes ? { notes: locked.saleNotes } : {}),
               salePrice: locked.salePrice,
+              ...(locked.saleSequenceAfterSubscriptionId
+                ? { sequenceAfterSubscriptionId: locked.saleSequenceAfterSubscriptionId }
+                : {}),
               startsAt: localDate(locked.saleStartsAt),
               studentId: locked.studentId,
               tariffId: locked.saleTariffId,

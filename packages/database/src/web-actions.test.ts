@@ -179,7 +179,8 @@ describe('WEB subscription freeze actions', () => {
   it('claims before existing freeze logic and retries only completion', async () => {
     const action = await receive();
     api.failCompletion = true;
-    const pending = await integration.approveWebAction(ownerToken, action.id, { days: 3 });
+    const freeze = { endsAt: '2030-08-24', reason: 'Отпуск', startsAt: '2030-08-22' };
+    const pending = await integration.approveWebAction(ownerToken, action.id, freeze);
     expect(api.calls[0]).toBe('claim:action-1');
     expect(pending.status).toBe('SUCCEEDED_ACK_PENDING');
     expect(
@@ -193,7 +194,7 @@ describe('WEB subscription freeze actions', () => {
       api,
       () => new Date('2030-08-22T10:02:00Z'),
     );
-    const completed = await integration.approveWebAction(ownerToken, action.id, { days: 3 });
+    const completed = await integration.approveWebAction(ownerToken, action.id, freeze);
     expect(completed.status).toBe('SUCCEEDED');
     expect(
       await database.subscriptionLedger.count({ where: { subscriptionId, type: 'FREEZE' } }),
@@ -233,9 +234,13 @@ describe('WEB subscription freeze actions', () => {
       data: { crmStudentId: 'another-student' },
       where: { id: action.id },
     });
-    await expect(integration.approveWebAction(ownerToken, action.id, { days: 1 })).rejects.toThrow(
-      'не принадлежит',
-    );
+    await expect(
+      integration.approveWebAction(ownerToken, action.id, {
+        endsAt: '2030-08-22',
+        reason: 'Отпуск',
+        startsAt: '2030-08-22',
+      }),
+    ).rejects.toThrow('не принадлежит');
     expect(api.calls).not.toContain('claim:bad-link');
   });
 
@@ -260,9 +265,13 @@ describe('WEB subscription freeze actions', () => {
       actions: [],
       hasAutomaticProcessingWarning: false,
     });
-    await expect(integration.approveWebAction(admin.token, action.id, { days: 1 })).rejects.toThrow(
-      'Нет доступа к филиалу',
-    );
+    await expect(
+      integration.approveWebAction(admin.token, action.id, {
+        endsAt: '2030-08-22',
+        reason: 'Отпуск',
+        startsAt: '2030-08-22',
+      }),
+    ).rejects.toThrow('Нет доступа к филиалу');
   });
 
   it('safely rejects unknown action types without local business data', async () => {

@@ -108,6 +108,7 @@ export function PaymentDialog({
     attendancePayment: Boolean(attendancePayment),
     subscriptionPayment: Boolean(subscriptionPayment),
     subscriptionSale: Boolean(subscriptionSale),
+    subscriptionRenewal: Boolean(subscriptionSale?.input.sequenceAfterSubscriptionId),
     subscriptionSalePrice: subscriptionSale?.input.salePrice,
   });
   useLayoutEffect(() => {
@@ -216,6 +217,12 @@ export function PaymentDialog({
                   : {}),
                 ...(subscriptionSale.input.notes ? { notes: subscriptionSale.input.notes } : {}),
                 salePrice: subscriptionSale.input.salePrice,
+                ...(subscriptionSale.input.sequenceAfterSubscriptionId
+                  ? {
+                      sequenceAfterSubscriptionId:
+                        subscriptionSale.input.sequenceAfterSubscriptionId,
+                    }
+                  : {}),
                 startsAt: subscriptionSale.input.startsAt,
                 tariffId: subscriptionSale.input.tariffId,
               },

@@ -268,57 +268,57 @@ enum PublicationTargetType {
 }
 
 model User {
-  id                     String                @id @default(cuid())
-  email                  String                @unique
-  fullName               String
-  passwordHash           String
-  role                   UserRole
-  isActive               Boolean               @default(true)
-  mustChangePassword     Boolean               @default(false)
-  phone                  String?
-  trainerDescription     String?
-  failedLoginAttempts    Int                   @default(0)
-  lockedUntil            DateTime?
-  lastLoginAt            DateTime?
-  passwordChangedAt      DateTime?
-  securityVersion        Int                   @default(1)
-  recoveryCodeHash       String?
-  recoveryCodeCreatedAt  DateTime?
-  recoveryFailedAttempts Int                   @default(0)
-  recoveryLockedUntil    DateTime?
-  branchAssignments      UserBranch[]
-  sessions               Session[]
-  coachedGroups          DanceGroup[]          @relation("GroupCoach")
-  assistedGroups         DanceGroup[]          @relation("GroupAssistant")
-  scheduleTemplates      WeeklySchedule[]      @relation("ScheduleCoach")
-  lessons                Lesson[]              @relation("LessonCoach")
-  attendanceMarks        Attendance[]
-  auditLogs              AuditLog[]
-  createdSubscriptions   Subscription[]        @relation("SubscriptionCreator")
-  createdPayments          Payment[]          @relation("PaymentCreator")
-  createdPaymentOperations PaymentOperation[] @relation("PaymentOperationCreator")
-  createdRefunds         Refund[]              @relation("RefundCreator")
-  ledgerEntries          SubscriptionLedger[]  @relation("LedgerCreator")
-  createdExpenses        Expense[]             @relation("ExpenseCreator")
-  confirmedExpenses      Expense[]             @relation("ExpenseConfirmer")
-  cashTransactions       CashTransaction[]
-  payrollRules           PayrollRule[]         @relation("PayrollCoach")
-  createdPayrolls        PayrollPeriod[]       @relation("PayrollCreator")
-  approvedPayrolls       PayrollPeriod[]       @relation("PayrollApprover")
-  payrollAccruals        PayrollAccrual[]      @relation("PayrollAccrualCoach")
-  createdRoomRentals     RoomRental[]          @relation("RoomRentalCreator")
-  createdRoomClosures    RoomClosure[]         @relation("RoomClosureCreator")
-  createdSubstitutions   TrainerSubstitution[] @relation("SubstitutionCreator")
-  substitutedLessons     TrainerSubstitution[] @relation("SubstituteTrainer")
-  originalSubstitutions  TrainerSubstitution[] @relation("OriginalTrainer")
-  createdTrialAppointments TrialAppointment[]  @relation("TrialAppointmentCreator")
-  createdMembershipCards MembershipCard[]      @relation("CardCreator")
-  performedCardEvents    CardEvent[]           @relation("CardEventPerformer")
-  cardScans              CardScanEvent[]       @relation("CardScanPerformer")
-  createdPublications    Publication[]         @relation("PublicationCreator")
-  studentNotes           StudentNote[]
-  createdAt              DateTime              @default(now())
-  updatedAt              DateTime              @updatedAt
+  id                       String                @id @default(cuid())
+  email                    String                @unique
+  fullName                 String
+  passwordHash             String
+  role                     UserRole
+  isActive                 Boolean               @default(true)
+  mustChangePassword       Boolean               @default(false)
+  phone                    String?
+  trainerDescription       String?
+  failedLoginAttempts      Int                   @default(0)
+  lockedUntil              DateTime?
+  lastLoginAt              DateTime?
+  passwordChangedAt        DateTime?
+  securityVersion          Int                   @default(1)
+  recoveryCodeHash         String?
+  recoveryCodeCreatedAt    DateTime?
+  recoveryFailedAttempts   Int                   @default(0)
+  recoveryLockedUntil      DateTime?
+  branchAssignments        UserBranch[]
+  sessions                 Session[]
+  coachedGroups            DanceGroup[]          @relation("GroupCoach")
+  assistedGroups           DanceGroup[]          @relation("GroupAssistant")
+  scheduleTemplates        WeeklySchedule[]      @relation("ScheduleCoach")
+  lessons                  Lesson[]              @relation("LessonCoach")
+  attendanceMarks          Attendance[]
+  auditLogs                AuditLog[]
+  createdSubscriptions     Subscription[]        @relation("SubscriptionCreator")
+  createdPayments          Payment[]             @relation("PaymentCreator")
+  createdPaymentOperations PaymentOperation[]    @relation("PaymentOperationCreator")
+  createdRefunds           Refund[]              @relation("RefundCreator")
+  ledgerEntries            SubscriptionLedger[]  @relation("LedgerCreator")
+  createdExpenses          Expense[]             @relation("ExpenseCreator")
+  confirmedExpenses        Expense[]             @relation("ExpenseConfirmer")
+  cashTransactions         CashTransaction[]
+  payrollRules             PayrollRule[]         @relation("PayrollCoach")
+  createdPayrolls          PayrollPeriod[]       @relation("PayrollCreator")
+  approvedPayrolls         PayrollPeriod[]       @relation("PayrollApprover")
+  payrollAccruals          PayrollAccrual[]      @relation("PayrollAccrualCoach")
+  createdRoomRentals       RoomRental[]          @relation("RoomRentalCreator")
+  createdRoomClosures      RoomClosure[]         @relation("RoomClosureCreator")
+  createdSubstitutions     TrainerSubstitution[] @relation("SubstitutionCreator")
+  substitutedLessons       TrainerSubstitution[] @relation("SubstituteTrainer")
+  originalSubstitutions    TrainerSubstitution[] @relation("OriginalTrainer")
+  createdTrialAppointments TrialAppointment[]    @relation("TrialAppointmentCreator")
+  createdMembershipCards   MembershipCard[]      @relation("CardCreator")
+  performedCardEvents      CardEvent[]           @relation("CardEventPerformer")
+  cardScans                CardScanEvent[]       @relation("CardScanPerformer")
+  createdPublications      Publication[]         @relation("PublicationCreator")
+  studentNotes             StudentNote[]
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
 
   @@index([role, isActive])
   @@index([lockedUntil])
@@ -410,34 +410,34 @@ model UserBranch {
 }
 
 model Student {
-  id              String               @id @default(cuid())
-  firstName       String
-  lastName        String
-  middleName      String?
-  birthDate       DateTime?
-  gender          Gender?
-  phone           String?
-  email           String?
-  status          StudentStatus        @default(ACTIVE)
-  branchId        String
-  branch          Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  notes           String?
-  contacts        StudentContact[]
-  enrollments     Enrollment[]
-  attendance      Attendance[]
-  subscriptions   Subscription[]
-  payments        Payment[]
+  id                String               @id @default(cuid())
+  firstName         String
+  lastName          String
+  middleName        String?
+  birthDate         DateTime?
+  gender            Gender?
+  phone             String?
+  email             String?
+  status            StudentStatus        @default(ACTIVE)
+  branchId          String
+  branch            Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  notes             String?
+  contacts          StudentContact[]
+  enrollments       Enrollment[]
+  attendance        Attendance[]
+  subscriptions     Subscription[]
+  payments          Payment[]
   paymentOperations PaymentOperation[]
-  ledgerEntries   SubscriptionLedger[]
-  membershipCards MembershipCard[]
-  cardEvents      CardEvent[]
-  cardScans       CardScanEvent[]
-  profileNotes    StudentNote[]
+  ledgerEntries     SubscriptionLedger[]
+  membershipCards   MembershipCard[]
+  cardEvents        CardEvent[]
+  cardScans         CardScanEvent[]
+  profileNotes      StudentNote[]
   trialAppointments TrialAppointment[]
-  documents       StudentDocument[]
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
-  archivedAt      DateTime?
+  documents         StudentDocument[]
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  archivedAt        DateTime?
 
   @@index([branchId, status])
   @@index([lastName, firstName])
@@ -509,30 +509,30 @@ model CardScanEvent {
 }
 
 model DanceGroup {
-  id               String           @id @default(cuid())
-  name             String
-  branchId         String
-  branch           Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  direction        String
-  ageFrom          Int?
-  ageTo            Int?
-  coachId          String?
-  coach            User?            @relation("GroupCoach", fields: [coachId], references: [id], onDelete: SetNull)
-  assistantCoachId String?
-  assistantCoach   User?            @relation("GroupAssistant", fields: [assistantCoachId], references: [id], onDelete: SetNull)
-  capacity         Int              @default(20)
-  status           GroupStatus      @default(RECRUITING)
-  description      String?
-  color            String?
-  enrollments      Enrollment[]
-  schedules        WeeklySchedule[]
-  lessons          Lesson[]
+  id                String             @id @default(cuid())
+  name              String
+  branchId          String
+  branch            Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  direction         String
+  ageFrom           Int?
+  ageTo             Int?
+  coachId           String?
+  coach             User?              @relation("GroupCoach", fields: [coachId], references: [id], onDelete: SetNull)
+  assistantCoachId  String?
+  assistantCoach    User?              @relation("GroupAssistant", fields: [assistantCoachId], references: [id], onDelete: SetNull)
+  capacity          Int                @default(20)
+  status            GroupStatus        @default(RECRUITING)
+  description       String?
+  color             String?
+  enrollments       Enrollment[]
+  schedules         WeeklySchedule[]
+  lessons           Lesson[]
   trialAppointments TrialAppointment[]
-  payrollRules     PayrollRule[]
-  payrollAccruals  PayrollAccrual[]
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-  archivedAt       DateTime?
+  payrollRules      PayrollRule[]
+  payrollAccruals   PayrollAccrual[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  archivedAt        DateTime?
 
   @@index([branchId, status])
   @@index([coachId])
@@ -626,23 +626,23 @@ model Lesson {
 }
 
 model TrialAppointment {
-  id              String     @id @default(cuid())
+  id              String                 @id @default(cuid())
   externalLeadId  String
   studentId       String?
-  student         Student?   @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  student         Student?               @relation(fields: [studentId], references: [id], onDelete: Restrict)
   groupId         String
-  group           DanceGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  group           DanceGroup             @relation(fields: [groupId], references: [id], onDelete: Restrict)
   lessonId        String
-  lesson          Lesson     @relation(fields: [lessonId], references: [id], onDelete: Restrict)
+  lesson          Lesson                 @relation(fields: [lessonId], references: [id], onDelete: Restrict)
   createdByUserId String
-  createdByUser   User       @relation("TrialAppointmentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdByUser   User                   @relation("TrialAppointmentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   status          TrialAppointmentStatus @default(BOOKED)
   outcome         TrialOutcome?
   cancelledAt     DateTime?
-  version         Int        @default(1)
+  version         Int                    @default(1)
   supersededAt    DateTime?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
 
   @@unique([externalLeadId, lessonId])
   @@index([externalLeadId, supersededAt])
@@ -723,17 +723,17 @@ model TrainerSubstitution {
 }
 
 model Attendance {
-  lessonId       String
-  lesson         Lesson           @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  studentId      String
-  student        Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  status         AttendanceStatus
-  markedByUserId String
-  markedByUser   User             @relation(fields: [markedByUserId], references: [id], onDelete: Restrict)
-  markedAt       DateTime
-  comment        String?
-  directPaymentId          String?           @unique
-  directPaymentOperationId String?           @unique
+  lessonId                 String
+  lesson                   Lesson           @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  studentId                String
+  student                  Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  status                   AttendanceStatus
+  markedByUserId           String
+  markedByUser             User             @relation(fields: [markedByUserId], references: [id], onDelete: Restrict)
+  markedAt                 DateTime
+  comment                  String?
+  directPaymentId          String?          @unique
+  directPaymentOperationId String?          @unique
   directPaymentTariffId    String?
 
   @@id([lessonId, studentId])
@@ -782,62 +782,64 @@ model Tariff {
 }
 
 model Subscription {
-  id              String               @id @default(cuid())
-  studentId       String
-  student         Student              @relation(fields: [studentId], references: [id], onDelete: Restrict)
-  tariffId        String
-  tariff          Tariff               @relation(fields: [tariffId], references: [id], onDelete: Restrict)
-  branchId        String
-  branch          Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  purchasedAt     DateTime
-  startsAt        DateTime
-  expiresAt       DateTime?
-  lessonLimit     Int?
-  lessonsUsed     Int                  @default(0)
-  status          SubscriptionStatus   @default(PENDING)
-  freezeStartedAt DateTime?
-  freezeEndsAt    DateTime?
-  frozenDaysUsed  Int                  @default(0)
-  salePrice       Int
-  saleIdempotencyKey String?             @unique
-  notes           String?
-  createdByUserId String
-  createdByUser   User                 @relation("SubscriptionCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  payments        Payment[]
-  paymentOperations PaymentOperation[]
-  ledgerEntries   SubscriptionLedger[]
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
+  id                          String               @id @default(cuid())
+  studentId                   String
+  student                     Student              @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  tariffId                    String
+  tariff                      Tariff               @relation(fields: [tariffId], references: [id], onDelete: Restrict)
+  branchId                    String
+  branch                      Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  purchasedAt                 DateTime
+  startsAt                    DateTime
+  expiresAt                   DateTime?
+  lessonLimit                 Int?
+  lessonsUsed                 Int                  @default(0)
+  status                      SubscriptionStatus   @default(PENDING)
+  freezeStartedAt             DateTime?
+  freezeEndsAt                DateTime?
+  frozenDaysUsed              Int                  @default(0)
+  salePrice                   Int
+  saleIdempotencyKey          String?              @unique
+  sequenceAfterSubscriptionId String?
+  notes                       String?
+  createdByUserId             String
+  createdByUser               User                 @relation("SubscriptionCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  payments                    Payment[]
+  paymentOperations           PaymentOperation[]
+  ledgerEntries               SubscriptionLedger[]
+  createdAt                   DateTime             @default(now())
+  updatedAt                   DateTime             @updatedAt
 
   @@index([studentId, status])
   @@index([branchId, status])
   @@index([tariffId])
   @@index([startsAt, expiresAt])
+  @@index([sequenceAfterSubscriptionId])
   @@index([createdByUserId])
 }
 
 model Payment {
-  id                String        @id @default(cuid())
-  studentId         String
-  student           Student       @relation(fields: [studentId], references: [id], onDelete: Restrict)
-  subscriptionId    String?
-  subscription      Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
-  branchId          String
-  branch            Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  amount            Int
-  paymentMethod     PaymentMethod
-  status            PaymentStatus @default(COMPLETED)
-  paidAt            DateTime
-  comment           String?
-  externalReference String?
-  createdByUserId   String
-  createdByUser     User          @relation("PaymentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  refunds           Refund[]
-  operation         PaymentOperation?
+  id                 String            @id @default(cuid())
+  studentId          String
+  student            Student           @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  subscriptionId     String?
+  subscription       Subscription?     @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  branchId           String
+  branch             Branch            @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  amount             Int
+  paymentMethod      PaymentMethod
+  status             PaymentStatus     @default(COMPLETED)
+  paidAt             DateTime
+  comment            String?
+  externalReference  String?
+  createdByUserId    String
+  createdByUser      User              @relation("PaymentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  refunds            Refund[]
+  operation          PaymentOperation?
   attendanceLessonId String?
   attendanceTariffId String?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
   @@index([studentId, paidAt])
   @@index([subscriptionId])
@@ -849,39 +851,40 @@ model Payment {
 }
 
 model PaymentOperation {
-  id                  String                 @id @default(cuid())
-  idempotencyKey      String                 @unique
-  studentId           String
-  student             Student                @relation(fields: [studentId], references: [id], onDelete: Restrict)
-  subscriptionId      String?
-  subscription        Subscription?          @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
-  branchId            String
-  branch              Branch                 @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  amount              Int
-  currency            String                 @default("RUB")
-  purpose             String
-  status              PaymentOperationStatus @default(CREATED)
-  providerType        PaymentProviderType     @default(NONE)
-  providerOperationId String?
-  paymentId           String?                @unique
-  payment             Payment?               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  attendanceLessonId  String?
-  attendanceTariffId  String?
-  saleTariffId        String?
-  saleStartsAt        DateTime?
-  saleExpiresAt       DateTime?
-  salePrice           Int?
-  saleNotes           String?
-  saleFinalizationError String?
-  saleFinalizationAttempts Int            @default(0)
-  saleFinalizedAt     DateTime?
-  completedAt         DateTime?
-  failureReason       String?
-  cancellationReason  String?
-  createdByUserId     String
-  createdByUser       User                   @relation("PaymentOperationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  createdAt           DateTime               @default(now())
-  updatedAt           DateTime               @updatedAt
+  id                              String                 @id @default(cuid())
+  idempotencyKey                  String                 @unique
+  studentId                       String
+  student                         Student                @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  subscriptionId                  String?
+  subscription                    Subscription?          @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  branchId                        String
+  branch                          Branch                 @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  amount                          Int
+  currency                        String                 @default("RUB")
+  purpose                         String
+  status                          PaymentOperationStatus @default(CREATED)
+  providerType                    PaymentProviderType    @default(NONE)
+  providerOperationId             String?
+  paymentId                       String?                @unique
+  payment                         Payment?               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  attendanceLessonId              String?
+  attendanceTariffId              String?
+  saleTariffId                    String?
+  saleStartsAt                    DateTime?
+  saleExpiresAt                   DateTime?
+  salePrice                       Int?
+  saleNotes                       String?
+  saleSequenceAfterSubscriptionId String?
+  saleFinalizationError           String?
+  saleFinalizationAttempts        Int                    @default(0)
+  saleFinalizedAt                 DateTime?
+  completedAt                     DateTime?
+  failureReason                   String?
+  cancellationReason              String?
+  createdByUserId                 String
+  createdByUser                   User                   @relation("PaymentOperationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt                       DateTime               @default(now())
+  updatedAt                       DateTime               @updatedAt
 
   @@unique([providerType, providerOperationId])
   @@index([studentId, createdAt])
@@ -917,6 +920,8 @@ model SubscriptionLedger {
   attendanceId     String?
   type             LedgerOperationType
   lessonDelta      Int                  @default(0)
+  periodStartsAt   DateTime?
+  periodEndsAt     DateTime?
   amountDelta      Int?
   comment          String?
   createdByUserId  String?
@@ -1088,21 +1093,21 @@ model PayrollAccrual {
 }
 
 model StudentContact {
-  id             String    @id @default(cuid())
-  studentId      String
-  student        Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  fullName       String
-  relationship   String
-  phone          String
-  secondaryPhone String?
-  email          String?
-  telegram       String?
-  whatsapp       Boolean   @default(false)
-  isPrimary      Boolean   @default(false)
-  notes          String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  archivedAt     DateTime?
+  id              String            @id @default(cuid())
+  studentId       String
+  student         Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  fullName        String
+  relationship    String
+  phone           String
+  secondaryPhone  String?
+  email           String?
+  telegram        String?
+  whatsapp        Boolean           @default(false)
+  isPrimary       Boolean           @default(false)
+  notes           String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  archivedAt      DateTime?
   signedDocuments StudentDocument[] @relation("StudentDocumentSigner")
 
   @@index([studentId, archivedAt])
@@ -1111,23 +1116,23 @@ model StudentContact {
 }
 
 model StudentDocument {
-  id                      String                @id @default(cuid())
+  id                      String                         @id @default(cuid())
   studentId               String
-  student                 Student               @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  student                 Student                        @relation(fields: [studentId], references: [id], onDelete: Restrict)
   documentType            StudentDocumentType
   documentDate            DateTime
   status                  String
   source                  StudentDocumentSource
   representativeContactId String?
-  representativeContact   StudentContact?       @relation("StudentDocumentSigner", fields: [representativeContactId], references: [id], onDelete: SetNull)
+  representativeContact   StudentContact?                @relation("StudentDocumentSigner", fields: [representativeContactId], references: [id], onDelete: SetNull)
   attachmentMediaId       String?
   attachmentFileName      String?
   attachmentMimeType      String?
   note                    String?
   contractDetail          StudentContractDetail?
   statusHistory           StudentDocumentStatusHistory[]
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
+  createdAt               DateTime                       @default(now())
+  updatedAt               DateTime                       @updatedAt
 
   @@index([studentId, documentType, documentDate])
   @@index([representativeContactId])
@@ -1302,8 +1307,8 @@ model SyncLog {
 }
 
 model WebAction {
-  id                      String   @id @default(cuid())
-  externalActionId        String   @unique
+  id                      String    @id @default(cuid())
+  externalActionId        String    @unique
   actionType              String
   crmStudentId            String?
   crmSubscriptionId       String?
@@ -1311,17 +1316,17 @@ model WebAction {
   crmLessonId             String?
   payloadJson             String?
   reason                  String?
-  status                  String   @default("PENDING")
-  receivedAt              DateTime @default(now())
+  status                  String    @default("PENDING")
+  receivedAt              DateTime  @default(now())
   claimedAt               DateTime?
   processedAt             DateTime?
   processedByUserId       String?
   safeResultJson          String?
   safeError               String?
-  completionAttemptCount  Int      @default(0)
+  completionAttemptCount  Int       @default(0)
   nextCompletionAttemptAt DateTime?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 
   @@index([status, receivedAt])
   @@index([crmStudentId])

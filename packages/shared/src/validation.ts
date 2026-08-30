@@ -644,6 +644,7 @@ export const subscriptionCreateInputSchema: z.ZodType<SubscriptionCreateInput> =
     initialPayment: initialPaymentInputSchema.optional(),
     notes: optionalText(2000),
     salePrice: moneyAmount,
+    sequenceAfterSubscriptionId: optionalIdentifier,
     startsAt: isoDate,
     studentId: z.string().min(1).max(100),
     tariffId: z.string().min(1).max(100),
@@ -666,6 +667,7 @@ const subscriptionSaleIntentSchema = z
     expiresAt: isoDate.optional(),
     notes: optionalText(2000),
     salePrice: moneyAmount,
+    sequenceAfterSubscriptionId: optionalIdentifier,
     startsAt: isoDate,
     tariffId: z.string().min(1).max(100),
   })
@@ -678,6 +680,8 @@ export const subscriptionUpdateInputSchema: z.ZodType<SubscriptionUpdateInput> =
   .object({
     expiresAt: isoDate.optional(),
     notes: optionalText(2000),
+    reason: z.string().trim().min(3, t('validation.adjustmentReason')).max(1000),
+    remainingLessons: z.number().int().min(0).max(1000).optional(),
     startsAt: isoDate,
     tariffId: z.string().min(1).max(100),
   })
@@ -686,9 +690,16 @@ export const subscriptionUpdateInputSchema: z.ZodType<SubscriptionUpdateInput> =
     path: ['expiresAt'],
   });
 
-export const subscriptionFreezeInputSchema: z.ZodType<SubscriptionFreezeInput> = z.object({
-  days: z.number().int().min(1, t('validation.freezeDays')).max(365),
-});
+export const subscriptionFreezeInputSchema: z.ZodType<SubscriptionFreezeInput> = z
+  .object({
+    endsAt: isoDate,
+    reason: z.string().trim().min(3, t('validation.adjustmentReason')).max(1000),
+    startsAt: isoDate,
+  })
+  .refine((input) => input.endsAt >= input.startsAt, {
+    message: t('validation.dateRange'),
+    path: ['endsAt'],
+  });
 
 export const subscriptionAdjustmentInputSchema: z.ZodType<SubscriptionAdjustmentInput> = z.object({
   comment: z.string().trim().min(3, t('validation.adjustmentReason')).max(1000),

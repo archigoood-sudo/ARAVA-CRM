@@ -367,7 +367,7 @@ export const ru = {
   'subscription.status.PENDING': 'Запланирован',
   'subscription.status.USED_UP': 'Занятия закончились',
   'subscription.tariff': 'Тариф',
-  'subscription.upcoming': 'Запланированные',
+  'subscription.upcoming': 'Следующий',
   'payment.action.add': 'Принять оплату',
   'payment.amount': 'Сумма, ₽',
   'payment.cancel': 'Отменить платёж',

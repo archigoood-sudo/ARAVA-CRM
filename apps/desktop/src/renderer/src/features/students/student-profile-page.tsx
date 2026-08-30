@@ -114,6 +114,9 @@ export function StudentProfilePage() {
   const [requestedSubscriptionPaymentId, setRequestedSubscriptionPaymentId] = useState(
     () => searchParameters.get('subscriptionId') ?? undefined,
   );
+  const [requestedRenewalOfId, setRequestedRenewalOfId] = useState(
+    () => searchParameters.get('renewalOf') ?? undefined,
+  );
   const [cardAction, setCardAction] = useState(searchParameters.get('action') === 'card');
   const [error, setError] = useState<string>();
   const [trialDialog, setTrialDialog] = useState(false);
@@ -945,10 +948,12 @@ export function StudentProfilePage() {
               setRequestedAttendanceLessonId(undefined);
               setRequestedPaymentOperationId(undefined);
               setRequestedSubscriptionPaymentId(undefined);
+              setRequestedRenewalOfId(undefined);
             }}
             requestedAttendanceLessonId={requestedAttendanceLessonId}
             requestedAction={financeAction}
             requestedPaymentOperationId={requestedPaymentOperationId}
+            requestedRenewalOfId={requestedRenewalOfId}
             requestedSubscriptionPaymentId={requestedSubscriptionPaymentId}
             student={detail}
           />

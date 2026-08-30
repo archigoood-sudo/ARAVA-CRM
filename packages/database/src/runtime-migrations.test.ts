@@ -30,6 +30,7 @@ describe('runtime migrations', () => {
       '20260826000000_trial_workflow',
       '20260826010000_trial_sync',
       '20260828010000_student_documents',
+      '20260830010000_subscription_lifecycle',
     ]);
   });
 });

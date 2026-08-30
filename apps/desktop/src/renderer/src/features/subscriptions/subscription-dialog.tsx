@@ -2,6 +2,7 @@ import {
   t,
   type StudentSummary,
   type SubscriptionCreateInput,
+  type SubscriptionSummary,
   type TariffSummary,
 } from '@arava/shared';
 import { Button, Dialog, Input, Label, Select, Textarea, formatMoney } from '@arava/ui';
@@ -27,12 +28,21 @@ function calculatedExpiryDate(startsAt: string, validityDays?: number): string {
   return new Date(value.getTime() - offset).toISOString().slice(0, 10);
 }
 
+function dayAfter(value?: string): string {
+  if (!value) return today();
+  const date = new Date(value);
+  date.setDate(date.getDate() + 1);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
 export function SubscriptionDialog({
   activeSubscriptionCount = 0,
   error,
   onClose,
   onSubmit,
   open,
+  renewalOf,
   student,
   tariffs,
 }: {
@@ -44,6 +54,7 @@ export function SubscriptionDialog({
     payment: SubscriptionSalePaymentPlan,
   ) => Promise<void> | void;
   open: boolean;
+  renewalOf?: SubscriptionSummary | undefined;
   student: StudentSummary;
   tariffs: TariffSummary[];
 }) {
@@ -62,13 +73,14 @@ export function SubscriptionDialog({
   useEffect(() => {
     if (!open) return;
     const first = tariffs[0];
+    const safeStart = renewalOf ? dayAfter(renewalOf.expiresAt) : today();
     setTariffId(first?.id ?? '');
-    setStartsAt(today());
-    setExpiresAt(calculatedExpiryDate(today(), first?.validityDays));
+    setStartsAt(safeStart);
+    setExpiresAt(calculatedExpiryDate(safeStart, first?.validityDays));
     setNotes('');
     setValidationError(undefined);
     saleKey.current = crypto.randomUUID();
-  }, [open, tariffs]);
+  }, [open, renewalOf, tariffs]);
   const chooseTariff = (id: string) => {
     setTariffId(id);
     const tariff = tariffs.find((item) => item.id === id);
@@ -82,6 +94,7 @@ export function SubscriptionDialog({
       idempotencyKey: saleKey.current,
       notes,
       salePrice: selected?.price ?? 0,
+      ...(renewalOf ? { sequenceAfterSubscriptionId: renewalOf.id } : {}),
       startsAt,
       studentId: student.id,
       tariffId,
@@ -107,10 +120,15 @@ export function SubscriptionDialog({
       description={t('subscription.createDescription')}
       onClose={onClose}
       open={open}
-      title={t('subscription.createTitle')}
+      title={renewalOf ? 'Продлить абонемент' : t('subscription.createTitle')}
     >
       <div className="space-y-4">
-        {activeSubscriptionCount > 0 ? (
+        {renewalOf ? (
+          <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
+            Текущий: {renewalOf.tariffName} · осталось {renewalOf.remainingLessons ?? '∞'}. Новый
+            будет полностью оплачен сейчас и начнёт расходоваться только после текущего.
+          </div>
+        ) : activeSubscriptionCount > 0 ? (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
             У ученика уже есть действующий абонемент. Новый абонемент будет сохранён отдельно.
           </div>
@@ -166,6 +184,12 @@ export function SubscriptionDialog({
             />
           </div>
         </div>
+        {renewalOf && startsAt < dayAfter(renewalOf.expiresAt) ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            Выбранная дата пересекается с текущим абонементом. Списание всё равно останется
+            последовательным: сначала текущий, затем следующий.
+          </div>
+        ) : null}
         <div className="rounded-2xl border border-border bg-muted/30 p-4">
           <p className="text-sm text-muted-foreground">Стоимость абонемента</p>
           <p className="mt-1 text-2xl font-semibold">{formatMoney(selected?.price ?? 0)}</p>

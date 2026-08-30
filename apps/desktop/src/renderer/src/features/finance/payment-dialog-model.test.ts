@@ -34,6 +34,19 @@ describe('подтверждение оплаты в ежедневном сце
     ).toBe('Принять оплату');
   });
 
+  it('показывает отдельный CTA для оплаченного продления', () => {
+    expect(
+      paymentSubmitLabel({
+        amount: 330_000,
+        attendancePayment: false,
+        subscriptionPayment: false,
+        subscriptionSale: true,
+        subscriptionRenewal: true,
+        subscriptionSalePrice: 330_000,
+      }),
+    ).toBe('Оплатить и продлить');
+  });
+
   it('не переносит выбранный старый абонемент в продажу нового', () => {
     expect(
       paymentOperationSubscriptionId({

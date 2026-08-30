@@ -15,6 +15,7 @@ function inputDate(value: string | undefined): string {
 }
 
 export function SubscriptionEditDialog({
+  allowLessonCorrection,
   error,
   onClose,
   onSubmit,
@@ -22,6 +23,7 @@ export function SubscriptionEditDialog({
   subscription,
   tariffs,
 }: {
+  allowLessonCorrection: boolean;
   error?: string | undefined;
   onClose: () => void;
   onSubmit: (input: SubscriptionUpdateInput) => Promise<void>;
@@ -33,6 +35,8 @@ export function SubscriptionEditDialog({
   const [startsAt, setStartsAt] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
   const [notes, setNotes] = useState('');
+  const [reason, setReason] = useState('');
+  const [remainingLessons, setRemainingLessons] = useState<number | undefined>();
   const [validationError, setValidationError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   useEffect(() => {
@@ -41,12 +45,16 @@ export function SubscriptionEditDialog({
     setStartsAt(inputDate(subscription.startsAt));
     setExpiresAt(inputDate(subscription.expiresAt));
     setNotes(subscription.notes ?? '');
+    setReason('');
+    setRemainingLessons(subscription.remainingLessons);
     setValidationError(undefined);
   }, [open, subscription]);
   const submit = async () => {
     const result = subscriptionUpdateInputSchema.safeParse({
       expiresAt: expiresAt || undefined,
       notes,
+      reason,
+      ...(allowLessonCorrection ? { remainingLessons } : {}),
       startsAt,
       tariffId,
     });
@@ -67,12 +75,13 @@ export function SubscriptionEditDialog({
       description="Изменение периода может пересчитать ранее учтённые посещения."
       onClose={onClose}
       open={open}
-      title="Изменить абонемент"
+      title={allowLessonCorrection ? 'Корректировать абонемент' : 'Изменить абонемент'}
     >
       <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="edit-subscription-tariff">Тариф</Label>
           <Select
+            disabled={Boolean(subscription?.payments.length)}
             id="edit-subscription-tariff"
             onChange={(event) => setTariffId(event.target.value)}
             value={tariffId}
@@ -89,6 +98,21 @@ export function SubscriptionEditDialog({
             </p>
           ) : null}
         </div>
+        {allowLessonCorrection && subscription?.lessonLimit !== undefined ? (
+          <div className="space-y-2">
+            <Label htmlFor="edit-subscription-remaining">Доступно занятий</Label>
+            <Input
+              id="edit-subscription-remaining"
+              min="0"
+              onChange={(event) => setRemainingLessons(Number(event.target.value))}
+              type="number"
+              value={remainingLessons ?? ''}
+            />
+            <p className="text-xs text-muted-foreground">
+              Уже использовано: {subscription.lessonsUsed}. Изменение попадёт в историю.
+            </p>
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="edit-subscription-start">Действует с</Label>
@@ -115,6 +139,14 @@ export function SubscriptionEditDialog({
             id="edit-subscription-notes"
             onChange={(event) => setNotes(event.target.value)}
             value={notes}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="edit-subscription-reason">Причина корректировки</Label>
+          <Textarea
+            id="edit-subscription-reason"
+            onChange={(event) => setReason(event.target.value)}
+            value={reason}
           />
         </div>
         {validationError || error ? (

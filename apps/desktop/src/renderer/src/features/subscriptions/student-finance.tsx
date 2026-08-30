@@ -6,10 +6,8 @@ import {
   type AqsiGatewayPayment,
   type StudentSummary,
   type StudentFinanceSummary,
-  type SubscriptionAdjustmentInput,
   type SubscriptionCreateInput,
   type SubscriptionFreezeInput,
-  type SubscriptionStatus,
   type SubscriptionSummary,
   type SubscriptionUpdateInput,
 } from '@arava/shared';
@@ -49,12 +47,9 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
-import { AdjustmentDialog } from './adjustment-dialog';
 import { FreezeDialog } from './freeze-dialog';
 import { SubscriptionDialog, type SubscriptionSalePaymentPlan } from './subscription-dialog';
 import { SubscriptionEditDialog } from './subscription-edit-dialog';
-
-const currentStatuses: SubscriptionStatus[] = ['ACTIVE', 'FROZEN'];
 
 export function StudentFinance({
   branches,
@@ -63,6 +58,7 @@ export function StudentFinance({
   requestedAttendanceLessonId,
   requestedAction,
   requestedPaymentOperationId,
+  requestedRenewalOfId,
   requestedSubscriptionPaymentId,
   student,
 }: {
@@ -72,12 +68,13 @@ export function StudentFinance({
   requestedAttendanceLessonId?: string | undefined;
   requestedAction?: 'payment' | 'subscription' | undefined;
   requestedPaymentOperationId?: string | undefined;
+  requestedRenewalOfId?: string | undefined;
   requestedSubscriptionPaymentId?: string | undefined;
   student: StudentSummary;
 }) {
   const user = useAuthStore((state) => state.user);
   const canManage = user?.role !== 'COACH';
-  const canAdjust = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const canAdjust = user?.role === 'OWNER';
   const queryClient = useQueryClient();
   const [issueOpen, setIssueOpen] = useState(false);
   const [financeMenuOpen, setFinanceMenuOpen] = useState(false);
@@ -106,18 +103,18 @@ export function StudentFinance({
   const [freezeId, setFreezeId] = useState<string>();
   const [detailId, setDetailId] = useState<string>();
   const [editId, setEditId] = useState<string>();
+  const [renewalOf, setRenewalOf] = useState<SubscriptionSummary>();
   const [paymentOperationId, setPaymentOperationId] = useState<string>();
   const [gatewayPayment, setGatewayPayment] = useState<AqsiGatewayPayment>();
-  const [adjustOpen, setAdjustOpen] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => {
     if (requestedAction === 'payment') {
       setAttendancePayment(undefined);
       setPaymentOpen(true);
     }
-    if (requestedAction === 'subscription') setIssueOpen(true);
+    if (requestedAction === 'subscription' && !requestedRenewalOfId) setIssueOpen(true);
     if (requestedAction) onRequestedActionHandled?.();
-  }, [onRequestedActionHandled, requestedAction]);
+  }, [onRequestedActionHandled, requestedAction, requestedRenewalOfId]);
   useEffect(() => {
     if (!requestedPaymentOperationId) return;
     setPaymentOperationId(requestedPaymentOperationId);
@@ -129,6 +126,15 @@ export function StudentFinance({
     queryKey: queryKeys.studentFinance(student.id),
     staleTime: initialFinance ? 30_000 : 0,
   });
+  useEffect(() => {
+    if (!requestedRenewalOfId || !finance.data) return;
+    const subscription = finance.data.subscriptions.find(({ id }) => id === requestedRenewalOfId);
+    if (subscription) {
+      setRenewalOf(subscription);
+      setIssueOpen(true);
+    }
+    onRequestedActionHandled?.();
+  }, [finance.data, onRequestedActionHandled, requestedRenewalOfId]);
   useEffect(() => {
     if (!requestedSubscriptionPaymentId || !finance.data) return;
     const subscription = finance.data.subscriptions.find(
@@ -218,10 +224,6 @@ export function StudentFinance({
   const cancel = useMutation({
     mutationFn: (id: string) => getDesktopApi().subscriptions.cancel(getSessionToken(), id),
   });
-  const adjust = useMutation({
-    mutationFn: (input: SubscriptionAdjustmentInput) =>
-      getDesktopApi().subscriptions.adjust(getSessionToken(), detailId ?? '', input),
-  });
   const payment = useMutation({
     mutationFn: (input: PaymentInput) => getDesktopApi().payments.create(getSessionToken(), input),
   });
@@ -307,12 +309,20 @@ export function StudentFinance({
       setError(getErrorMessage(caught, fallback));
     }
   };
-  const active =
-    finance.data?.subscriptions.filter(({ status }) => currentStatuses.includes(status)) ?? [];
-  const upcoming = finance.data?.subscriptions.filter(({ status }) => status === 'PENDING') ?? [];
+  const current =
+    finance.data?.subscriptions.filter(
+      ({ lifecyclePosition }) => lifecyclePosition === 'CURRENT',
+    ) ?? [];
+  const upcoming =
+    finance.data?.subscriptions.filter(({ lifecyclePosition }) => lifecyclePosition === 'NEXT') ??
+    [];
+  const overlaps =
+    finance.data?.subscriptions.filter(
+      ({ lifecyclePosition }) => lifecyclePosition === 'OVERLAP',
+    ) ?? [];
   const history =
     finance.data?.subscriptions.filter(
-      ({ status }) => !currentStatuses.includes(status) && status !== 'PENDING',
+      ({ lifecyclePosition }) => lifecyclePosition === 'HISTORY',
     ) ?? [];
 
   if (finance.isLoading)
@@ -440,7 +450,7 @@ export function StudentFinance({
           <div>
             <CardTitle>{t('subscription.financeSummary')}</CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
-              {finance.data?.subscriptions.length ?? 0} абонементов · активных {active.length}
+              {finance.data?.subscriptions.length ?? 0} абонементов · текущих {current.length}
             </p>
           </div>
           {canManage ? (
@@ -458,16 +468,19 @@ export function StudentFinance({
             />
           ) : (
             <div className="space-y-6">
-              <SubscriptionGroup
-                items={active}
-                onSelect={setDetailId}
-                title={t('subscription.active')}
-              />
+              <SubscriptionGroup items={current} onSelect={setDetailId} title="Текущий" />
               {upcoming.length ? (
                 <SubscriptionGroup
                   items={upcoming}
                   onSelect={setDetailId}
                   title={t('subscription.upcoming')}
+                />
+              ) : null}
+              {overlaps.length ? (
+                <SubscriptionGroup
+                  items={overlaps}
+                  onSelect={setDetailId}
+                  title="Пересечения — проверьте вручную"
                 />
               ) : null}
               {history.length ? (
@@ -556,6 +569,7 @@ export function StudentFinance({
             onClick={() => {
               setError(undefined);
               setFinanceMenuOpen(false);
+              setRenewalOf(undefined);
               setIssueOpen(true);
             }}
             variant="outline"
@@ -565,11 +579,15 @@ export function StudentFinance({
         </div>
       </Dialog>
       <SubscriptionDialog
-        activeSubscriptionCount={active.length}
+        activeSubscriptionCount={current.length + overlaps.length}
         error={error}
-        onClose={() => setIssueOpen(false)}
+        onClose={() => {
+          setIssueOpen(false);
+          setRenewalOf(undefined);
+        }}
         onSubmit={sellSubscription}
         open={issueOpen}
+        renewalOf={renewalOf}
         student={student}
         tariffs={tariffs.data ?? []}
       />
@@ -665,6 +683,7 @@ export function StudentFinance({
           )
         }
         open={Boolean(freezeId)}
+        subscription={finance.data?.subscriptions.find(({ id }) => id === freezeId)}
       />
       <Dialog
         closeLabel={t('common.closeDialog')}
@@ -755,11 +774,6 @@ export function StudentFinance({
                       {t('subscription.action.unfreeze')}
                     </Button>
                   ) : null}
-                  {canAdjust ? (
-                    <Button onClick={() => setAdjustOpen(true)} size="small" variant="outline">
-                      {t('subscription.adjustment')}
-                    </Button>
-                  ) : null}
                   <Button
                     onClick={() => {
                       setEditId(detail.data.id);
@@ -769,7 +783,18 @@ export function StudentFinance({
                     variant="outline"
                   >
                     <Pencil className="size-4" />
-                    Изменить абонемент
+                    {canAdjust ? 'Корректировать' : 'Изменить абонемент'}
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setRenewalOf(detail.data);
+                      setIssueOpen(true);
+                      setDetailId(undefined);
+                    }}
+                    size="small"
+                    variant="outline"
+                  >
+                    Продлить
                   </Button>
                   <Button
                     onClick={() => {
@@ -851,20 +876,21 @@ export function StudentFinance({
                 {t('subscription.ledger')}
               </h3>
               <LedgerList
-                items={detail.data.ledger.map((item) => ({
-                  caption: item.comment ?? t('common.notProvided'),
-                  date: formatDate(item.createdAt, { dateStyle: 'short', timeStyle: 'short' }),
-                  delta: item.lessonDelta
-                    ? `${item.lessonDelta > 0 ? '−' : '+'}${String(Math.abs(item.lessonDelta))}`
-                    : undefined,
-                  id: item.id,
-                  kind:
-                    item.type === 'REVERSAL'
-                      ? 'credit'
-                      : item.type === 'LESSON_WRITE_OFF'
-                        ? 'debit'
-                        : 'neutral',
-                  title: t(`ledger.type.${item.type}`),
+                items={(detail.data.history ?? []).map((item, index) => ({
+                  caption: [item.summary, item.actorName].filter(Boolean).join(' · '),
+                  date: formatDate(item.occurredAt, {
+                    dateStyle: 'short',
+                    timeStyle: 'short',
+                  }),
+                  id: `${item.occurredAt}:${String(index)}`,
+                  kind: item.type === 'ATTENDANCE' ? 'debit' : 'neutral',
+                  title: {
+                    ATTENDANCE: 'Списано занятие',
+                    CORRECTION: 'Скорректирован',
+                    FREEZE: 'Заморожен',
+                    PURCHASE: 'Куплен',
+                    UNFREEZE: 'Разморожен',
+                  }[item.type],
                 }))}
               />
             </div>
@@ -872,6 +898,7 @@ export function StudentFinance({
         ) : null}
       </Dialog>
       <SubscriptionEditDialog
+        allowLessonCorrection={canAdjust}
         error={error}
         onClose={() => setEditId(undefined)}
         onSubmit={(input) =>
@@ -884,18 +911,6 @@ export function StudentFinance({
         open={Boolean(editId)}
         subscription={detail.data}
         tariffs={tariffs.data ?? []}
-      />
-      <AdjustmentDialog
-        error={error}
-        onClose={() => setAdjustOpen(false)}
-        onSubmit={(input) =>
-          perform(
-            () => adjust.mutateAsync(input),
-            t('subscription.errorSave'),
-            () => setAdjustOpen(false),
-          )
-        }
-        open={adjustOpen}
       />
     </section>
   );
@@ -948,6 +963,11 @@ function SubscriptionGroup({
               </span>
               <Badge>{t(`subscription.status.${item.status}`)}</Badge>
             </div>
+            {item.lifecyclePosition === 'NEXT' ? (
+              <p className="mt-3 text-xs font-medium text-sky-700">
+                Оплачен · начнётся после текущего
+              </p>
+            ) : null}
             <div className="mt-4 grid grid-cols-2 gap-2">
               <BalanceIndicator
                 label={t('subscription.balance')}

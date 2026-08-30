@@ -31,6 +31,7 @@ import type {
   SubscriptionCreateInput,
   SubscriptionDetail,
   SubscriptionFreezeInput,
+  SubscriptionHistoryEvent,
   SubscriptionSummary,
   SubscriptionUpdateInput,
   TariffInput,
@@ -106,6 +107,43 @@ interface FinanceJournalIndexRow {
   paymentId: string;
 }
 type FinanceClient = DatabaseClient | Prisma.TransactionClient;
+
+async function paidSubscriptionConsumable(
+  client: FinanceClient,
+  subscriptionId: string,
+  at = new Date(),
+): Promise<boolean> {
+  const subscription = await client.subscription.findUnique({
+    include: { payments: { include: { refunds: { select: { amount: true } } } } },
+    where: { id: subscriptionId },
+  });
+  if (!subscription || subscription.status === 'CANCELLED') return false;
+  const paid = subscription.payments
+    .filter(({ status }) => status !== 'CANCELLED')
+    .reduce(
+      (sum, payment) =>
+        sum +
+        payment.amount -
+        payment.refunds.reduce((refunds, refund) => refunds + refund.amount, 0),
+      0,
+    );
+  const paymentAllowsConsumption =
+    subscription.status === 'PENDING'
+      ? paid >= subscription.salePrice
+      : subscription.payments.some(({ status }) => status !== 'CANCELLED');
+  return (
+    paymentAllowsConsumption &&
+    subscription.startsAt <= at &&
+    (!subscription.expiresAt || subscription.expiresAt >= at) &&
+    (subscription.lessonLimit === null || subscription.lessonsUsed < subscription.lessonLimit) &&
+    !(
+      subscription.freezeStartedAt &&
+      subscription.freezeEndsAt &&
+      subscription.freezeStartedAt <= at &&
+      subscription.freezeEndsAt > at
+    )
+  );
+}
 
 export interface RosterFinanceEntry {
   subscription?: {
@@ -215,6 +253,7 @@ function subscriptionSummary(
     frozenDaysUsed: subscription.frozenDaysUsed,
     id: subscription.id,
     lessonLimit: subscription.lessonLimit ?? undefined,
+    lifecyclePosition: 'HISTORY',
     lessonsUsed: subscription.lessonsUsed,
     lowBalance: isLowLessonBalance(remainingLessons),
     notes: subscription.notes ?? undefined,
@@ -230,6 +269,7 @@ function subscriptionSummary(
     purchasedAt: subscription.purchasedAt.toISOString(),
     remainingLessons,
     salePrice: subscription.salePrice,
+    sequenceAfterSubscriptionId: subscription.sequenceAfterSubscriptionId ?? undefined,
     startsAt: subscription.startsAt.toISOString(),
     status: subscription.status,
     studentId: subscription.studentId,
@@ -239,6 +279,38 @@ function subscriptionSummary(
     tariffType: subscription.tariff.type,
     updatedAt: subscription.updatedAt.toISOString(),
   };
+}
+
+function withLifecyclePositions(
+  subscriptions: SubscriptionSummary[],
+  now = new Date(),
+): SubscriptionSummary[] {
+  const ordered = [...subscriptions].sort((left, right) => {
+    const expiry = (left.expiresAt ?? '9999').localeCompare(right.expiresAt ?? '9999');
+    if (expiry !== 0) return expiry;
+    const start = left.startsAt.localeCompare(right.startsAt);
+    return start !== 0 ? start : left.createdAt.localeCompare(right.createdAt);
+  });
+  const current = ordered.find(
+    (item) =>
+      item.paymentStatus === 'PAID' &&
+      (item.status === 'ACTIVE' || item.status === 'FROZEN') &&
+      new Date(item.startsAt) <= now &&
+      (!item.expiresAt || new Date(item.expiresAt) >= now) &&
+      (item.remainingLessons === undefined || item.remainingLessons > 0),
+  );
+  return subscriptions.map((item) => ({
+    ...item,
+    lifecyclePosition:
+      item.id === current?.id
+        ? 'CURRENT'
+        : item.paymentStatus === 'PAID' &&
+            (item.status === 'PENDING' || item.sequenceAfterSubscriptionId === current?.id)
+          ? 'NEXT'
+          : (item.status === 'ACTIVE' || item.status === 'FROZEN') && item.id !== current?.id
+            ? 'OVERLAP'
+            : 'HISTORY',
+  }));
 }
 
 const reservingPaymentOperationStatuses = ['CREATED', 'WAITING_FOR_PAYMENT', 'PROCESSING'] as const;
@@ -567,6 +639,7 @@ export async function createCanonicalSubscription(
         existing.studentId !== input.studentId ||
         existing.tariffId !== input.tariffId ||
         existing.salePrice !== input.salePrice ||
+        existing.sequenceAfterSubscriptionId !== (input.sequenceAfterSubscriptionId ?? null) ||
         existing.startsAt.getTime() !== dateOnly(input.startsAt).getTime() ||
         (input.expiresAt && existing.expiresAt?.getTime() !== requestedExpiresAt?.getTime())
       )
@@ -600,6 +673,20 @@ export async function createCanonicalSubscription(
   if (tariff.branchId && tariff.branchId !== student.branchId)
     throw new DomainError('VALIDATION', t('domain.validation.tariffBranch'));
   assertBranchAccess(actor, branchId);
+  const predecessor = input.sequenceAfterSubscriptionId
+    ? await client.subscription.findUnique({ where: { id: input.sequenceAfterSubscriptionId } })
+    : null;
+  if (
+    input.sequenceAfterSubscriptionId &&
+    (predecessor?.studentId !== input.studentId || predecessor.branchId !== branchId)
+  )
+    throw new DomainError(
+      'VALIDATION',
+      'Продлеваемый абонемент не принадлежит этому ученику или филиалу.',
+    );
+  const sequenceBlocked = input.sequenceAfterSubscriptionId
+    ? await paidSubscriptionConsumable(client, input.sequenceAfterSubscriptionId)
+    : false;
   const startsAt = dateOnly(input.startsAt);
   const lessonLimit = tariff.type === 'UNLIMITED' ? null : tariff.lessonCount;
   const expiresAt = input.expiresAt
@@ -628,14 +715,18 @@ export async function createCanonicalSubscription(
       purchasedAt: new Date(),
       saleIdempotencyKey: input.idempotencyKey ?? null,
       salePrice: input.salePrice,
+      sequenceAfterSubscriptionId: input.sequenceAfterSubscriptionId ?? null,
       startsAt,
-      status: subscriptionStatusAt({
-        expiresAt,
-        lessonLimit,
-        lessonsUsed: 0,
-        startsAt,
-        status: 'PENDING',
-      }),
+      status:
+        predecessor && sequenceBlocked
+          ? 'PENDING'
+          : subscriptionStatusAt({
+              expiresAt,
+              lessonLimit,
+              lessonsUsed: 0,
+              startsAt,
+              status: 'PENDING',
+            }),
       studentId: input.studentId,
       tariffId: input.tariffId,
     },
@@ -676,6 +767,7 @@ export async function createCanonicalSubscription(
         paymentMethod: input.initialPayment.paymentMethod,
         salePrice: input.salePrice,
         startsAt: input.startsAt,
+        sequenceAfterSubscriptionId: input.sequenceAfterSubscriptionId,
         tariffId: input.tariffId,
       }),
       entityId: subscription.id,
@@ -869,7 +961,9 @@ export class FinanceService {
       orderBy: [{ startsAt: 'desc' }, { createdAt: 'desc' }],
       where: { studentId },
     });
-    const summaries = subscriptions.map((subscription) => subscriptionSummary(subscription));
+    const summaries = withLifecyclePositions(
+      subscriptions.map((subscription) => subscriptionSummary(subscription)),
+    );
     const uncoveredAttendances = await this.uncoveredAttendances(studentId);
     const uncoveredDebt = uncoveredAttendances.reduce(
       (sum, attendance) => sum + (attendance.amount ?? 0),
@@ -1350,6 +1444,14 @@ export class FinanceService {
   ): Promise<SubscriptionDetail> {
     const actor = await this.application.authenticate(token);
     assertPermission(actor, 'subscriptions:manage');
+    if (input.remainingLessons !== undefined) assertPermission(actor, 'subscriptions:adjust');
+    if (input.reason.trim().length < 3)
+      throw new DomainError('VALIDATION', t('validation.adjustmentReason'));
+    if (
+      input.remainingLessons !== undefined &&
+      (!Number.isInteger(input.remainingLessons) || input.remainingLessons < 0)
+    )
+      throw new DomainError('VALIDATION', 'Остаток занятий не может быть отрицательным.');
     const current = await this.requireSubscription(id);
     assertBranchAccess(actor, current.branchId);
     if (current.status === 'CANCELLED')
@@ -1379,7 +1481,12 @@ export class FinanceService {
         : null;
     if (expiresAt && expiresAt < startsAt)
       throw new DomainError('VALIDATION', 'Дата окончания не может быть раньше даты начала.');
-    const lessonLimit = tariff.type === 'UNLIMITED' ? null : tariff.lessonCount;
+    const lessonLimit =
+      input.remainingLessons === undefined
+        ? tariff.type === 'UNLIMITED'
+          ? null
+          : tariff.lessonCount
+        : current.lessonsUsed + input.remainingLessons;
     if (lessonLimit !== null && current.lessonsUsed > lessonLimit)
       throw new DomainError('VALIDATION', 'Новый тариф не может вместить уже учтённые занятия.');
     await this.database.$transaction(async (transaction) => {
@@ -1390,11 +1497,19 @@ export class FinanceService {
         startsAt,
       });
       const status =
-        desiredStatus === 'ACTIVE' && current.status !== 'ACTIVE'
-          ? (await subscriptionHasSuccessfulFullPayment(transaction, id, current.salePrice))
-            ? desiredStatus
-            : 'PENDING'
-          : desiredStatus;
+        desiredStatus === 'ACTIVE' &&
+        current.sequenceAfterSubscriptionId &&
+        (await paidSubscriptionConsumable(
+          transaction,
+          current.sequenceAfterSubscriptionId,
+          startsAt,
+        ))
+          ? 'PENDING'
+          : desiredStatus === 'ACTIVE' && current.status !== 'ACTIVE'
+            ? (await subscriptionHasSuccessfulFullPayment(transaction, id, current.salePrice))
+              ? desiredStatus
+              : 'PENDING'
+            : desiredStatus;
       await transaction.subscription.update({
         data: {
           expiresAt,
@@ -1406,18 +1521,46 @@ export class FinanceService {
         },
         where: { id },
       });
+      const changes = [
+        current.startsAt.getTime() === startsAt.getTime()
+          ? null
+          : `дата начала: ${current.startsAt.toLocaleDateString('ru-RU')} → ${startsAt.toLocaleDateString('ru-RU')}`,
+        current.expiresAt?.getTime() === expiresAt?.getTime()
+          ? null
+          : `дата окончания: ${current.expiresAt?.toLocaleDateString('ru-RU') ?? 'без срока'} → ${expiresAt?.toLocaleDateString('ru-RU') ?? 'без срока'}`,
+        current.lessonLimit === lessonLimit
+          ? null
+          : `лимит занятий: ${String(current.lessonLimit ?? '∞')} → ${String(lessonLimit ?? '∞')}`,
+      ].filter(Boolean);
+      await transaction.subscriptionLedger.create({
+        data: {
+          comment: `Корректировка · ${input.reason.trim()}${changes.length ? ` · ${changes.join('; ')}` : ''}`,
+          createdByUserId: actor.id,
+          studentId: current.studentId,
+          subscriptionId: id,
+          type: 'MANUAL_ADJUSTMENT',
+        },
+      });
       await reconcileStudentAttendanceCoverage(transaction, {
         actorUserId: actor.id,
         studentId: current.studentId,
       });
       await this.audit(transaction, actor.id, 'SUBSCRIPTION_UPDATED', 'Subscription', id, {
-        after: { expiresAt, notes: optionalValue(input.notes), startsAt, tariffId: input.tariffId },
+        after: {
+          expiresAt,
+          lessonLimit,
+          notes: optionalValue(input.notes),
+          startsAt,
+          tariffId: input.tariffId,
+        },
         before: {
           expiresAt: current.expiresAt,
+          lessonLimit: current.lessonLimit,
           notes: current.notes,
           startsAt: current.startsAt,
           tariffId: current.tariffId,
         },
+        reason: input.reason.trim(),
       });
     });
     return this.getSubscription(token, id);
@@ -1429,30 +1572,82 @@ export class FinanceService {
     await this.refreshSubscription(id, actor.id);
     const subscription = await this.requireSubscription(id);
     await this.assertStudentFinanceAccess(actor, subscription.studentId);
-    const ledger = await this.database.subscriptionLedger.findMany({
-      include: { createdByUser: { select: { fullName: true } } },
-      orderBy: { createdAt: 'desc' },
-      where: { subscriptionId: id },
-    });
+    const [ledger, studentSubscriptions] = await Promise.all([
+      this.database.subscriptionLedger.findMany({
+        include: { createdByUser: { select: { fullName: true } } },
+        orderBy: { createdAt: 'desc' },
+        where: { subscriptionId: id },
+      }),
+      this.database.subscription.findMany({
+        include: subscriptionInclude,
+        where: { studentId: subscription.studentId },
+      }),
+    ]);
     const payments = await this.database.payment.findMany({
       include: paymentInclude,
       orderBy: { paidAt: 'desc' },
       where: { subscriptionId: id },
     });
+    const summary =
+      withLifecyclePositions(studentSubscriptions.map((item) => subscriptionSummary(item))).find(
+        (item) => item.id === id,
+      ) ?? subscriptionSummary(subscription);
+    const ledgerItems = ledger.map((entry): LedgerEntrySummary => ({
+      amountDelta: entry.amountDelta ?? undefined,
+      attendanceId: entry.attendanceId ?? undefined,
+      comment: entry.comment ?? undefined,
+      createdAt: entry.createdAt.toISOString(),
+      createdByName: entry.createdByUser?.fullName,
+      id: entry.id,
+      lessonDelta: entry.lessonDelta,
+      lessonId: entry.lessonId ?? undefined,
+      periodEndsAt: entry.periodEndsAt?.toISOString(),
+      periodStartsAt: entry.periodStartsAt?.toISOString(),
+      reversesLedgerId: entry.reversesLedgerId ?? undefined,
+      type: entry.type,
+    }));
+    let remainingAfterEntry =
+      subscription.lessonLimit === null
+        ? undefined
+        : Math.max(0, subscription.lessonLimit - subscription.lessonsUsed);
+    const remainingByLedgerId = new Map<string, number>();
+    for (const entry of ledger) {
+      if (
+        remainingAfterEntry !== undefined &&
+        (entry.type === 'LESSON_WRITE_OFF' || entry.type === 'REVERSAL')
+      ) {
+        remainingByLedgerId.set(entry.id, remainingAfterEntry);
+        remainingAfterEntry += entry.lessonDelta;
+      }
+    }
+    const history = [...ledger].reverse().map((entry): SubscriptionHistoryEvent => {
+      const type: SubscriptionHistoryEvent['type'] =
+        entry.type === 'PURCHASE'
+          ? 'PURCHASE'
+          : entry.type === 'LESSON_WRITE_OFF' || entry.type === 'REVERSAL'
+            ? 'ATTENDANCE'
+            : entry.type === 'FREEZE'
+              ? 'FREEZE'
+              : entry.type === 'UNFREEZE'
+                ? 'UNFREEZE'
+                : 'CORRECTION';
+      return {
+        actorName: entry.createdByUser?.fullName,
+        amount: entry.amountDelta ?? undefined,
+        occurredAt: entry.createdAt.toISOString(),
+        summary:
+          entry.type === 'PURCHASE'
+            ? `Куплен · ${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format((entry.amountDelta ?? subscription.salePrice) / 100)} ₽ · ${String(subscription.lessonLimit ?? 'безлимит')} занятий`
+            : entry.type === 'LESSON_WRITE_OFF' && remainingByLedgerId.has(entry.id)
+              ? `Списано занятие · осталось ${String(remainingByLedgerId.get(entry.id))}`
+              : (entry.comment ?? t(`ledger.type.${entry.type}`)),
+        type,
+      };
+    });
     return {
-      ...subscriptionSummary(subscription),
-      ledger: ledger.map((entry): LedgerEntrySummary => ({
-        amountDelta: entry.amountDelta ?? undefined,
-        attendanceId: entry.attendanceId ?? undefined,
-        comment: entry.comment ?? undefined,
-        createdAt: entry.createdAt.toISOString(),
-        createdByName: entry.createdByUser?.fullName,
-        id: entry.id,
-        lessonDelta: entry.lessonDelta,
-        lessonId: entry.lessonId ?? undefined,
-        reversesLedgerId: entry.reversesLedgerId ?? undefined,
-        type: entry.type,
-      })),
+      ...summary,
+      history,
+      ledger: ledgerItems,
       payments: payments.map(paymentSummary),
     };
   }
@@ -1465,7 +1660,10 @@ export class FinanceService {
   ): Promise<SubscriptionDetail> {
     const actor = await this.application.authenticate(token);
     assertPermission(actor, 'subscriptions:manage');
-    if (!Number.isInteger(input.days) || input.days < 1)
+    const freezeStartsAt = dateOnly(input.startsAt);
+    const freezeEndsAt = addDays(dateOnly(input.endsAt), 1);
+    const days = Math.round((freezeEndsAt.getTime() - freezeStartsAt.getTime()) / DAY_MS);
+    if (days < 1 || days > 365 || input.reason.trim().length < 3)
       throw new DomainError('VALIDATION', t('validation.freezeDays'));
     await this.refreshSubscription(id, actor.id);
     const subscription = await this.requireSubscription(id);
@@ -1473,26 +1671,35 @@ export class FinanceService {
     if (subscription.status !== 'ACTIVE')
       throw new DomainError('VALIDATION', t('domain.validation.freezeActiveOnly'));
     const allowance = subscription.tariff.freezeDays ?? 0;
-    if (input.days > allowance - subscription.frozenDaysUsed)
+    if (days > allowance - subscription.frozenDaysUsed)
       throw new DomainError('VALIDATION', t('domain.validation.freezeLimit'));
     await this.database.$transaction(async (transaction) => {
       const now = new Date();
       await transaction.subscription.update({
-        data: { freezeEndsAt: addDays(now, input.days), freezeStartedAt: now, status: 'FROZEN' },
+        data: {
+          freezeEndsAt,
+          freezeStartedAt: freezeStartsAt,
+          status: freezeStartsAt <= now && freezeEndsAt > now ? 'FROZEN' : 'ACTIVE',
+        },
         where: { id },
       });
       const ledger = await transaction.subscriptionLedger.create({
         data: {
-          comment: t('ledger.comment.freeze', { days: input.days }),
+          comment: `Заморожен ${freezeStartsAt.toLocaleDateString('ru-RU')}–${dateOnly(input.endsAt).toLocaleDateString('ru-RU')} · ${input.reason.trim()}`,
           createdByUserId: actor.id,
+          periodEndsAt: freezeEndsAt,
+          periodStartsAt: freezeStartsAt,
           studentId: subscription.studentId,
           subscriptionId: id,
           type: 'FREEZE',
         },
       });
       await this.audit(transaction, actor.id, 'SUBSCRIPTION_FROZEN', 'Subscription', id, {
-        days: input.days,
+        days,
+        endsAt: freezeEndsAt,
         ledgerId: ledger.id,
+        reason: input.reason.trim(),
+        startsAt: freezeStartsAt,
       });
       if (webAction) {
         await transaction.webAction.update({
@@ -2526,7 +2733,7 @@ export class FinanceService {
   private async refreshRecord(subscription: Subscription, actorUserId: string): Promise<void> {
     const now = new Date();
     if (
-      subscription.status === 'FROZEN' &&
+      subscription.freezeStartedAt &&
       subscription.freezeEndsAt &&
       subscription.freezeEndsAt <= now
     ) {
@@ -2541,17 +2748,38 @@ export class FinanceService {
       await this.unfreeze(this.database, subscription, actorUserId, subscription.freezeEndsAt);
       return;
     }
+    if (
+      subscription.freezeStartedAt &&
+      subscription.freezeEndsAt &&
+      subscription.freezeStartedAt <= now &&
+      subscription.freezeEndsAt > now &&
+      subscription.status !== 'FROZEN'
+    ) {
+      await this.database.subscription.update({
+        data: { status: 'FROZEN' },
+        where: { id: subscription.id },
+      });
+      return;
+    }
     const desiredStatus = subscriptionStatusAt(subscription, now);
     const status =
-      desiredStatus === 'ACTIVE' && subscription.status !== 'ACTIVE'
-        ? (await subscriptionHasSuccessfulFullPayment(
-            this.database,
-            subscription.id,
-            subscription.salePrice,
-          ))
-          ? desiredStatus
-          : 'PENDING'
-        : desiredStatus;
+      desiredStatus === 'ACTIVE' &&
+      subscription.sequenceAfterSubscriptionId &&
+      (await paidSubscriptionConsumable(
+        this.database,
+        subscription.sequenceAfterSubscriptionId,
+        now,
+      ))
+        ? 'PENDING'
+        : desiredStatus === 'ACTIVE' && subscription.status !== 'ACTIVE'
+          ? (await subscriptionHasSuccessfulFullPayment(
+              this.database,
+              subscription.id,
+              subscription.salePrice,
+            ))
+            ? desiredStatus
+            : 'PENDING'
+          : desiredStatus;
     if (status !== subscription.status)
       await this.database.subscription.update({ data: { status }, where: { id: subscription.id } });
   }
@@ -2571,6 +2799,20 @@ export class FinanceService {
     const frozenDaysUsed = subscription.frozenDaysUsed + actualDays;
     const expiresAt = subscription.expiresAt ? addDays(subscription.expiresAt, actualDays) : null;
     await client.$transaction(async (transaction) => {
+      const freezeEntry = await transaction.subscriptionLedger.findFirst({
+        orderBy: { createdAt: 'desc' },
+        where: {
+          periodEndsAt: { not: null },
+          periodStartsAt: { not: null },
+          subscriptionId: subscription.id,
+          type: 'FREEZE',
+        },
+      });
+      if (freezeEntry?.periodEndsAt && endedAt < freezeEntry.periodEndsAt)
+        await transaction.subscriptionLedger.update({
+          data: { periodEndsAt: endedAt },
+          where: { id: freezeEntry.id },
+        });
       const updated = await transaction.subscription.update({
         data: {
           expiresAt,

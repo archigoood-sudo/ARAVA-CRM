@@ -189,6 +189,10 @@ export async function applyAttendanceWriteOff(
 
   const candidates = await client.subscription.findMany({
     include: {
+      ledgerEntries: {
+        select: { periodEndsAt: true, periodStartsAt: true },
+        where: { type: 'FREEZE' },
+      },
       payments: { include: { refunds: { select: { amount: true } } } },
       tariff: true,
     },
@@ -208,6 +212,20 @@ export async function applyAttendanceWriteOff(
         : { type: { in: ['LESSON_PACK', 'SINGLE_LESSON', 'UNLIMITED'] } },
     },
   });
+  const predecessorIds = [
+    ...new Set(
+      candidates.flatMap(({ sequenceAfterSubscriptionId }) =>
+        sequenceAfterSubscriptionId ? [sequenceAfterSubscriptionId] : [],
+      ),
+    ),
+  ];
+  const predecessors = predecessorIds.length
+    ? await client.subscription.findMany({
+        include: { payments: { include: { refunds: { select: { amount: true } } } } },
+        where: { id: { in: predecessorIds } },
+      })
+    : [];
+  const predecessorById = new Map(predecessors.map((item) => [item.id, item]));
   const subscription = candidates.find((candidate) => {
     const paid = candidate.payments
       .filter(({ status }) => status !== 'CANCELLED')
@@ -218,9 +236,48 @@ export async function applyAttendanceWriteOff(
           payment.refunds.reduce((refunds, refund) => refunds + refund.amount, 0),
         0,
       );
+    const predecessor = candidate.sequenceAfterSubscriptionId
+      ? predecessorById.get(candidate.sequenceAfterSubscriptionId)
+      : undefined;
+    const predecessorPaid =
+      predecessor?.payments
+        .filter(({ status }) => status !== 'CANCELLED')
+        .reduce(
+          (sum, payment) =>
+            sum +
+            payment.amount -
+            payment.refunds.reduce((refunds, refund) => refunds + refund.amount, 0),
+          0,
+        ) ?? 0;
+    const candidatePaymentAllowsConsumption =
+      candidate.status === 'PENDING'
+        ? paid >= candidate.salePrice
+        : candidate.payments.some(({ status }) => status !== 'CANCELLED');
+    const predecessorPaymentAllowsConsumption = Boolean(
+      predecessor &&
+      (predecessor.status === 'PENDING'
+        ? predecessorPaid >= predecessor.salePrice
+        : predecessor.payments.some(({ status }) => status !== 'CANCELLED')),
+    );
+    const predecessorStillConsumable = Boolean(
+      predecessor &&
+      predecessorPaymentAllowsConsumption &&
+      predecessor.status !== 'CANCELLED' &&
+      predecessor.startsAt <= input.lessonStartsAt &&
+      (!predecessor.expiresAt || predecessor.expiresAt >= input.lessonStartsAt) &&
+      (predecessor.lessonLimit === null || predecessor.lessonsUsed < predecessor.lessonLimit),
+    );
+    const frozenAtLesson = candidate.ledgerEntries.some(
+      ({ periodEndsAt, periodStartsAt }) =>
+        periodStartsAt !== null &&
+        periodEndsAt !== null &&
+        periodStartsAt <= input.lessonStartsAt &&
+        periodEndsAt > input.lessonStartsAt,
+    );
     return (
-      (candidate.status !== 'PENDING' ||
-        (candidate.payments.length > 0 && paid >= candidate.salePrice)) &&
+      candidatePaymentAllowsConsumption &&
+      !predecessorStillConsumable &&
+      !frozenAtLesson &&
       (candidate.lessonLimit === null || candidate.lessonsUsed < candidate.lessonLimit)
     );
   });
@@ -264,6 +321,9 @@ function writeOffStillEligible(
     subscription: {
       branchId: string;
       expiresAt: Date | null;
+      freezeEndsAt: Date | null;
+      freezeStartedAt: Date | null;
+      ledgerEntries: { periodEndsAt: Date | null; periodStartsAt: Date | null }[];
       startsAt: Date;
       tariff: { type: string };
     };
@@ -279,6 +339,16 @@ function writeOffStillEligible(
   if (subscription.branchId !== lesson.branchId || subscription.startsAt > lesson.startsAt)
     return false;
   if (subscription.expiresAt && subscription.expiresAt < lesson.startsAt) return false;
+  if (
+    subscription.ledgerEntries.some(
+      ({ periodEndsAt, periodStartsAt }) =>
+        periodStartsAt !== null &&
+        periodEndsAt !== null &&
+        periodStartsAt <= lesson.startsAt &&
+        periodEndsAt > lesson.startsAt,
+    )
+  )
+    return false;
   return trial
     ? subscription.tariff.type === 'TRIAL'
     : ['LESSON_PACK', 'SINGLE_LESSON', 'UNLIMITED'].includes(subscription.tariff.type);
@@ -306,7 +376,15 @@ export async function reconcileStudentAttendanceCoverage(
     include: {
       lesson: { select: { branchId: true, startsAt: true, status: true } },
       reversals: { select: { id: true } },
-      subscription: { include: { tariff: { select: { type: true } } } },
+      subscription: {
+        include: {
+          ledgerEntries: {
+            select: { periodEndsAt: true, periodStartsAt: true },
+            where: { type: 'FREEZE' },
+          },
+          tariff: { select: { type: true } },
+        },
+      },
     },
     where: { studentId: input.studentId, type: 'LESSON_WRITE_OFF' },
   });

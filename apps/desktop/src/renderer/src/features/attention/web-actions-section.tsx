@@ -1,4 +1,4 @@
-import type { WebActionSummary } from '@arava/shared';
+import type { SubscriptionFreezeInput, WebActionSummary } from '@arava/shared';
 import { formatDate } from '@arava/shared';
 import { Badge, Button, Card, CardContent, Dialog, LoadingState, Textarea } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -36,8 +36,8 @@ export function WebActionsSection() {
     await queryClient.invalidateQueries({ queryKey: ['web-actions'] });
   };
   const approve = useMutation({
-    mutationFn: (days: number) =>
-      getDesktopApi().webActions.approve(getSessionToken(), freezing?.id ?? '', { days }),
+    mutationFn: (input: SubscriptionFreezeInput) =>
+      getDesktopApi().webActions.approve(getSessionToken(), freezing?.id ?? '', input),
     onSuccess: async () => {
       setFreezing(undefined);
       await refresh();
@@ -146,8 +146,8 @@ export function WebActionsSection() {
       <FreezeDialog
         error={approve.error instanceof Error ? approve.error.message : undefined}
         onClose={() => setFreezing(undefined)}
-        onSubmit={async ({ days }) => {
-          await approve.mutateAsync(days);
+        onSubmit={async (input) => {
+          await approve.mutateAsync(input);
         }}
         open={Boolean(freezing)}
       />
