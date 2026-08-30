@@ -9,6 +9,8 @@ export function isBackgroundE2E(): boolean {
 }
 
 async function suppressNativeTestUI(application: ElectronApplication): Promise<void> {
+  // CI's Linux window is already confined to Xvfb; hiding it suspends renderer form effects.
+  const usesIsolatedDisplay = Boolean(process.env.CI) && process.platform === 'linux';
   const suppressRendererDialogs = () => {
     window.alert = () => undefined;
     window.confirm = () => true;
@@ -16,15 +18,17 @@ async function suppressNativeTestUI(application: ElectronApplication): Promise<v
   };
   await application.context().addInitScript(suppressRendererDialogs);
   await Promise.all(application.windows().map((page) => page.evaluate(suppressRendererDialogs)));
-  await application.evaluate(({ app, BrowserWindow, dialog, shell }) => {
-    if (process.platform === 'darwin') app.dock?.hide();
-    BrowserWindow.prototype.show = function showInBackground() {
-      this.hide();
-    };
-    BrowserWindow.prototype.showInactive = function showInactiveInBackground() {
-      this.hide();
-    };
-    for (const window of BrowserWindow.getAllWindows()) window.hide();
+  await application.evaluate(({ app, BrowserWindow, dialog, shell }, hideWindows) => {
+    if (hideWindows) {
+      if (process.platform === 'darwin') app.dock?.hide();
+      BrowserWindow.prototype.show = function showInBackground() {
+        this.hide();
+      };
+      BrowserWindow.prototype.showInactive = function showInactiveInBackground() {
+        this.hide();
+      };
+      for (const window of BrowserWindow.getAllWindows()) window.hide();
+    }
 
     const safeDialog = dialog as unknown as {
       showErrorBox: () => void;
@@ -49,7 +53,7 @@ async function suppressNativeTestUI(application: ElectronApplication): Promise<v
     shell.openExternal = () => Promise.resolve();
     shell.openPath = () => Promise.resolve('');
     shell.showItemInFolder = () => undefined;
-  });
+  }, !usesIsolatedDisplay);
 }
 
 export async function launchElectron(options: ElectronLaunchOptions): Promise<ElectronApplication> {
