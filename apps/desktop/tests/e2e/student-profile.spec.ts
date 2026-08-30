@@ -22,7 +22,7 @@ async function completePassword(page: Page, password: string) {
   await page.getByLabel('Новый пароль', { exact: true }).fill(password);
   await page.getByLabel('Повторите новый пароль').fill(password);
   await page.getByRole('button', { name: 'Сохранить пароль и продолжить' }).click();
-  await expect(page.getByRole('link', { name: 'Главная', exact: true })).toBeVisible();
+  await expect(page.getByTestId('sidebar-navigation')).toBeVisible();
 }
 
 async function launchApplication(testInfo: TestInfo): Promise<ElectronApplication> {

@@ -21,7 +21,7 @@ async function completeTemporaryPassword(page: Page, password: string) {
   await page.getByLabel('Новый пароль', { exact: true }).fill(password);
   await page.getByLabel('Повторите новый пароль').fill(password);
   await page.getByRole('button', { name: 'Сохранить пароль и продолжить' }).click();
-  await expect(page.getByRole('link', { name: 'Главная', exact: true })).toBeVisible();
+  await expect(page.getByTestId('sidebar-navigation')).toBeVisible();
   await page.waitForFunction(() => {
     const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
       state?: { user?: { mustChangePassword?: boolean } };
@@ -129,6 +129,8 @@ test('роли, временные пароли, отзыв сессий и ре
     await signOut(page);
     await login(page, 'trainer-e2e@arava.local', trainerTemporaryPassword);
     await completeTemporaryPassword(page, trainerPassword);
+    await expect(page).toHaveURL(/#\/schedule$/u);
+    await expect(page.getByRole('link', { name: 'Главная', exact: true })).toHaveCount(0);
     await expect(page.getByRole('link', { name: 'Мои группы' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Моё расписание' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Мои ученики' })).toBeVisible();
@@ -158,6 +160,19 @@ test('роли, временные пароли, отзыв сессий и ре
       }
     });
     expect(backendDenied).toBe(true);
+    const todayDenied = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      try {
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        await api.dashboard.stats(persisted.state?.token ?? '');
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(todayDenied).toBe(true);
     const cardManagementDenied = await page.evaluate(async () => {
       const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
         state?: { token?: string };

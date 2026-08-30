@@ -31,11 +31,7 @@ test('вход, создание филиала, ученика и контак�
     await window.getByLabel('Новый пароль', { exact: true }).fill(securePassword);
     await window.getByLabel('Повторите новый пароль').fill(securePassword);
     await window.getByRole('button', { name: 'Сохранить пароль и продолжить' }).click();
-    await expect(
-      window.getByRole('heading', {
-        name: /(Доброе утро|Добрый день|Добрый вечер|Доброй ночи), Владелец/u,
-      }),
-    ).toBeVisible();
+    await expect(window.getByRole('heading', { name: /^Сегодня,/u })).toBeVisible();
 
     await window.getByRole('link', { name: 'Филиалы', exact: true }).click();
     await window.getByRole('button', { name: 'Создать филиал' }).click();
@@ -84,14 +80,24 @@ test('вход, создание филиала, ученика и контак�
     await expect(window.getByRole('link', { name: /Соколова Ирина/u })).toBeVisible();
 
     await window.getByRole('link', { name: 'Главная', exact: true }).click();
-    await expect(window.getByRole('heading', { exact: true, name: 'Сегодня' })).toBeVisible();
-    const today = window.getByRole('region', { name: 'Сегодня' });
-    await expect(today.getByText('Ожидается учеников')).toBeVisible();
-    await expect(today.getByText('Отмечено', { exact: true })).toBeVisible();
-    await expect(today.getByText('Не отмечено', { exact: true })).toBeVisible();
-    await expect(today.getByText('Выручка сегодня')).toBeVisible();
+    await window.setViewportSize({ height: 768, width: 1366 });
+    await expect(window.getByRole('heading', { name: /^Сегодня,/u })).toBeVisible();
+    const today = window.getByRole('region', { name: 'Показатели сегодня' });
+    await expect(today.getByText('Ожидается')).toBeVisible();
+    await expect(today.getByText('Уже пришли')).toBeVisible();
+    await expect(today.getByText('Пробных')).toBeVisible();
+    await expect(window.getByText('Получено сегодня')).toBeVisible();
     await expect(window.getByText('Ход дня', { exact: true })).toHaveCount(0);
-    await expect(window.getByRole('heading', { name: 'Требует внимания' })).toBeVisible();
+    await expect(window.getByRole('heading', { name: 'Сейчас в студии' })).toBeVisible();
+    await expect(window.getByRole('heading', { name: 'Ближайшие' })).toBeVisible();
+    await expect(window.getByRole('heading', { name: 'Требуют внимания' })).toBeVisible();
+    await expect
+      .poll(() =>
+        window.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        ),
+      )
+      .toBe(true);
     const noSubscriptionTask = window
       .locator('article')
       .filter({ hasText: 'У Петрова Мила нет действующего абонемента.' });
@@ -213,7 +219,7 @@ test('вход, создание филиала, ученика и контак�
     await expect(secondRoomSection).not.toContainText('Импульс E2E');
     await window.getByRole('link', { name: 'Главная', exact: true }).click();
     const todayLessons = window
-      .getByRole('region', { name: 'Сегодня' })
+      .getByRole('region', { name: 'Показатели сегодня' })
       .getByRole('button')
       .filter({ hasText: 'Занятий' });
     await expect(todayLessons).toContainText('2');
@@ -284,11 +290,7 @@ test('вход, создание филиала, ученика и контак�
     await window.getByLabel('Электронная почта').fill(ownerEmail);
     await window.getByLabel('Пароль').fill(securePassword);
     await window.getByRole('button', { name: 'Войти в рабочее пространство' }).click();
-    await expect(
-      window.getByRole('heading', {
-        name: /(Доброе утро|Добрый день|Добрый вечер|Доброй ночи), Владелец/u,
-      }),
-    ).toBeVisible();
+    await expect(window.getByRole('heading', { name: /^Сегодня,/u })).toBeVisible();
   } finally {
     await application.close();
   }

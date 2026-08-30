@@ -2366,41 +2366,31 @@ export interface StudentAttendanceHistory {
 }
 
 export interface DashboardStats {
-  activeGroups: number;
-  attendanceMarked: number;
-  attendanceUnmarked: number;
-  branches: number;
-  expectedToday: number;
-  expensesToday: number;
-  groupsWithPlaces: number;
-  groupsLowOccupancy: number;
-  lessonsToday: number;
-  problematicPayments: number;
-  lowLessonBalance: number;
-  outstandingDebt: number;
-  netCashFlow: number;
-  payrollPendingApproval: number;
-  revenueThisMonth: number;
-  revenueToday: number;
-  students: number;
-  trialStudents: number;
-  trialsToday: number;
-  users: number;
-  subscriptionsExpiringSoon: number;
+  attentionItems: AttentionItem[];
+  attentionTotal: number;
+  generatedAt: string;
+  newLeads: LeadSummary[];
+  newLeadsTotal: number;
+  receivedToday: number;
   todayLessons: DashboardTodayLesson[];
+  todayTrials: TrialAppointmentSummary[];
 }
 
 export interface DashboardTodayLesson {
   attendanceMarked: number;
+  attendancePresent: number;
+  branchId: string;
   branchName: string;
   endsAt: string;
   expectedStudents: number;
+  groupId: string;
   groupName: string;
   id: string;
   lessonId?: string | undefined;
   roomName?: string | undefined;
   startsAt: string;
   trainerName?: string | undefined;
+  trialStudents: number;
 }
 
 export type AttentionCategory =

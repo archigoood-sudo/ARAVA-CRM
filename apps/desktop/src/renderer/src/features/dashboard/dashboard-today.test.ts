@@ -6,12 +6,16 @@ import { classifyTodayLessons, todayAttendanceRoute } from './dashboard-today';
 function lesson(id: string, startsAt: string, endsAt: string): DashboardTodayLesson {
   return {
     attendanceMarked: 0,
+    attendancePresent: 0,
+    branchId: 'branch-1',
     branchName: 'Центр',
     endsAt,
     expectedStudents: 10,
+    groupId: 'group-1',
     groupName: id,
     id,
     startsAt,
+    trialStudents: 0,
   };
 }
 

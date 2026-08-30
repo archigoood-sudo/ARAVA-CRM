@@ -92,6 +92,7 @@ describe('operational cache invalidation', () => {
       ['students', 'finance', 'student-1'],
       ['student-profile', 'owner', 'student-1'],
       ['attention', 'summary'],
+      ['dashboard', 'stats'],
       ['groups', 'detail', 'group-1'],
       ['groups', 'roster', 'group-1'],
     ] as const;
@@ -116,13 +117,22 @@ describe('operational cache invalidation', () => {
     const profileKey = ['student-profile', 'owner', 'student-1'] as const;
     const financeKey = ['students', 'finance', 'student-1'] as const;
     const groupKey = ['groups', 'roster', 'group-1'] as const;
-    const client = clientWith([profileKey, groupKey]);
+    const dashboardKey = ['dashboard', 'stats'] as const;
+    const client = clientWith([profileKey, groupKey, dashboardKey]);
 
     await invalidateSyncedEntityCaches(client, 'GROUP_MEMBERSHIP');
     expect(invalidated(client, profileKey)).toBe(true);
+    expect(invalidated(client, dashboardKey)).toBe(true);
 
-    const financeClient = clientWith([financeKey]);
+    const financeClient = clientWith([financeKey, dashboardKey]);
     await invalidateSyncedEntityCaches(financeClient, 'SUBSCRIPTION');
     expect(invalidated(financeClient, financeKey)).toBe(true);
+    expect(invalidated(financeClient, dashboardKey)).toBe(true);
+
+    for (const entityType of ['ATTENDANCE', 'TRIAL_APPOINTMENT', 'LESSON'] as const) {
+      const syncClient = clientWith([dashboardKey]);
+      await invalidateSyncedEntityCaches(syncClient, entityType);
+      expect(invalidated(syncClient, dashboardKey)).toBe(true);
+    }
   });
 });

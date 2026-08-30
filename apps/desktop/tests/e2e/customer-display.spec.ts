@@ -16,11 +16,7 @@ async function login(page: Page) {
   await page.getByLabel('Новый пароль', { exact: true }).fill(ownerPassword);
   await page.getByLabel('Повторите новый пароль').fill(ownerPassword);
   await page.getByRole('button', { name: 'Сохранить пароль и продолжить' }).click();
-  await expect(
-    page.getByRole('heading', {
-      name: /(Доброе утро|Добрый день|Добрый вечер|Доброй ночи), Владелец/u,
-    }),
-  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^Сегодня,/u })).toBeVisible();
 }
 
 async function scan(page: Page, barcode: string) {

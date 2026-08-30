@@ -69,7 +69,7 @@ export function Sidebar() {
     retry: false,
   });
   const navigation = [
-    { icon: LayoutDashboard, label: t('nav.dashboard'), to: '/dashboard' },
+    ...(!trainer ? [{ icon: LayoutDashboard, label: t('nav.dashboard'), to: '/dashboard' }] : []),
     ...(user?.role === 'COACH'
       ? [{ icon: UserRound, label: 'Мой профиль', to: `/trainers/${user.id}` }]
       : []),

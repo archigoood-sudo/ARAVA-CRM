@@ -8,7 +8,6 @@ import {
   GlobalSearchService,
   GroupRosterService,
   LeadService,
-  LessonOccurrenceService,
   ManagementService,
   AqsiPaymentService,
   PaymentOperationService,
@@ -137,7 +136,6 @@ import { basename, dirname, extname, join } from 'node:path';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Buffer } from 'node:buffer';
-import type { EnrollmentStatus } from '@prisma/client';
 import { z } from 'zod';
 import { getBuildMetadata } from './build-metadata';
 import type { CustomerDisplayManager } from './customer-display-manager';
@@ -146,7 +144,6 @@ import type { UpdateController } from './update-manager';
 import { DocumentPackManager } from './document-pack-manager';
 
 type IpcHandler = (...arguments_: unknown[]) => unknown;
-const coachEnrollmentStatuses = ['ACTIVE', 'TRIAL', 'FROZEN'] satisfies EnrollmentStatus[];
 const customerDisplaySettingsSchema = z.object({
   customerSeconds: z.number().int().min(3).max(300),
   displayId: z.string().trim().min(1).optional(),
@@ -217,7 +214,6 @@ export function createIpcHandlers(
   const studio = new StudioService(database, service);
   const groupRoster = new GroupRosterService(database, service);
   const attendanceWorkspace = new AttendanceWorkspaceService(database, service);
-  const lessonOccurrences = new LessonOccurrenceService(database);
   const finance = new FinanceService(database, service);
   const paymentOperations = new PaymentOperationService(database, service);
   const management = new ManagementService(database, service);
@@ -1955,191 +1951,75 @@ export function createIpcHandlers(
       ),
 
     [IPC_CHANNELS.dashboardStats]: async (unsafeToken): Promise<DashboardStats> => {
-      const actor = await service.authenticate(sessionTokenSchema.parse(unsafeToken));
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const actor = await service.authenticate(token);
+      assertPermission(actor, 'workspace:manage');
       const branchIds = accessibleBranchIds(actor);
-      const studentScope = {
-        ...(branchIds ? { branchId: { in: branchIds } } : {}),
-        ...(actor.role === 'COACH'
-          ? {
-              enrollments: {
-                some: {
-                  group: { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] },
-                  leftAt: null,
-                  status: { in: coachEnrollmentStatuses },
-                },
-              },
-            }
-          : {}),
-      };
       const dayStart = new Date();
       dayStart.setHours(0, 0, 0, 0);
-      const dayEnd = new Date();
+      const dayEnd = new Date(dayStart);
       dayEnd.setHours(23, 59, 59, 999);
-      const coachGroupScope =
-        actor.role === 'COACH'
-          ? { OR: [{ coachId: actor.id }, { assistantCoachId: actor.id }] }
-          : {};
-      const [
-        branches,
-        students,
-        trialStudents,
-        users,
-        groups,
-        lessons,
-        subscriptions,
-        financeSummary,
-      ] = await Promise.all([
-        database.branch.count({
-          where: { ...(branchIds ? { id: { in: branchIds } } : {}), isActive: true },
-        }),
-        database.student.count({
-          where: { archivedAt: null, ...studentScope },
-        }),
-        database.student.count({
-          where: {
-            archivedAt: null,
-            ...studentScope,
-            status: 'TRIAL',
-          },
-        }),
-        database.user.count({
-          where:
-            actor.role === 'OWNER' || actor.role === 'ADMIN'
-              ? { isActive: true }
-              : { id: '__not_visible__' },
-        }),
-        database.danceGroup.findMany({
-          include: {
-            _count: {
-              select: {
-                enrollments: {
-                  where: { leftAt: null, status: { in: ['ACTIVE', 'TRIAL', 'FROZEN'] } },
-                },
-              },
-            },
-          },
-          where: {
-            archivedAt: null,
-            status: { in: ['ACTIVE', 'RECRUITING'] },
-            ...(branchIds ? { branchId: { in: branchIds } } : {}),
-            ...coachGroupScope,
-          },
-        }),
-        lessonOccurrences.resolveDay(actor, dayStart),
-        database.subscription.findMany({
-          select: { expiresAt: true, lessonLimit: true, lessonsUsed: true },
-          where: {
-            ...(branchIds ? { branchId: { in: branchIds } } : {}),
-            ...(actor.role === 'COACH' ? { student: studentScope } : {}),
-            status: { in: ['ACTIVE', 'FROZEN'] },
-          },
-        }),
-        actor.role === 'COACH'
-          ? Promise.resolve({ outstandingDebt: 0, revenueThisMonth: 0, revenueToday: 0 })
-          : finance.financeStats(sessionTokenSchema.parse(unsafeToken)),
-      ]);
-      const expectedToday = lessons.reduce((total, lesson) => total + lesson.expectedStudents, 0);
-      const attendanceMarked = lessons.reduce(
-        (total, lesson) => total + lesson.attendanceMarked,
-        0,
-      );
-      const now = new Date();
-      const expiringBoundary = new Date(now.getTime() + 5 * 86_400_000);
       const managementScope = branchIds ? { branchId: { in: branchIds } } : {};
-      const [expenseToday, cashToday, payrollPendingApproval, problematicPayments] =
-        actor.role === 'COACH'
-          ? [{ _sum: { amount: null } }, [], 0, 0]
-          : await Promise.all([
-              database.expense.aggregate({
-                _sum: { amount: true },
-                where: {
-                  ...managementScope,
-                  spentAt: { gte: dayStart, lte: dayEnd },
-                  status: 'CONFIRMED',
-                },
-              }),
-              database.cashTransaction.findMany({
-                select: { amount: true, type: true },
-                where: { ...managementScope, occurredAt: { gte: dayStart, lte: dayEnd } },
-              }),
-              database.payrollPeriod.count({
-                where: {
-                  ...(branchIds ? { branchId: { in: branchIds } } : {}),
-                  status: 'CALCULATED',
-                },
-              }),
-              database.paymentOperation.count({
-                where: {
-                  ...managementScope,
-                  status: { in: ['FAILED', 'EXPIRED'] },
-                },
-              }),
-            ]);
-      const netCashFlow = cashToday.reduce(
-        (sum, transaction) =>
-          sum +
-          (transaction.type === 'INCOME'
-            ? transaction.amount
-            : transaction.type === 'EXPENSE'
-              ? -transaction.amount
-              : transaction.amount),
-        0,
-      );
       const localDate = [
         String(dayStart.getFullYear()).padStart(4, '0'),
         String(dayStart.getMonth() + 1).padStart(2, '0'),
         String(dayStart.getDate()).padStart(2, '0'),
       ].join('-');
-      const todayLessons =
-        actor.role === 'COACH'
-          ? []
-          : (
-              await attendanceWorkspace.today(sessionTokenSchema.parse(unsafeToken), localDate)
-            ).lessons
-              .filter(({ status }) => status !== 'CANCELLED')
-              .map((lesson) => ({
-                attendanceMarked: lesson.attendancePresent ?? 0,
-                branchName: lesson.branchName,
-                endsAt: lesson.endsAt,
-                expectedStudents: lesson.attendanceExpected,
-                groupName: lesson.groupName,
-                id: lesson.id,
-                lessonId: lesson.lessonId,
-                roomName: lesson.roomName,
-                startsAt: lesson.startsAt,
-                trainerName: lesson.effectiveTrainerName,
-              }));
+      const [workspace, attentionItems, paymentTotal, leadResult, todayTrials] = await Promise.all([
+        attendanceWorkspace.today(token, localDate),
+        attention.listItems(token),
+        database.payment.aggregate({
+          _sum: { amount: true },
+          where: {
+            ...managementScope,
+            paidAt: { gte: dayStart, lte: dayEnd },
+            status: { not: 'CANCELLED' },
+          },
+        }),
+        leads
+          ? leads.list(token, { status: 'NEW' }).catch(() => ({ leads: [], newCount: 0 }))
+          : Promise.resolve({ leads: [], newCount: 0 }),
+        leads
+          ? leads
+              .listTrials(token, {
+                dateFrom: dayStart.toISOString(),
+                dateTo: dayEnd.toISOString(),
+              })
+              .catch(() => [])
+          : Promise.resolve([]),
+      ]);
+      const trialsByLesson = new Map<string, number>();
+      for (const trial of todayTrials) {
+        if (trial.state === 'CANCELLED') continue;
+        trialsByLesson.set(trial.lessonId, (trialsByLesson.get(trial.lessonId) ?? 0) + 1);
+      }
+      const todayLessons = workspace.lessons
+        .filter(({ status }) => status !== 'CANCELLED')
+        .map((lesson) => ({
+          attendanceMarked: lesson.attendanceMarked,
+          attendancePresent: lesson.attendancePresent ?? 0,
+          branchId: lesson.branchId,
+          branchName: lesson.branchName,
+          endsAt: lesson.endsAt,
+          expectedStudents: lesson.attendanceExpected,
+          groupId: lesson.groupId,
+          groupName: lesson.groupName,
+          id: lesson.id,
+          lessonId: lesson.lessonId,
+          roomName: lesson.roomName,
+          startsAt: lesson.startsAt,
+          trainerName: lesson.effectiveTrainerName,
+          trialStudents: lesson.lessonId ? (trialsByLesson.get(lesson.lessonId) ?? 0) : 0,
+        }));
       return {
-        activeGroups: groups.length,
-        attendanceMarked,
-        attendanceUnmarked: Math.max(0, expectedToday - attendanceMarked),
-        branches,
-        expectedToday,
-        expensesToday: expenseToday._sum.amount ?? 0,
-        groupsLowOccupancy: groups.filter(
-          (group) => group._count.enrollments / group.capacity < 0.5,
-        ).length,
-        groupsWithPlaces: groups.filter((group) => group._count.enrollments < group.capacity)
-          .length,
-        lessonsToday: lessons.length,
-        lowLessonBalance: subscriptions.filter(
-          ({ lessonLimit, lessonsUsed }) =>
-            lessonLimit !== null && Math.max(0, lessonLimit - lessonsUsed) <= 2,
-        ).length,
-        netCashFlow,
-        outstandingDebt: financeSummary.outstandingDebt,
-        payrollPendingApproval,
-        problematicPayments,
-        revenueThisMonth: financeSummary.revenueThisMonth,
-        revenueToday: financeSummary.revenueToday,
-        students,
-        subscriptionsExpiringSoon: subscriptions.filter(
-          ({ expiresAt }) => expiresAt && expiresAt >= now && expiresAt <= expiringBoundary,
-        ).length,
+        attentionItems: attentionItems.slice(0, 32),
+        attentionTotal: attentionItems.length,
+        generatedAt: new Date().toISOString(),
+        newLeads: leadResult.leads.slice(0, 16),
+        newLeadsTotal: leadResult.newCount,
+        receivedToday: paymentTotal._sum.amount ?? 0,
         todayLessons,
-        trialStudents,
-        trialsToday: lessons.reduce((total, lesson) => total + lesson.trialStudents, 0),
-        users,
+        todayTrials: todayTrials.filter(({ state }) => state !== 'CANCELLED').slice(0, 24),
       };
     },
     [IPC_CHANNELS.attentionList]: (unsafeToken, unsafeFilters): Promise<AttentionItem[]> =>

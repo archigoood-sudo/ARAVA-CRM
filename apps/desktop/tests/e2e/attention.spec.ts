@@ -41,7 +41,7 @@ async function completePassword(page: Page, password: string) {
   await page.getByLabel('Новый пароль', { exact: true }).fill(password);
   await page.getByLabel('Повторите новый пароль').fill(password);
   await page.getByRole('button', { name: 'Сохранить пароль и продолжить' }).click();
-  await expect(page.getByRole('link', { name: 'Главная', exact: true })).toBeVisible();
+  await expect(page.getByTestId('sidebar-navigation')).toBeVisible();
 }
 
 test('центр внимания ведёт к действию, авторазрешается и изолирует филиалы', async ({
@@ -164,7 +164,7 @@ test('центр внимания ведёт к действию, автораз
     });
 
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'Требует внимания' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Требуют внимания' })).toBeVisible();
     await page.getByRole('link', { name: /Требует внимания/u }).click();
     await expect(page.getByRole('heading', { level: 2, name: 'Требует внимания' })).toBeVisible();
     await page.getByLabel('Категория').selectOption('PAYMENTS');

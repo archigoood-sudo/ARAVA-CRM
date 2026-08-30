@@ -1,9 +1,4 @@
-import type {
-  AttentionItem,
-  ChatSummary,
-  LeadSummary,
-  TrialAppointmentSummary,
-} from '@arava/shared';
+import type { AttentionItem, LeadSummary, TrialAppointmentSummary } from '@arava/shared';
 import { expect, it } from 'vitest';
 
 import { buildDashboardWorkspace, countTrialsOnDay } from './dashboard-workspace';
@@ -23,10 +18,11 @@ const trial: TrialAppointmentSummary = {
   startsAt: '2026-08-24T10:00:00.000Z',
   state: 'TODAY',
 };
+
 function attention(overrides: Partial<AttentionItem>): AttentionItem {
   return {
-    actionLabel: 'Открыть ученика',
-    actionRoute: '/students/student-1',
+    actionLabel: 'Продлить абонемент',
+    actionRoute: '/students/student-1?action=subscription',
     category: 'SUBSCRIPTIONS',
     description: 'Требуется действие.',
     entityId: 'student-1',
@@ -38,135 +34,112 @@ function attention(overrides: Partial<AttentionItem>): AttentionItem {
   };
 }
 
-it('prioritizes urgent problems and separates today from the next seven days', () => {
-  const result = buildDashboardWorkspace({
-    attention: [
-      attention({
-        category: 'PAYMENTS',
-        id: 'payment:failed',
-        severity: 'CRITICAL',
-        title: 'Ошибка чека',
-      }),
-      attention({ id: 'subscription:low' }),
-      attention({
-        dueAt: '2026-08-24T15:00:00.000Z',
-        id: 'lesson:today',
-        severity: 'INFO',
-        title: 'Замена сегодня',
-      }),
-      attention({
-        dueAt: '2026-08-27T15:00:00.000Z',
-        id: 'subscription:soon',
-        title: 'Абонемент заканчивается',
-      }),
-    ],
-    chats: [],
-    leads: [],
-    now: NOW,
-    trials: [trial],
-  });
-
-  expect(result.attention.map(({ id }) => id)).toEqual(['payment:failed', 'subscription:low']);
-  expect(result.today.map(({ id }) => id)).toContain('lesson:today');
-  expect(result.today.map(({ id }) => id)).toContain('trial:today:trial-1');
-  expect(result.upcoming.map(({ id }) => id)).toEqual(['subscription:soon']);
-});
-
-it('creates direct actions for new leads and unread chats and removes them after resolution', () => {
-  const lead = {
+function lead(overrides: Partial<LeadSummary> = {}): LeadSummary {
+  return {
     childName: 'Анна',
-    createdAt: new Date(NOW.getTime() - 25 * 60 * 60 * 1000).toISOString(),
+    createdAt: '2026-08-23T08:00:00.000Z',
     id: 'lead-1',
     originalPhone: '+79990000000',
     phone: '+79990000000',
     source: 'WEBSITE',
     status: 'NEW',
     updatedAt: NOW.toISOString(),
-  } satisfies LeadSummary;
-  const chat = {
-    branchId: 'branch-1',
-    crmGroupId: null,
-    id: 'chat-1',
-    lastMessage: 'Подскажите время занятия',
-    lastMessageAt: NOW.toISOString(),
-    linkedStudents: [],
-    subtitle: 'Личный чат',
-    title: 'Андрей',
-    type: 'PRIVATE_ADMIN',
-    unreadCount: 2,
-    updatedAt: NOW.toISOString(),
-  } satisfies ChatSummary;
-  const pending = buildDashboardWorkspace({
-    attention: [],
-    chats: [chat],
-    leads: [lead],
-    now: NOW,
-    trials: [],
-  });
-  expect(pending.today).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ actionRoute: '/leads?leadId=lead-1', id: 'lead:lead-1' }),
-      expect.objectContaining({
-        actionRoute: '/chats?conversationId=chat-1',
-        id: 'chat:chat-1',
-      }),
-    ]),
-  );
+    ...overrides,
+  };
+}
 
-  const resolved = buildDashboardWorkspace({
-    attention: [],
-    chats: [{ ...chat, unreadCount: 0 }],
-    leads: [{ ...lead, status: 'CONTACTED' }],
-    now: NOW,
-    trials: [],
-  });
-  expect(resolved.today).toEqual([]);
-});
-
-it('shows a delayed trial follow-up from canonical attention and removes it after resolution', () => {
-  const pending = buildDashboardWorkspace({
+it('ставит критичную оплату выше обычного долга и важных действий', () => {
+  const result = buildDashboardWorkspace({
     attention: [
       attention({
-        actionRoute: '/students/student-1',
-        category: 'TRIALS',
-        id: 'trial:thinking:trial-1',
-        severity: 'INFO',
-        title: 'Клиент думает после пробного',
+        category: 'PAYMENTS',
+        id: 'student:debt:1',
+        severity: 'WARNING',
+        title: 'Есть задолженность',
+      }),
+      attention({
+        category: 'PAYMENTS',
+        id: 'subscription:payment-integrity:1',
+        severity: 'CRITICAL',
+        title: 'Активный абонемент без полной оплаты',
       }),
     ],
-    chats: [],
-    leads: [],
-    now: NOW,
-    trials: [],
+    leads: [lead()],
+    trials: [trial],
   });
-  expect(pending.attention).toContainEqual(
-    expect.objectContaining({
-      actionRoute: '/students/student-1',
-      id: 'trial:thinking:trial-1',
-      title: 'Клиент думает после пробного',
-    }),
-  );
+
+  expect(result.attention[0]).toMatchObject({
+    id: 'subscription:payment-integrity:1',
+    priority: 'RED',
+  });
+  expect(result.attention.find(({ id }) => id === 'student:debt:1')?.priority).toBe('YELLOW');
+});
+
+it('удаляет обработанную заявку и завершённое пробное из очереди', () => {
+  const pending = buildDashboardWorkspace({
+    attention: [],
+    leads: [lead()],
+    trials: [trial],
+  });
+  expect(pending.attention.map(({ id }) => id)).toEqual(['trial:today:trial-1', 'lead:lead-1']);
 
   const resolved = buildDashboardWorkspace({
     attention: [],
-    chats: [],
-    leads: [],
-    now: NOW,
-    trials: [],
+    leads: [lead({ status: 'CONTACTED' })],
+    trials: [{ ...trial, state: 'SUBSCRIPTION_PURCHASED' }],
   });
-  expect(resolved.today).toEqual([]);
+  expect(resolved.attention).toEqual([]);
 });
 
-it('excludes a cancelled trial from today counters and actions', () => {
-  const cancelled = { ...trial, lessonStatus: 'CANCELLED', state: 'CANCELLED' } as const;
+it('ведёт завершённое пробное в существующий сценарий продажи без дубля', () => {
+  const result = buildDashboardWorkspace({
+    attention: [
+      attention({
+        category: 'TRIALS',
+        entityId: trial.id,
+        id: `trial:outcome:${trial.id}`,
+        title: 'Пробное прошло — укажите результат',
+      }),
+    ],
+    leads: [],
+    trials: [{ ...trial, state: 'FOLLOW_UP', studentId: 'student-1' }],
+  });
+  expect(result.attention).toEqual([
+    expect.objectContaining({
+      actionLabel: 'Оформить абонемент',
+      actionRoute: '/students/student-1?action=subscription',
+      title: 'Связаться после пробного: Мария',
+    }),
+  ]);
+});
+
+it('не превращает существующий статус «думает» в срочную продажу', () => {
   const result = buildDashboardWorkspace({
     attention: [],
-    chats: [],
     leads: [],
-    now: NOW,
-    trials: [cancelled],
+    trials: [{ ...trial, outcome: 'THINKING', state: 'FOLLOW_UP', studentId: 'student-1' }],
   });
+  expect(result.attention).toEqual([]);
+});
 
-  expect(countTrialsOnDay([cancelled], NOW)).toBe(0);
-  expect(result.today).toEqual([]);
+it('ограничивает Today восемью действиями и сохраняет полный счётчик', () => {
+  const result = buildDashboardWorkspace({
+    attention: Array.from({ length: 12 }, (_, index) =>
+      attention({ id: `attention:${String(index)}`, title: `Действие ${String(index)}` }),
+    ),
+    attentionTotal: 12,
+    leads: [lead()],
+    leadsTotal: 3,
+    trials: [trial],
+  });
+  expect(result.attention).toHaveLength(8);
+  expect(result.total).toBe(16);
+});
+
+it('не считает отменённое пробное в показателе дня', () => {
+  const cancelled = { ...trial, lessonStatus: 'CANCELLED', state: 'CANCELLED' } as const;
+  expect(countTrialsOnDay([trial, cancelled], NOW)).toBe(1);
+  expect(
+    buildDashboardWorkspace({ attention: [], leads: [], trials: [cancelled] }).attention,
+  ).toEqual([]);
 });

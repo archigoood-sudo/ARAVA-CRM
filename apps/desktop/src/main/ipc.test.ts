@@ -157,16 +157,170 @@ describe('Electron IPC boundary', () => {
     const dashboard = (await handlers[IPC_CHANNELS.dashboardStats]?.(
       owner.token,
     )) as DashboardStats;
-    expect(dashboard).toMatchObject({
-      expectedToday: 1,
-      lessonsToday: 1,
-    } satisfies Partial<DashboardStats>);
     expect(dashboard.todayLessons).toHaveLength(1);
     expect(dashboard.todayLessons[0]).toMatchObject({
+      attendancePresent: 0,
       branchName: 'Расписание Dashboard',
       expectedStudents: 1,
       groupName: 'KDS BABY',
     });
+  });
+
+  it('keeps Today branch-scoped for ADMIN and rejects COACH access', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!TodayScope2026',
+    });
+    const visible = await service.createBranch(owner.token, { name: 'Today — доступный' });
+    const hidden = await service.createBranch(owner.token, { name: 'Today — скрытый' });
+    await service.createUser(owner.token, {
+      branchIds: [visible.id],
+      email: 'today-admin@arava.local',
+      fullName: 'Администратор Today',
+      password: 'Admin!TodayScope2026',
+      role: 'ADMIN',
+    });
+    await service.createUser(owner.token, {
+      branchIds: [visible.id],
+      email: 'today-coach@arava.local',
+      fullName: 'Тренер Today',
+      password: 'Coach!TodayScope2026',
+      role: 'COACH',
+    });
+    const admin = await service.login({
+      email: 'today-admin@arava.local',
+      password: 'Admin!TodayScope2026',
+    });
+    const coach = await service.login({
+      email: 'today-coach@arava.local',
+      password: 'Coach!TodayScope2026',
+    });
+    await Promise.all([
+      service.changePassword(admin.token, {
+        currentPassword: 'Admin!TodayScope2026',
+        newPassword: 'Admin!TodayChanged2026',
+      }),
+      service.changePassword(coach.token, {
+        currentPassword: 'Coach!TodayScope2026',
+        newPassword: 'Coach!TodayChanged2026',
+      }),
+    ]);
+    const studio = new StudioService(database, service);
+    const [visibleGroup, hiddenGroup] = await Promise.all([
+      studio.createGroup(owner.token, {
+        branchId: visible.id,
+        capacity: 14,
+        direction: 'Dance',
+        name: 'Видимая группа',
+        status: 'ACTIVE',
+      }),
+      studio.createGroup(owner.token, {
+        branchId: hidden.id,
+        capacity: 14,
+        direction: 'Dance',
+        name: 'Скрытая группа',
+        status: 'ACTIVE',
+      }),
+    ]);
+    const [visibleStudent, hiddenStudent] = await Promise.all([
+      service.createStudent(owner.token, {
+        branchId: visible.id,
+        firstName: 'Видимый',
+        lastName: 'Ученик',
+        status: 'ACTIVE',
+      }),
+      service.createStudent(owner.token, {
+        branchId: hidden.id,
+        firstName: 'Скрытый',
+        lastName: 'Ученик',
+        status: 'ACTIVE',
+      }),
+    ]);
+    await Promise.all([
+      studio.addEnrollment(owner.token, visibleGroup.id, {
+        joinedAt: '2026-01-01',
+        overrideCapacity: false,
+        status: 'ACTIVE',
+        studentId: visibleStudent.id,
+      }),
+      studio.addEnrollment(owner.token, hiddenGroup.id, {
+        joinedAt: '2026-01-01',
+        overrideCapacity: false,
+        status: 'ACTIVE',
+        studentId: hiddenStudent.id,
+      }),
+    ]);
+    const now = new Date();
+    const startsAt = new Date(now.getTime() - 10 * 60_000);
+    const endsAt = new Date(now.getTime() + 50 * 60_000);
+    const [visibleLesson] = await Promise.all([
+      database.lesson.create({
+        data: { branchId: visible.id, endsAt, groupId: visibleGroup.id, startsAt },
+      }),
+      database.lesson.create({
+        data: { branchId: hidden.id, endsAt, groupId: hiddenGroup.id, startsAt },
+      }),
+      database.lesson.create({
+        data: {
+          branchId: visible.id,
+          endsAt: new Date(endsAt.getTime() + 7_200_000),
+          groupId: visibleGroup.id,
+          startsAt: new Date(startsAt.getTime() + 7_200_000),
+          status: 'CANCELLED',
+        },
+      }),
+    ]);
+    await database.attendance.create({
+      data: {
+        lessonId: visibleLesson.id,
+        markedAt: now,
+        markedByUserId: owner.user.id,
+        status: 'PRESENT',
+        studentId: visibleStudent.id,
+      },
+    });
+    await database.payment.createMany({
+      data: [
+        {
+          amount: 100_000,
+          branchId: visible.id,
+          createdByUserId: owner.user.id,
+          paidAt: now,
+          paymentMethod: 'CARD',
+          studentId: visibleStudent.id,
+        },
+        {
+          amount: 500_000,
+          branchId: hidden.id,
+          createdByUserId: owner.user.id,
+          paidAt: now,
+          paymentMethod: 'CARD',
+          studentId: hiddenStudent.id,
+        },
+      ],
+    });
+    const handlers = createIpcHandlers(database, service, '/test/arava.db');
+    const dashboard = (await handlers[IPC_CHANNELS.dashboardStats]?.(
+      admin.token,
+    )) as DashboardStats;
+    expect(dashboard.todayLessons).toHaveLength(1);
+    expect(dashboard.todayLessons[0]).toMatchObject({
+      attendanceMarked: 1,
+      attendancePresent: 1,
+      branchId: visible.id,
+      groupName: 'Видимая группа',
+    });
+    expect(dashboard.receivedToday).toBe(100_000);
+    expect(
+      dashboard.attentionItems.every(
+        ({ branchId }) => branchId === undefined || branchId === visible.id,
+      ),
+    ).toBe(true);
+    await expect(handlers[IPC_CHANNELS.dashboardStats]?.(coach.token)).rejects.toThrow();
   });
 
   it('exposes safe sync health to ADMIN but keeps diagnostics and management OWNER-only', async () => {
