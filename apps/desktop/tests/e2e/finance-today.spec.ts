@@ -2,7 +2,7 @@ import { _electron as electron, expect, test } from '@playwright/test';
 import type { AravaDesktopApi } from '@arava/shared';
 import { resolve } from 'node:path';
 
-test('финансы сегодня показывают продажу, частичную оплату, доплату и разовое посещение', async ({
+test('финансы сегодня показывают полную продажу, возврат, доплату и разовое посещение', async ({
   request: _request,
 }, testInfo) => {
   test.setTimeout(process.env.CI ? 240_000 : 150_000);
@@ -89,7 +89,7 @@ test('финансы сегодня показывают продажу, час�
       });
       const subscription = await api.subscriptions.create(token, {
         initialPayment: {
-          amount: 20_000,
+          amount: 33_000,
           paidAt: new Date().toISOString(),
           paymentMethod: 'CASH',
         },
@@ -98,17 +98,24 @@ test('финансы сегодня показывают продажу, час�
         studentId: student.id,
         tariffId: tariff.id,
       });
+      const salePayment = subscription.payments[0];
+      if (!salePayment) throw new Error('Sale payment was not created');
+      await api.refunds.create(token, salePayment.id, {
+        amount: 13_000,
+        reason: 'Частичный возврат E2E',
+        refundedAt: new Date().toISOString(),
+      });
       return { branchId: branch.id, studentId: student.id, subscriptionId: subscription.id, token };
     });
 
     await page.getByRole('link', { name: 'Финансы' }).click();
     await expect(page.getByRole('heading', { name: 'Финансы' })).toBeVisible();
     const received = page.getByText('Принято сегодня').locator('..');
-    await expect(received).toContainText('215 ₽');
+    await expect(received).toContainText('345 ₽');
     await expect(page.getByText('Продано абонементов').locator('..')).toContainText('1');
     await expect(page.getByText('Абонементов оформлено на').locator('..')).toContainText('330 ₽');
     await expect(page.getByText('Оплачено разовых посещений').locator('..')).toContainText('15 ₽');
-    await expect(page.getByText('Абонемент «Абонемент E2E»')).toBeVisible();
+    await expect(page.getByText('Абонемент «Абонемент E2E»', { exact: true })).toBeVisible();
     await expect(page.getByText('Разовое посещение').first()).toBeVisible();
 
     await page.evaluate(async ({ branchId, studentId, subscriptionId, token }) => {
@@ -123,11 +130,11 @@ test('финансы сегодня показывают продажу, час�
       });
     }, context);
     await page.getByRole('button', { name: 'Обновить' }).click();
-    await expect(received).toContainText('265 ₽');
+    await expect(received).toContainText('395 ₽');
     await expect(page.getByText('Доплата по абонементу «Абонемент E2E»')).toBeVisible();
     await page.getByRole('button', { name: 'Аналитика' }).click();
     const analytics = page.getByTestId('finance-analytics');
-    await expect(analytics.getByText('Получено').locator('..')).toContainText('265 ₽');
+    await expect(analytics.getByText('Получено').locator('..')).toContainText('395 ₽');
     await expect(analytics.getByText('Чистый приход', { exact: true }).locator('..')).toContainText(
       '265 ₽',
     );
@@ -136,7 +143,7 @@ test('финансы сегодня показывают продажу, час�
     await expect(analytics.getByText('Способы оплаты')).toBeVisible();
     await expect(analytics.getByText('Чистый приход по дням')).toBeVisible();
     await analytics.getByLabel('Период аналитики').selectOption('SEVEN_DAYS');
-    await expect(analytics.getByText('Получено').locator('..')).toContainText('265 ₽');
+    await expect(analytics.getByText('Получено').locator('..')).toContainText('395 ₽');
     await page.getByRole('button', { name: 'Сегодня' }).click();
     await page.getByText('Финансы E2E Анна').first().click();
     await expect(page).toHaveURL(new RegExp(`/students/${context.studentId}$`, 'u'));

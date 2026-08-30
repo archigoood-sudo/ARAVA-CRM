@@ -107,6 +107,14 @@ describe('Sprint 4.2B attention center', () => {
         tariffId: tariff.id,
       },
     });
+    items = await attention.listItems(ownerToken);
+    expect(items.map(({ id }) => id)).toContain(
+      `subscription:payment-integrity:${subscription.id}`,
+    );
+    expect(
+      await database.subscription.findUniqueOrThrow({ where: { id: subscription.id } }),
+    ).toMatchObject({ status: 'ACTIVE' });
+    expect(await database.payment.count({ where: { subscriptionId: subscription.id } })).toBe(0);
     const payment = await database.payment.create({
       data: {
         amount: 4_000,
@@ -131,6 +139,7 @@ describe('Sprint 4.2B attention center', () => {
     expect(items.map(({ id }) => id)).toEqual(
       expect.arrayContaining([
         `subscription:expiring:${subscription.id}`,
+        `subscription:payment-integrity:${subscription.id}`,
         `student:debt:${student.id}`,
         `card:lost:${card.id}`,
       ]),
@@ -161,6 +170,7 @@ describe('Sprint 4.2B attention center', () => {
       expect.arrayContaining([
         `subscription:low:${subscription.id}`,
         `subscription:expiring:${subscription.id}`,
+        `subscription:payment-integrity:${subscription.id}`,
         `student:debt:${student.id}`,
         `card:lost:${card.id}`,
       ]),

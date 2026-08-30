@@ -48,6 +48,7 @@ import type { ApplicationService } from './services';
 import {
   addDays,
   reconcileStudentAttendanceCoverage,
+  subscriptionHasSuccessfulFullPayment,
   subscriptionStatusAt,
 } from './subscription-ledger';
 import { DAY_MS, isExpiringSoon, isLowLessonBalance } from './attention-rules';
@@ -544,17 +545,17 @@ export async function createCanonicalSubscription(
   client: Prisma.TransactionClient,
   actor: AuthenticatedUser,
   input: SubscriptionCreateInput,
-): Promise<{ id: string }> {
+  subscriptionPaymentOperationId?: string,
+): Promise<{ id: string; paymentId: string }> {
   assertPermission(actor, 'subscriptions:manage');
-  if (!Number.isInteger(input.salePrice) || input.salePrice < 0)
-    throw new DomainError('VALIDATION', t('validation.money'));
+  if (!Number.isInteger(input.salePrice) || input.salePrice <= 0)
+    throw new DomainError('VALIDATION', 'Абонемент должен иметь положительную стоимость.');
   if (
-    input.initialPayment &&
-    (!Number.isInteger(input.initialPayment.amount) ||
-      input.initialPayment.amount <= 0 ||
-      input.initialPayment.amount > input.salePrice)
+    !input.initialPayment ||
+    !Number.isInteger(input.initialPayment.amount) ||
+    input.initialPayment.amount !== input.salePrice
   )
-    throw new DomainError('VALIDATION', t('validation.payment.exceedsSale'));
+    throw new DomainError('VALIDATION', 'Абонемент выдаётся только после полной успешной оплаты.');
   if (input.idempotencyKey) {
     const existing = await client.subscription.findUnique({
       where: { saleIdempotencyKey: input.idempotencyKey },
@@ -570,7 +571,19 @@ export async function createCanonicalSubscription(
         (input.expiresAt && existing.expiresAt?.getTime() !== requestedExpiresAt?.getTime())
       )
         throw new DomainError('CONFLICT', 'Ключ продажи уже использован для другого абонемента.');
-      return { id: existing.id };
+      const payment = await client.payment.findFirst({
+        orderBy: { createdAt: 'asc' },
+        where: { status: { not: 'CANCELLED' }, subscriptionId: existing.id },
+      });
+      if (
+        !payment ||
+        !(await subscriptionHasSuccessfulFullPayment(client, existing.id, existing.salePrice))
+      )
+        throw new DomainError(
+          'CONFLICT',
+          'Продажа с этим ключом не имеет подтверждённой полной оплаты.',
+        );
+      return { id: existing.id, paymentId: payment.id };
     }
   }
   const student = await client.student.findUnique({ where: { id: input.studentId } });
@@ -581,6 +594,8 @@ export async function createCanonicalSubscription(
   if (!tariff) throw new DomainError('NOT_FOUND', t('domain.notFound.tariff'));
   if (!tariff.isActive || tariff.archivedAt)
     throw new DomainError('VALIDATION', t('domain.validation.tariffArchived'));
+  if (!subscriptionPaymentOperationId && input.salePrice !== tariff.price)
+    throw new DomainError('VALIDATION', 'Стоимость тарифа изменилась. Выберите тариф заново.');
   const branchId = tariff.branchId ?? student.branchId;
   if (tariff.branchId && tariff.branchId !== student.branchId)
     throw new DomainError('VALIDATION', t('domain.validation.tariffBranch'));
@@ -594,6 +609,15 @@ export async function createCanonicalSubscription(
       : null;
   if (expiresAt && expiresAt < startsAt)
     throw new DomainError('VALIDATION', 'Дата окончания не может быть раньше даты начала.');
+  const payment = await createCanonicalPayment(client, actor, {
+    amount: input.initialPayment.amount,
+    branchId,
+    comment: input.initialPayment.comment,
+    externalReference: input.initialPayment.externalReference,
+    paidAt: input.initialPayment.paidAt,
+    paymentMethod: input.initialPayment.paymentMethod,
+    studentId: input.studentId,
+  });
   const subscription = await client.subscription.create({
     data: {
       branchId,
@@ -605,7 +629,13 @@ export async function createCanonicalSubscription(
       saleIdempotencyKey: input.idempotencyKey ?? null,
       salePrice: input.salePrice,
       startsAt,
-      status: startsAt > new Date() ? 'PENDING' : 'ACTIVE',
+      status: subscriptionStatusAt({
+        expiresAt,
+        lessonLimit,
+        lessonsUsed: 0,
+        startsAt,
+        status: 'PENDING',
+      }),
       studentId: input.studentId,
       tariffId: input.tariffId,
     },
@@ -620,17 +650,10 @@ export async function createCanonicalSubscription(
       type: 'PURCHASE',
     },
   });
-  if (input.initialPayment)
-    await createCanonicalPayment(client, actor, {
-      amount: input.initialPayment.amount,
-      branchId,
-      comment: input.initialPayment.comment,
-      externalReference: input.initialPayment.externalReference,
-      paidAt: input.initialPayment.paidAt,
-      paymentMethod: input.initialPayment.paymentMethod,
-      studentId: input.studentId,
-      subscriptionId: subscription.id,
-    });
+  await client.payment.update({
+    data: { subscriptionId: subscription.id },
+    where: { id: payment.id },
+  });
   await client.auditLog.create({
     data: {
       action: 'SUBSCRIPTION_CREATED',
@@ -649,8 +672,8 @@ export async function createCanonicalSubscription(
       action: 'SUBSCRIPTION_SALE_COMPLETED',
       actorUserId: actor.id,
       detail: JSON.stringify({
-        amount: input.initialPayment?.amount ?? 0,
-        paymentMethod: input.initialPayment?.paymentMethod ?? 'NONE',
+        amount: input.initialPayment.amount,
+        paymentMethod: input.initialPayment.paymentMethod,
         salePrice: input.salePrice,
         startsAt: input.startsAt,
         tariffId: input.tariffId,
@@ -669,7 +692,7 @@ export async function createCanonicalSubscription(
     data: { outcome: 'PURCHASED', version: { increment: 1 } },
     where: { outcome: null, status: 'BOOKED', studentId: student.id, supersededAt: null },
   });
-  return subscription;
+  return { id: subscription.id, paymentId: payment.id };
 }
 
 export async function assertDirectAttendancePayment(
@@ -1279,7 +1302,10 @@ export class FinanceService {
     });
     const summaries = subscriptions.map((subscription) => ({
       ...subscriptionSummary(subscription, now),
-      status: subscriptionStatusAt(subscription, now),
+      status:
+        subscription.status === 'PENDING' && paidAmount(subscription) < subscription.salePrice
+          ? 'PENDING'
+          : subscriptionStatusAt(subscription, now),
     }));
     const canSeeDebt = actor.role !== 'COACH';
     const uncoveredDebt = canSeeDebt
@@ -1357,18 +1383,25 @@ export class FinanceService {
     if (lessonLimit !== null && current.lessonsUsed > lessonLimit)
       throw new DomainError('VALIDATION', 'Новый тариф не может вместить уже учтённые занятия.');
     await this.database.$transaction(async (transaction) => {
+      const desiredStatus = subscriptionStatusAt({
+        ...current,
+        expiresAt,
+        lessonLimit,
+        startsAt,
+      });
+      const status =
+        desiredStatus === 'ACTIVE' && current.status !== 'ACTIVE'
+          ? (await subscriptionHasSuccessfulFullPayment(transaction, id, current.salePrice))
+            ? desiredStatus
+            : 'PENDING'
+          : desiredStatus;
       await transaction.subscription.update({
         data: {
           expiresAt,
           lessonLimit,
           notes: optionalValue(input.notes),
           startsAt,
-          status: subscriptionStatusAt({
-            ...current,
-            expiresAt,
-            lessonLimit,
-            startsAt,
-          }),
+          status,
           tariffId: input.tariffId,
         },
         where: { id },
@@ -1485,6 +1518,11 @@ export class FinanceService {
     assertBranchAccess(actor, subscription.branchId);
     if (subscription.status !== 'FROZEN')
       throw new DomainError('VALIDATION', t('domain.validation.notFrozen'));
+    if (!(await subscriptionHasSuccessfulFullPayment(this.database, id, subscription.salePrice)))
+      throw new DomainError(
+        'VALIDATION',
+        'Абонемент нельзя активировать без подтверждённой полной оплаты.',
+      );
     await this.unfreeze(this.database, subscription, actor.id, new Date());
     return this.getSubscription(token, id);
   }
@@ -1505,8 +1543,15 @@ export class FinanceService {
     if (lessonsUsed < 0)
       throw new DomainError('VALIDATION', t('domain.validation.negativeLessonUsage'));
     await this.database.$transaction(async (transaction) => {
+      const desiredStatus = subscriptionStatusAt({ ...subscription, lessonsUsed });
+      const status =
+        desiredStatus === 'ACTIVE' && subscription.status !== 'ACTIVE'
+          ? (await subscriptionHasSuccessfulFullPayment(transaction, id, subscription.salePrice))
+            ? desiredStatus
+            : 'PENDING'
+          : desiredStatus;
       await transaction.subscription.update({
-        data: { lessonsUsed, status: subscriptionStatusAt({ ...subscription, lessonsUsed }) },
+        data: { lessonsUsed, status },
         where: { id },
       });
       const ledger = await transaction.subscriptionLedger.create({
@@ -2485,10 +2530,28 @@ export class FinanceService {
       subscription.freezeEndsAt &&
       subscription.freezeEndsAt <= now
     ) {
+      if (
+        !(await subscriptionHasSuccessfulFullPayment(
+          this.database,
+          subscription.id,
+          subscription.salePrice,
+        ))
+      )
+        return;
       await this.unfreeze(this.database, subscription, actorUserId, subscription.freezeEndsAt);
       return;
     }
-    const status = subscriptionStatusAt(subscription, now);
+    const desiredStatus = subscriptionStatusAt(subscription, now);
+    const status =
+      desiredStatus === 'ACTIVE' && subscription.status !== 'ACTIVE'
+        ? (await subscriptionHasSuccessfulFullPayment(
+            this.database,
+            subscription.id,
+            subscription.salePrice,
+          ))
+          ? desiredStatus
+          : 'PENDING'
+        : desiredStatus;
     if (status !== subscription.status)
       await this.database.subscription.update({ data: { status }, where: { id: subscription.id } });
   }

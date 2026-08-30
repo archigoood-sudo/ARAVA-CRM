@@ -126,21 +126,12 @@ test('вход, создание филиала, ученика и контак�
     await window.getByRole('button', { name: 'Продать абонемент' }).first().click();
     const subscriptionDialog = window.getByRole('dialog');
     await subscriptionDialog.getByLabel('Тариф').selectOption({ index: 1 });
-    await subscriptionDialog.getByLabel('Оплата при продаже').selectOption('PARTIAL');
-    await subscriptionDialog.getByLabel('Сумма, ₽').fill('1000');
     await subscriptionDialog.getByRole('button', { name: 'Продолжить к оплате' }).click();
     const firstPaymentDialog = window.getByRole('dialog');
     await expect(firstPaymentDialog.getByText('Абонемент E2E')).toBeVisible();
-    await expect(firstPaymentDialog.getByLabel('Сумма, ₽')).toHaveValue('1000');
-    await firstPaymentDialog.getByRole('button', { name: /Принять .* и выдать/u }).click();
+    await expect(firstPaymentDialog.getByLabel('Сумма, ₽')).toHaveValue('4000');
+    await firstPaymentDialog.getByRole('button', { name: 'Оплатить и выдать' }).click();
     await expect(window.getByRole('button', { name: /Абонемент E2E/u })).toBeVisible();
-
-    await window.getByRole('button', { name: 'Принять оплату' }).first().click();
-    const paymentDialog = window.getByRole('dialog');
-    await expect(paymentDialog.getByText('Абонемент E2E')).toBeVisible();
-    await expect(paymentDialog.getByLabel('Сумма, ₽')).toHaveValue('3000');
-    await paymentDialog.getByRole('button', { name: 'Принять оплату', exact: true }).click();
-    await expect(paymentDialog).not.toBeVisible();
 
     await window.getByRole('link', { name: 'Главная', exact: true }).click();
     await expect(
@@ -274,12 +265,12 @@ test('вход, создание филиала, ученика и контак�
     await window.getByRole('button', { name: 'Операции' }).click();
     const fullPaymentRow = window
       .getByRole('row')
-      .filter({ hasText: /3[\s\u00a0]000/u })
+      .filter({ hasText: /4[\s\u00a0]000/u })
       .last();
     await fullPaymentRow.click();
     await window.getByRole('button', { name: 'Оформить возврат' }).click();
     const refundDialog = window.getByRole('dialog').last();
-    await refundDialog.getByLabel('Сумма возврата, ₽').fill('3000');
+    await refundDialog.getByLabel('Сумма возврата, ₽').fill('4000');
     await refundDialog.getByLabel('Причина возврата').fill('Возврат по заявлению родителя');
     await refundDialog.getByRole('button', { name: 'Оформить возврат' }).click();
     await expect(

@@ -441,6 +441,24 @@ export class AttentionService {
         });
 
       for (const subscription of activeSubscriptions) {
+        const paid = subscription.payments.reduce((sum, payment) => sum + paymentNet(payment), 0);
+        if (
+          actor.role === 'OWNER' &&
+          (subscription.payments.length === 0 || paid < subscription.salePrice)
+        )
+          add({
+            ...common,
+            actionLabel: 'Проверить историю',
+            actionRoute: `/students/${student.id}?section=subscription`,
+            category: 'PAYMENTS',
+            description: `Абонемент «${subscription.tariff.name}» сохранён как действующий, но подтверждённая полная оплата не найдена. Запись не изменена; проверьте историю продажи вручную.`,
+            entityId: subscription.id,
+            entityType: 'Subscription',
+            id: `subscription:payment-integrity:${subscription.id}`,
+            occurredAt: subscription.updatedAt.toISOString(),
+            severity: 'CRITICAL',
+            title: `${name}: активный абонемент без полной оплаты`,
+          });
         const remaining =
           subscription.lessonLimit === null
             ? undefined

@@ -943,7 +943,7 @@ describe('Electron IPC boundary', () => {
     })) as TariffSummary;
     const subscription = (await handlers[IPC_CHANNELS.subscriptionCreate]?.(owner.token, {
       initialPayment: {
-        amount: 20_000,
+        amount: 40_000,
         paidAt: new Date().toISOString(),
         paymentMethod: 'CARD',
       },
@@ -952,7 +952,7 @@ describe('Electron IPC boundary', () => {
       studentId: student.id,
       tariffId: tariff.id,
     })) as SubscriptionDetail;
-    expect(subscription).toMatchObject({ debt: 20_000, lessonLimit: 4, paidAmount: 20_000 });
+    expect(subscription).toMatchObject({ debt: 0, lessonLimit: 4, paidAmount: 40_000 });
     expect(
       await handlers[IPC_CHANNELS.paymentList]?.(owner.token, {
         dateFrom: new Date(Date.now() - 86_400_000).toISOString(),
@@ -1901,11 +1901,18 @@ describe('Electron IPC boundary', () => {
       type: 'LESSON_PACK',
       validityDays: 30,
     })) as TariffSummary;
-    await handlers[IPC_CHANNELS.subscriptionCreate]?.(owner.token, {
-      salePrice: 12_000,
-      startsAt: new Date().toISOString().slice(0, 10),
-      studentId: student.id,
-      tariffId: tariff.id,
+    await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: owner.user.id,
+        lessonLimit: 4,
+        purchasedAt: new Date(),
+        salePrice: 12_000,
+        startsAt: new Date(),
+        status: 'ACTIVE',
+        studentId: student.id,
+        tariffId: tariff.id,
+      },
     });
     const debts = (await handlers[IPC_CHANNELS.financeDebtOverview]?.(owner.token, {
       debtType: 'ALL',

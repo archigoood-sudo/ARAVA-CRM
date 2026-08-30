@@ -55,11 +55,23 @@ test('долги позволяют частично и полностью оп�
         type: 'LESSON_PACK',
         validityDays: 30,
       });
-      await api.subscriptions.create(token, {
+      const subscription = await api.subscriptions.create(token, {
+        initialPayment: {
+          amount: 130_000,
+          paidAt: new Date().toISOString(),
+          paymentMethod: 'CARD',
+        },
         salePrice: 130_000,
         startsAt: new Date().toISOString().slice(0, 10),
         studentId: subscriptionStudent.id,
         tariffId: pack.id,
+      });
+      const salePayment = subscription.payments[0];
+      if (!salePayment) throw new Error('Sale payment was not created');
+      await api.refunds.create(token, salePayment.id, {
+        amount: 130_000,
+        reason: 'Полный возврат для проверки долга E2E',
+        refundedAt: new Date().toISOString(),
       });
       await api.tariffs.create(token, {
         branchId: branch.id,
@@ -164,8 +176,12 @@ test('долги позволяют частично и полностью оп�
     await expect(page.getByText('Задолженностей нет')).toBeVisible();
 
     await page.getByRole('button', { name: 'Операции' }).click();
-    await expect(page.getByText('Абонемент «Долговой абонемент E2E»')).toBeVisible();
-    await expect(page.getByText('Доплата по абонементу «Долговой абонемент E2E»')).toBeVisible();
+    await expect(
+      page.getByText('Абонемент «Долговой абонемент E2E»', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText('Доплата по абонементу «Долговой абонемент E2E»').first(),
+    ).toBeVisible();
     await expect(page.getByText(/Разовое посещение · .* · Группа долга E2E/u)).toBeVisible();
   } finally {
     await application.close();

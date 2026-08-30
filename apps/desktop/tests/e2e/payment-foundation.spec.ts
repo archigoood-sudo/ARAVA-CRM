@@ -93,10 +93,22 @@ test('платёжная операция становится одним под
         validityDays: 30,
       });
       const subscription = await api.subscriptions.create(token, {
+        initialPayment: {
+          amount: 100_000,
+          paidAt: new Date().toISOString(),
+          paymentMethod: 'CASH',
+        },
         salePrice: 100_000,
         startsAt: new Date().toISOString().slice(0, 10),
         studentId: student.id,
         tariffId: tariff.id,
+      });
+      const salePayment = subscription.payments[0];
+      if (!salePayment) throw new Error('Sale payment was not created');
+      await api.refunds.create(token, salePayment.id, {
+        amount: 100_000,
+        reason: 'Возврат для проверки операции E2E',
+        refundedAt: new Date().toISOString(),
       });
       const operation = await api.paymentOperations.create(token, {
         amount: 25_000,
@@ -155,7 +167,7 @@ test('платёжная операция становится одним под
       };
     }, context);
     expect(result.operation.status).toBe('SUCCEEDED');
-    expect(result.payments).toHaveLength(2);
+    expect(result.payments).toHaveLength(3);
     expect(result.debt).toBe(75_000);
 
     await page.getByRole('link', { name: 'Главная', exact: true }).click();
@@ -163,7 +175,9 @@ test('платёжная операция становится одним под
     let search = page.getByRole('region', { name: 'Глобальный поиск' });
     await search.getByLabel('Поиск по приложению').fill('Оплатина E2E Анна');
     await search.getByRole('button', { name: /Оплатина E2E Анна/u }).click();
-    await expect(page.getByRole('heading', { name: 'Оплатина E2E Анна' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { exact: true, name: 'Оплатина E2E Анна' }),
+    ).toBeVisible();
     await page.getByText('Операции оплаты').click();
     await page
       .getByRole('button', { name: 'Открыть детали оплаты: Исторический чек с ошибкой' })
@@ -183,8 +197,8 @@ test('платёжная операция становится одним под
         })
       ).filter(({ studentId: id }) => id === studentId);
     }, context);
-    expect(afterHistoricalRetry).toHaveLength(2);
-    expect(afterHistoricalRetry.reduce((sum, item) => sum + item.amount, 0)).toBe(26_500);
+    expect(afterHistoricalRetry).toHaveLength(3);
+    expect(afterHistoricalRetry.reduce((sum, item) => sum + item.amount, 0)).toBe(126_500);
     await page.getByRole('button', { name: 'Закрыть' }).last().click();
 
     await page.getByRole('button', { name: 'Принять оплату' }).last().click();
@@ -226,7 +240,7 @@ test('платёжная операция становится одним под
         })
       ).filter(({ studentId: id }) => id === studentId);
     }, context);
-    expect(afterQr).toHaveLength(4);
+    expect(afterQr).toHaveLength(5);
     expect(afterQr.filter(({ paymentMethod }) => paymentMethod === 'SBP')).toHaveLength(2);
     expect(afterQr.filter(({ paymentMethod }) => paymentMethod === 'ACQUIRING')).toEqual([
       expect.objectContaining({ amount: 10_000 }),

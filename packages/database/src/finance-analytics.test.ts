@@ -63,6 +63,43 @@ describe('Finance analytics', () => {
     dateTo: '2026-08-07',
   });
 
+  async function createLegacySubscription(input: {
+    branchId: string;
+    initialPayment?: number;
+    lessonLimit: number;
+    purchasedAt: Date;
+    salePrice: number;
+    studentId: string;
+    tariffId: string;
+  }) {
+    const subscription = await database.subscription.create({
+      data: {
+        branchId: input.branchId,
+        createdByUserId: ownerId,
+        lessonLimit: input.lessonLimit,
+        purchasedAt: input.purchasedAt,
+        salePrice: input.salePrice,
+        startsAt: input.purchasedAt,
+        status: 'ACTIVE',
+        studentId: input.studentId,
+        tariffId: input.tariffId,
+      },
+    });
+    if (input.initialPayment !== undefined)
+      await database.payment.create({
+        data: {
+          amount: input.initialPayment,
+          branchId: input.branchId,
+          createdByUserId: ownerId,
+          paidAt: input.purchasedAt,
+          paymentMethod: 'CASH',
+          studentId: input.studentId,
+          subscriptionId: subscription.id,
+        },
+      });
+    return subscription;
+  }
+
   it('returns a stable empty period and a finite previous-period comparison', async () => {
     const result = await finance.financeAnalytics(ownerToken, query());
     expect(result).toMatchObject({
@@ -148,20 +185,14 @@ describe('Finance analytics', () => {
       type: 'LESSON_PACK',
       validityDays: 30,
     });
-    const subscription = await finance.createSubscription(ownerToken, {
-      initialPayment: {
-        amount: 5_000,
-        paidAt: '2026-08-02T10:00:00.000Z',
-        paymentMethod: 'CASH',
-      },
+    await createLegacySubscription({
+      branchId: branch.id,
+      initialPayment: 5_000,
+      lessonLimit: 8,
+      purchasedAt: new Date('2026-08-02T10:00:00.000Z'),
       salePrice: 20_000,
-      startsAt: '2026-08-02',
       studentId: student.id,
       tariffId: tariff.id,
-    });
-    await database.subscription.update({
-      data: { purchasedAt: new Date('2026-08-02T10:00:00.000Z') },
-      where: { id: subscription.id },
     });
     await database.payment.create({
       data: {
@@ -225,15 +256,13 @@ describe('Finance analytics', () => {
         price: (index + 1) * 1_000,
         type: 'LESSON_PACK',
       });
-      const subscription = await finance.createSubscription(ownerToken, {
+      await createLegacySubscription({
+        branchId: branch.id,
+        lessonLimit: 4,
+        purchasedAt: new Date(Date.now() - days * 86_400_000),
         salePrice: (index + 1) * 1_000,
-        startsAt: new Date().toISOString().slice(0, 10),
         studentId: student.id,
         tariffId: tariff.id,
-      });
-      await database.subscription.update({
-        data: { purchasedAt: new Date(Date.now() - days * 86_400_000) },
-        where: { id: subscription.id },
       });
     }
     expect((await finance.financeAnalytics(ownerToken, query())).aging.buckets).toEqual([
@@ -326,9 +355,11 @@ describe('Finance analytics', () => {
       price: 9_000,
       type: 'LESSON_PACK',
     });
-    await finance.createSubscription(ownerToken, {
+    await createLegacySubscription({
+      branchId: branch.id,
+      lessonLimit: 4,
+      purchasedAt: new Date('2026-08-01T10:00:00.000Z'),
       salePrice: 9_000,
-      startsAt: '2026-08-01',
       studentId: student.id,
       tariffId: tariff.id,
     });

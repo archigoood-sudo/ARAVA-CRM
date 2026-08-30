@@ -202,8 +202,8 @@ export class PaymentOperationService {
         throw new DomainError('VALIDATION', 'Тариф относится к другому филиалу.');
       if (input.saleIntent.salePrice !== tariff.price)
         throw new DomainError('VALIDATION', 'Стоимость тарифа изменилась. Выберите тариф заново.');
-      if (input.amount > input.saleIntent.salePrice)
-        throw new DomainError('VALIDATION', 'Сумма оплаты превышает стоимость абонемента.');
+      if (input.amount !== input.saleIntent.salePrice)
+        throw new DomainError('VALIDATION', 'Для продажи абонемента требуется полная оплата.');
     }
     try {
       const created = await this.database.$transaction(async (transaction) => {
@@ -408,43 +408,60 @@ export class PaymentOperationService {
             'Операция не может быть завершена в текущем состоянии.',
           );
         let subscriptionId = locked.subscriptionId;
+        let paymentId: string;
         if (locked.saleTariffId && locked.saleStartsAt && locked.salePrice !== null) {
-          const subscription = await createCanonicalSubscription(transaction, actor, {
-            ...(locked.saleExpiresAt ? { expiresAt: localDate(locked.saleExpiresAt) } : {}),
-            idempotencyKey: locked.idempotencyKey,
-            ...(locked.saleNotes ? { notes: locked.saleNotes } : {}),
-            salePrice: locked.salePrice,
-            startsAt: localDate(locked.saleStartsAt),
-            studentId: locked.studentId,
-            tariffId: locked.saleTariffId,
-          });
+          const subscription = await createCanonicalSubscription(
+            transaction,
+            actor,
+            {
+              ...(locked.saleExpiresAt ? { expiresAt: localDate(locked.saleExpiresAt) } : {}),
+              idempotencyKey: locked.idempotencyKey,
+              ...(locked.saleNotes ? { notes: locked.saleNotes } : {}),
+              salePrice: locked.salePrice,
+              startsAt: localDate(locked.saleStartsAt),
+              studentId: locked.studentId,
+              tariffId: locked.saleTariffId,
+              initialPayment: {
+                amount: locked.amount,
+                comment: locked.purpose,
+                externalReference:
+                  completion.providerResultId ?? completion.providerOperationId ?? locked.id,
+                paidAt: new Date().toISOString(),
+                paymentMethod: completion.paymentMethod,
+              },
+            },
+            locked.id,
+          );
           subscriptionId = subscription.id;
+          paymentId = subscription.paymentId;
+        } else {
+          const payment = await createCanonicalPayment(transaction, actor, {
+            amount: locked.amount,
+            branchId: locked.branchId,
+            comment: locked.purpose,
+            externalReference:
+              completion.providerResultId ?? completion.providerOperationId ?? locked.id,
+            paidAt: new Date().toISOString(),
+            paymentMethod: completion.paymentMethod,
+            studentId: locked.studentId,
+            ...(subscriptionId ? { subscriptionId } : {}),
+            ...(subscriptionId ? { subscriptionPaymentOperationId: locked.id } : {}),
+            ...(locked.attendanceLessonId
+              ? {
+                  attendanceLessonId: locked.attendanceLessonId,
+                  attendancePaymentOperationId: locked.id,
+                  attendanceTariffId: locked.attendanceTariffId ?? undefined,
+                }
+              : {}),
+          });
+          paymentId = payment.id;
         }
-        const payment = await createCanonicalPayment(transaction, actor, {
-          amount: locked.amount,
-          branchId: locked.branchId,
-          comment: locked.purpose,
-          externalReference:
-            completion.providerResultId ?? completion.providerOperationId ?? locked.id,
-          paidAt: new Date().toISOString(),
-          paymentMethod: completion.paymentMethod,
-          studentId: locked.studentId,
-          ...(subscriptionId ? { subscriptionId } : {}),
-          ...(subscriptionId ? { subscriptionPaymentOperationId: locked.id } : {}),
-          ...(locked.attendanceLessonId
-            ? {
-                attendanceLessonId: locked.attendanceLessonId,
-                attendancePaymentOperationId: locked.id,
-                attendanceTariffId: locked.attendanceTariffId ?? undefined,
-              }
-            : {}),
-        });
         const completedAt = new Date();
         const updated = await transaction.paymentOperation.updateMany({
           data: {
             completedAt,
             failureReason: null,
-            paymentId: payment.id,
+            paymentId,
             providerOperationId: completion.providerOperationId ?? null,
             saleFinalizationError: null,
             saleFinalizedAt: locked.saleTariffId ? completedAt : null,
@@ -461,7 +478,7 @@ export class PaymentOperationService {
             actorUserId: locked.createdByUserId,
             detail: JSON.stringify({
               amount: locked.amount,
-              paymentId: payment.id,
+              paymentId,
               subscriptionId,
             }),
             entityId: id,

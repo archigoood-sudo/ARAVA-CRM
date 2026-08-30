@@ -182,7 +182,7 @@ export function StudentFinance({
     mutationFn: (input: SubscriptionCreateInput) =>
       getDesktopApi().subscriptions.create(getSessionToken(), input),
   });
-  const sellSubscription = async (
+  const sellSubscription = (
     input: SubscriptionCreateInput,
     paymentPlan: SubscriptionSalePaymentPlan,
   ) => {
@@ -190,24 +190,16 @@ export function StudentFinance({
     setSuccessMessage(undefined);
     try {
       setIssueOpen(false);
-      if (paymentPlan.mode === 'NONE') {
-        const created = await issue.mutateAsync(input);
-        await refresh();
-        setSuccessMessage('Абонемент выдан с задолженностью');
-        setDetailId(created.id);
-      } else {
-        const tariffName =
-          tariffs.data?.find(({ id }) => id === input.tariffId)?.name ?? 'Абонемент';
-        setSubscriptionSale({
-          amount: paymentPlan.amount,
-          fixedAmount: paymentPlan.mode === 'FULL',
-          input,
-          tariffName,
-        });
-        setSubscriptionPayment(undefined);
-        setAttendancePayment(undefined);
-        setPaymentOpen(true);
-      }
+      const tariffName = tariffs.data?.find(({ id }) => id === input.tariffId)?.name ?? 'Абонемент';
+      setSubscriptionSale({
+        amount: paymentPlan.amount,
+        fixedAmount: true,
+        input,
+        tariffName,
+      });
+      setSubscriptionPayment(undefined);
+      setAttendancePayment(undefined);
+      setPaymentOpen(true);
     } catch (caught) {
       setError(getErrorMessage(caught, t('subscription.errorSave')));
     }

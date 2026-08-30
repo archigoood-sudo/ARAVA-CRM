@@ -106,25 +106,31 @@ describe('Finance debt workspace', () => {
       validityDays: 30,
     });
     const purchasedAt = new Date(Date.now() - name.length * DAY_MS);
-    const subscription = await finance.createSubscription(ownerToken, {
-      ...(initialPayment === undefined
-        ? {}
-        : {
-            initialPayment: {
-              amount: initialPayment,
-              paidAt: purchasedAt.toISOString(),
-              paymentMethod: 'CASH' as const,
-            },
-          }),
-      salePrice,
-      startsAt: dateOnly(purchasedAt),
-      studentId: base.student.id,
-      tariffId: tariff.id,
+    const subscription = await database.subscription.create({
+      data: {
+        branchId: base.branch.id,
+        createdByUserId: ownerId,
+        lessonLimit: 4,
+        purchasedAt,
+        salePrice,
+        startsAt: purchasedAt,
+        status: 'ACTIVE',
+        studentId: base.student.id,
+        tariffId: tariff.id,
+      },
     });
-    await database.subscription.update({
-      data: { purchasedAt },
-      where: { id: subscription.id },
-    });
+    if (initialPayment !== undefined)
+      await database.payment.create({
+        data: {
+          amount: initialPayment,
+          branchId: base.branch.id,
+          createdByUserId: ownerId,
+          paidAt: purchasedAt,
+          paymentMethod: 'CASH',
+          studentId: base.student.id,
+          subscriptionId: subscription.id,
+        },
+      });
     return { ...base, subscription, tariff };
   }
 
@@ -145,13 +151,19 @@ describe('Finance debt workspace', () => {
       type: 'LESSON_PACK',
       validityDays: 60,
     });
-    const second = await finance.createSubscription(ownerToken, {
-      salePrice: 20_000,
-      startsAt: dateOnly(new Date()),
-      studentId: first.student.id,
-      tariffId: secondTariff.id,
+    await database.subscription.create({
+      data: {
+        branchId: first.branch.id,
+        createdByUserId: ownerId,
+        lessonLimit: 8,
+        purchasedAt: new Date(),
+        salePrice: 20_000,
+        startsAt: new Date(),
+        status: 'EXPIRED',
+        studentId: first.student.id,
+        tariffId: secondTariff.id,
+      },
     });
-    await database.subscription.update({ data: { status: 'EXPIRED' }, where: { id: second.id } });
     const frozenTariff = await finance.createTariff(ownerToken, {
       branchId: first.branch.id,
       currency: 'RUB',
@@ -162,13 +174,19 @@ describe('Finance debt workspace', () => {
       type: 'LESSON_PACK',
       validityDays: 14,
     });
-    const frozen = await finance.createSubscription(ownerToken, {
-      salePrice: 3_000,
-      startsAt: dateOnly(new Date()),
-      studentId: first.student.id,
-      tariffId: frozenTariff.id,
+    await database.subscription.create({
+      data: {
+        branchId: first.branch.id,
+        createdByUserId: ownerId,
+        lessonLimit: 2,
+        purchasedAt: new Date(),
+        salePrice: 3_000,
+        startsAt: new Date(),
+        status: 'FROZEN',
+        studentId: first.student.id,
+        tariffId: frozenTariff.id,
+      },
     });
-    await database.subscription.update({ data: { status: 'FROZEN' }, where: { id: frozen.id } });
     await database.student.update({ data: { status: 'LEFT' }, where: { id: first.student.id } });
     const archived = await subscriptionDebt('Архивный', 5_000, undefined, 'ARCHIVED');
 

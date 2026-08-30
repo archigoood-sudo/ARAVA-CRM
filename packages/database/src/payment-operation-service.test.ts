@@ -71,11 +71,18 @@ describe('Sprint 4.6A payment foundation', () => {
       validityDays: 30,
     });
     tariffId = tariff.id;
-    const subscription = await finance.createSubscription(ownerToken, {
-      salePrice: 100_000,
-      startsAt: new Date().toISOString().slice(0, 10),
-      studentId,
-      tariffId: tariff.id,
+    const subscription = await database.subscription.create({
+      data: {
+        branchId,
+        createdByUserId: owner.user.id,
+        lessonLimit: 8,
+        purchasedAt: new Date(),
+        salePrice: 100_000,
+        startsAt: new Date(),
+        status: 'PENDING',
+        studentId,
+        tariffId: tariff.id,
+      },
     });
     subscriptionId = subscription.id;
     await database.syncOutbox.deleteMany();
@@ -304,13 +311,29 @@ describe('Sprint 4.6A payment foundation', () => {
 
   it('keeps failed sales without a subscription and preserves the tariff price snapshot', async () => {
     const subscriptionsBefore = await database.subscription.count();
+    await expect(
+      operations.create(ownerToken, {
+        amount: 25_000,
+        branchId,
+        currency: 'RUB',
+        idempotencyKey: 'unified-partial-sale-operation',
+        providerType: 'SBP',
+        purpose: 'Частичная продажа абонемента',
+        saleIntent: {
+          salePrice: 100_000,
+          startsAt: '2026-08-25',
+          tariffId,
+        },
+        studentId,
+      }),
+    ).rejects.toThrow('полная оплата');
     const failed = await operations.create(ownerToken, {
-      amount: 25_000,
+      amount: 100_000,
       branchId,
       currency: 'RUB',
       idempotencyKey: 'unified-failed-sale-operation',
       providerType: 'SBP',
-      purpose: 'Частичная продажа абонемента',
+      purpose: 'Продажа абонемента',
       saleIntent: {
         salePrice: 100_000,
         startsAt: '2026-08-25',
@@ -324,6 +347,7 @@ describe('Sprint 4.6A payment foundation', () => {
 
     const cancelled = await operations.create(ownerToken, {
       ...createInput('unified-cancelled-sale-operation'),
+      amount: 100_000,
       subscriptionId: undefined,
       saleIntent: {
         salePrice: 100_000,
@@ -335,7 +359,7 @@ describe('Sprint 4.6A payment foundation', () => {
     expect(await database.subscription.count()).toBe(subscriptionsBefore);
 
     const snapshot = await operations.create(ownerToken, {
-      amount: 25_000,
+      amount: 100_000,
       branchId,
       currency: 'RUB',
       idempotencyKey: 'unified-snapshot-sale-operation',
@@ -353,8 +377,8 @@ describe('Sprint 4.6A payment foundation', () => {
     const completed = await operations.finalizeTrusted(snapshot.id, { paymentMethod: 'SBP' });
     expect(await finance.getSubscription(ownerToken, completed.subscriptionId ?? '')).toMatchObject(
       {
-        debt: 75_000,
-        paymentStatus: 'PARTIALLY_PAID',
+        debt: 0,
+        paymentStatus: 'PAID',
         salePrice: 100_000,
       },
     );

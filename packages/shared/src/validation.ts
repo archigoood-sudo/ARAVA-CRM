@@ -648,6 +648,10 @@ export const subscriptionCreateInputSchema: z.ZodType<SubscriptionCreateInput> =
     studentId: z.string().min(1).max(100),
     tariffId: z.string().min(1).max(100),
   })
+  .refine((input) => input.salePrice > 0 && input.initialPayment?.amount === input.salePrice, {
+    message: 'Абонемент выдаётся только после полной успешной оплаты.',
+    path: ['initialPayment', 'amount'],
+  })
   .refine((input) => !input.initialPayment || input.initialPayment.amount <= input.salePrice, {
     message: t('validation.payment.exceedsSale'),
     path: ['initialPayment', 'amount'],
@@ -711,19 +715,24 @@ export const paymentInputSchema: z.ZodType<PaymentInput> = z.object({
   attendanceTariffId: optionalIdentifier,
 });
 
-export const paymentOperationCreateSchema: z.ZodType<PaymentOperationCreateInput> = z.object({
-  amount: positiveMoneyAmount,
-  branchId: z.string().min(1).max(100),
-  currency: z.literal('RUB'),
-  idempotencyKey: z.string().trim().min(8).max(200),
-  providerType: paymentProviderTypeSchema,
-  purpose: z.string().trim().min(3, t('validation.required')).max(500),
-  studentId: z.string().min(1).max(100),
-  subscriptionId: optionalIdentifier,
-  attendanceLessonId: optionalIdentifier,
-  attendanceTariffId: optionalIdentifier,
-  saleIntent: subscriptionSaleIntentSchema.optional(),
-});
+export const paymentOperationCreateSchema: z.ZodType<PaymentOperationCreateInput> = z
+  .object({
+    amount: positiveMoneyAmount,
+    branchId: z.string().min(1).max(100),
+    currency: z.literal('RUB'),
+    idempotencyKey: z.string().trim().min(8).max(200),
+    providerType: paymentProviderTypeSchema,
+    purpose: z.string().trim().min(3, t('validation.required')).max(500),
+    studentId: z.string().min(1).max(100),
+    subscriptionId: optionalIdentifier,
+    attendanceLessonId: optionalIdentifier,
+    attendanceTariffId: optionalIdentifier,
+    saleIntent: subscriptionSaleIntentSchema.optional(),
+  })
+  .refine((input) => !input.saleIntent || input.amount === input.saleIntent.salePrice, {
+    message: 'Для продажи абонемента требуется полная оплата.',
+    path: ['amount'],
+  });
 
 export const paymentOperationReasonSchema: z.ZodType<PaymentOperationReasonInput> = z.object({
   reason: z.string().trim().min(3, t('validation.required')).max(500),

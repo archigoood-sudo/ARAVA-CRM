@@ -129,21 +129,44 @@ describe('Finance 5.1 consistency matrix', () => {
       type: 'LESSON_PACK',
       validityDays: 30,
     });
-    const subscription = await finance.createSubscription(ownerToken, {
-      ...(input.amount === undefined
-        ? {}
-        : {
+    const subscription =
+      input.amount === input.salePrice
+        ? await finance.createSubscription(ownerToken, {
             initialPayment: {
               amount: input.amount,
               paidAt: input.paidAt.toISOString(),
               paymentMethod: input.method ?? ('CASH' as const),
             },
-          }),
-      salePrice: input.salePrice,
-      startsAt: localDate(input.paidAt),
-      studentId: input.studentId,
-      tariffId: tariff.id,
-    });
+            salePrice: input.salePrice,
+            startsAt: localDate(input.paidAt),
+            studentId: input.studentId,
+            tariffId: tariff.id,
+          })
+        : await database.subscription.create({
+            data: {
+              branchId: input.branchId,
+              createdByUserId: ownerId,
+              lessonLimit: 8,
+              purchasedAt: input.paidAt,
+              salePrice: input.salePrice,
+              startsAt: input.paidAt,
+              status: 'ACTIVE',
+              studentId: input.studentId,
+              tariffId: tariff.id,
+            },
+          });
+    if (input.amount !== undefined && input.amount !== input.salePrice)
+      await database.payment.create({
+        data: {
+          amount: input.amount,
+          branchId: input.branchId,
+          createdByUserId: ownerId,
+          paidAt: input.paidAt,
+          paymentMethod: input.method ?? 'CASH',
+          studentId: input.studentId,
+          subscriptionId: subscription.id,
+        },
+      });
     await database.subscription.update({
       data: { purchasedAt: input.paidAt },
       where: { id: subscription.id },

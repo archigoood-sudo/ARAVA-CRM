@@ -193,16 +193,29 @@ describe('Finance Today overview', () => {
       type: 'LESSON_PACK',
       validityDays: 30,
     });
-    const subscription = await finance.createSubscription(ownerToken, {
-      initialPayment: {
-        amount: 20_000,
-        paidAt: new Date().toISOString(),
-        paymentMethod: 'CASH',
+    const subscription = await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: ownerId,
+        lessonLimit: 8,
+        purchasedAt: new Date(),
+        salePrice: 33_000,
+        startsAt: new Date(),
+        status: 'ACTIVE',
+        studentId: student.id,
+        tariffId: pack.id,
       },
-      salePrice: 33_000,
-      startsAt: date,
-      studentId: student.id,
-      tariffId: pack.id,
+    });
+    await database.payment.create({
+      data: {
+        amount: 20_000,
+        branchId: branch.id,
+        createdByUserId: ownerId,
+        paidAt: new Date(),
+        paymentMethod: 'CASH',
+        studentId: student.id,
+        subscriptionId: subscription.id,
+      },
     });
     await finance.createPayment(ownerToken, {
       amount: 5_000,
@@ -212,11 +225,18 @@ describe('Finance Today overview', () => {
       studentId: student.id,
       subscriptionId: subscription.id,
     });
-    const issuedOnly = await finance.createSubscription(ownerToken, {
-      salePrice: 10_000,
-      startsAt: date,
-      studentId: student.id,
-      tariffId: pack.id,
+    const issuedOnly = await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: ownerId,
+        lessonLimit: 8,
+        purchasedAt: new Date(),
+        salePrice: 10_000,
+        startsAt: new Date(),
+        status: 'ACTIVE',
+        studentId: student.id,
+        tariffId: pack.id,
+      },
     });
     const trial = await finance.createTariff(ownerToken, {
       branchId: branch.id,
@@ -227,11 +247,18 @@ describe('Finance Today overview', () => {
       price: 0,
       type: 'TRIAL',
     });
-    await finance.createSubscription(ownerToken, {
-      salePrice: 0,
-      startsAt: date,
-      studentId: student.id,
-      tariffId: trial.id,
+    await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: ownerId,
+        lessonLimit: 1,
+        purchasedAt: new Date(),
+        salePrice: 0,
+        startsAt: new Date(),
+        status: 'ACTIVE',
+        studentId: student.id,
+        tariffId: trial.id,
+      },
     });
     await database.payment.create({
       data: {
@@ -262,7 +289,7 @@ describe('Finance Today overview', () => {
         'Разовое посещение',
       ]),
     );
-    expect(issuedOnly.debt).toBe(10_000);
+    expect((await finance.getSubscription(ownerToken, issuedOnly.id)).debt).toBe(10_000);
   });
 
   it('includes priced uncovered attendance debt without counting a free trial', async () => {

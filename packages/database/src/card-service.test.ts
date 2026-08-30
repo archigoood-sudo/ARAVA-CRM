@@ -221,6 +221,11 @@ describe('Sprint 4.1C membership cards', () => {
       validityDays: 30,
     });
     const subscription = await finance.createSubscription(ownerToken, {
+      initialPayment: {
+        amount: 80_000,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+      },
       salePrice: 80_000,
       startsAt: '2026-08-01',
       studentId: context.student.id,

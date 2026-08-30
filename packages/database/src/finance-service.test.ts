@@ -104,7 +104,7 @@ describe('Sprint 3 finance service', () => {
     });
     const subscription = await finance.createSubscription(ownerToken, {
       initialPayment: {
-        amount: 30_000,
+        amount: options?.price ?? 100_000,
         paidAt: new Date().toISOString(),
         paymentMethod: 'CARD',
       },
@@ -116,13 +116,20 @@ describe('Sprint 3 finance service', () => {
     return { ...base, subscription, tariff };
   }
 
-  it('tracks partial payments, debt, full and partial refunds without deleting history', async () => {
+  it('tracks post-sale debt, full and partial refunds without deleting history', async () => {
     const { branch, student, subscription } = await tariffAndSubscription();
     expect(subscription).toMatchObject({
-      debt: 70_000,
-      paidAmount: 30_000,
-      paymentStatus: 'PARTIALLY_PAID',
+      debt: 0,
+      paidAmount: 100_000,
+      paymentStatus: 'PAID',
       status: 'ACTIVE',
+    });
+    const salePayment = subscription.payments[0];
+    if (!salePayment) throw new Error('Платёж продажи не создан.');
+    await finance.createRefund(ownerToken, salePayment.id, {
+      amount: 70_000,
+      reason: 'Частичный возврат после продажи',
+      refundedAt: new Date().toISOString(),
     });
     const payment = await finance.createPayment(ownerToken, {
       amount: 20_000,
@@ -153,7 +160,7 @@ describe('Sprint 3 finance service', () => {
       }),
     ).rejects.toThrow(t('domain.validation.refundExceedsPayment'));
     expect(await database.payment.count()).toBe(2);
-    expect(await database.refund.count()).toBe(2);
+    expect(await database.refund.count()).toBe(3);
     expect(await finance.getSubscription(ownerToken, subscription.id)).toMatchObject({
       debt: 70_000,
       paymentStatus: 'PARTIALLY_PAID',
@@ -196,14 +203,19 @@ describe('Sprint 3 finance service', () => {
     });
     const startsAt = dateString(new Date(Date.now() + 3 * DAY_MS));
     const subscription = await finance.createSubscription(ownerToken, {
-      salePrice: 75_000,
+      initialPayment: {
+        amount: tariff.price,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+      },
+      salePrice: tariff.price,
       startsAt,
       studentId: student.id,
       tariffId: tariff.id,
     });
     expect(subscription).toMatchObject({
-      debt: 75_000,
-      paymentStatus: 'UNPAID',
+      debt: 0,
+      paymentStatus: 'PAID',
       remainingLessons: 8,
       status: 'PENDING',
     });
@@ -219,7 +231,7 @@ describe('Sprint 3 finance service', () => {
       'CANCELLED',
     );
     expect(await database.subscription.count({ where: { id: subscription.id } })).toBe(1);
-    expect(await database.payment.count({ where: { subscriptionId: subscription.id } })).toBe(0);
+    expect(await database.payment.count({ where: { subscriptionId: subscription.id } })).toBe(1);
   });
 
   it('uses an explicit sale expiry without changing the tariff or sale price snapshot', async () => {
@@ -237,6 +249,11 @@ describe('Sprint 3 finance service', () => {
     const startsAt = '2026-08-25';
     const subscription = await finance.createSubscription(ownerToken, {
       expiresAt: '2026-10-15',
+      initialPayment: {
+        amount: tariff.price,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+      },
       salePrice: tariff.price,
       startsAt,
       studentId: student.id,
@@ -262,7 +279,7 @@ describe('Sprint 3 finance service', () => {
     const input = {
       idempotencyKey: 'manual-unified-sale-1',
       initialPayment: {
-        amount: 20_000,
+        amount: tariff.price,
         paidAt: new Date().toISOString(),
         paymentMethod: 'CASH' as const,
       },
@@ -275,14 +292,179 @@ describe('Sprint 3 finance service', () => {
     const repeated = await finance.createSubscription(ownerToken, input);
     expect(repeated.id).toBe(first.id);
     expect(first).toMatchObject({
-      debt: 13_000,
-      paidAmount: 20_000,
-      paymentStatus: 'PARTIALLY_PAID',
+      debt: 0,
+      paidAmount: 33_000,
+      paymentStatus: 'PAID',
       salePrice: 33_000,
     });
     expect(await database.subscription.count({ where: { studentId: student.id } })).toBe(1);
     expect(await database.payment.count({ where: { subscriptionId: first.id } })).toBe(1);
     expect(await database.cashTransaction.count({ where: { sourceType: 'PAYMENT' } })).toBe(1);
+  });
+
+  it('requires full payment before activation and keeps 8 × 3300 debt-free after two visits', async () => {
+    const { branch, group, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 8,
+      name: '8 занятий за 3300 ₽',
+      price: 330_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    });
+    const sale = {
+      salePrice: tariff.price,
+      startsAt: dateString(new Date(Date.now() - DAY_MS)),
+      studentId: student.id,
+      tariffId: tariff.id,
+    };
+    await expect(finance.createSubscription(ownerToken, sale)).rejects.toThrow('полной успешной');
+    await expect(
+      finance.createSubscription(ownerToken, {
+        ...sale,
+        initialPayment: {
+          amount: 329_999,
+          paidAt: new Date().toISOString(),
+          paymentMethod: 'CASH',
+        },
+      }),
+    ).rejects.toThrow('полной успешной');
+    expect(await database.subscription.count({ where: { studentId: student.id } })).toBe(0);
+    expect(await database.payment.count({ where: { studentId: student.id } })).toBe(0);
+    expect(
+      await database.syncOutbox.count({
+        where: { entityType: 'SUBSCRIPTION', entityId: { not: '' } },
+      }),
+    ).toBe(0);
+
+    const subscription = await finance.createSubscription(ownerToken, {
+      ...sale,
+      initialPayment: {
+        amount: tariff.price,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CARD',
+      },
+    });
+    expect(subscription).toMatchObject({
+      debt: 0,
+      paidAmount: 330_000,
+      paymentStatus: 'PAID',
+      remainingLessons: 8,
+      status: 'ACTIVE',
+    });
+    expect(
+      await database.syncOutbox.count({
+        where: { entityId: subscription.id, entityType: 'SUBSCRIPTION' },
+      }),
+    ).toBeGreaterThan(0);
+
+    for (const offset of [1, 2]) {
+      const startsAt = new Date(Date.now() + offset * 60 * 60_000);
+      const lesson = await studio.createLesson(ownerToken, {
+        endsAt: new Date(startsAt.getTime() + 45 * 60_000).toISOString(),
+        groupId: group.id,
+        startsAt: startsAt.toISOString(),
+      });
+      await studio.saveAttendance(ownerToken, lesson.id, [
+        { status: 'PRESENT', studentId: student.id },
+      ]);
+    }
+    expect(await finance.getSubscription(ownerToken, subscription.id)).toMatchObject({
+      debt: 0,
+      lessonsUsed: 2,
+      paidAmount: 330_000,
+      remainingLessons: 6,
+      status: 'ACTIVE',
+    });
+  });
+
+  it('blocks every ordinary activation path until a pending subscription is fully paid', async () => {
+    const { branch, group, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      freezeDays: 5,
+      isActive: true,
+      lessonCount: 8,
+      name: 'Legacy pending fixture',
+      price: 330_000,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    });
+    const owner = await database.user.findFirstOrThrow({ where: { role: 'OWNER' } });
+    const startsAt = new Date(Date.now() - DAY_MS);
+    const pending = await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: owner.id,
+        expiresAt: new Date(Date.now() + 30 * DAY_MS),
+        lessonLimit: 8,
+        purchasedAt: startsAt,
+        salePrice: tariff.price,
+        startsAt,
+        status: 'PENDING',
+        studentId: student.id,
+        tariffId: tariff.id,
+      },
+    });
+
+    expect((await finance.getSubscription(ownerToken, pending.id)).status).toBe('PENDING');
+    expect(
+      (await finance.rosterFinance(ownerToken, branch.id, [student.id])).get(student.id),
+    ).toEqual({ totalDebt: 330_000 });
+    expect(
+      (
+        await finance.updateSubscription(ownerToken, pending.id, {
+          startsAt: dateString(startsAt),
+          tariffId: tariff.id,
+        })
+      ).status,
+    ).toBe('PENDING');
+    expect(
+      (
+        await finance.adjustSubscription(ownerToken, pending.id, {
+          comment: 'Проверка защиты активации',
+          lessonDelta: 1,
+        })
+      ).status,
+    ).toBe('PENDING');
+
+    const lessonStartsAt = new Date(Date.now() + 60 * 60_000);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(lessonStartsAt.getTime() + 45 * 60_000).toISOString(),
+      groupId: group.id,
+      startsAt: lessonStartsAt.toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, pending.id)).lessonsUsed).toBe(1);
+    expect(
+      await database.subscriptionLedger.count({
+        where: { attendanceId: `${lesson.id}:${student.id}`, subscriptionId: pending.id },
+      }),
+    ).toBe(0);
+
+    await database.subscription.update({ data: { status: 'FROZEN' }, where: { id: pending.id } });
+    await expect(finance.unfreezeSubscription(ownerToken, pending.id)).rejects.toThrow(
+      'полной оплаты',
+    );
+    await database.subscription.update({ data: { status: 'PENDING' }, where: { id: pending.id } });
+    await finance.createPayment(ownerToken, {
+      amount: tariff.price,
+      branchId: branch.id,
+      paidAt: new Date().toISOString(),
+      paymentMethod: 'CARD',
+      studentId: student.id,
+      subscriptionId: pending.id,
+    });
+    expect(await finance.getSubscription(ownerToken, pending.id)).toMatchObject({
+      debt: 0,
+      paymentStatus: 'PAID',
+      status: 'ACTIVE',
+    });
   });
 
   it('derives paid and refunded subscription payment states from canonical payments', async () => {
@@ -298,19 +480,18 @@ describe('Sprint 3 finance service', () => {
       validityDays: 30,
     });
     const subscription = await finance.createSubscription(ownerToken, {
+      initialPayment: {
+        amount: tariff.price,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+      },
       salePrice: tariff.price,
       startsAt: dateString(new Date()),
       studentId: student.id,
       tariffId: tariff.id,
     });
-    const payment = await finance.createPayment(ownerToken, {
-      amount: 40_000,
-      branchId: branch.id,
-      paidAt: new Date().toISOString(),
-      paymentMethod: 'CASH',
-      studentId: student.id,
-      subscriptionId: subscription.id,
-    });
+    const payment = subscription.payments[0];
+    if (!payment) throw new Error('Платёж продажи не создан.');
     expect(await finance.getSubscription(ownerToken, subscription.id)).toMatchObject({
       debt: 0,
       paidAmount: 40_000,
@@ -355,6 +536,11 @@ describe('Sprint 3 finance service', () => {
     const startsAt = dateString(new Date(Date.now() - DAY_MS));
     const issue = (tariffId: string) =>
       finance.createSubscription(ownerToken, {
+        initialPayment: {
+          amount: 10_000,
+          paidAt: new Date().toISOString(),
+          paymentMethod: 'CASH',
+        },
         salePrice: 10_000,
         startsAt,
         studentId: student.id,
@@ -456,6 +642,11 @@ describe('Sprint 3 finance service', () => {
       validityDays: 30,
     });
     const subscription = await finance.createSubscription(ownerToken, {
+      initialPayment: {
+        amount: 5_000,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+      },
       salePrice: 5_000,
       startsAt: dateString(new Date(lessonStartsAt.getTime() - DAY_MS)),
       studentId: student.id,
@@ -464,7 +655,7 @@ describe('Sprint 3 finance service', () => {
     expect(subscription.lessonsUsed).toBe(1);
     const covered = await finance.listStudentSubscriptions(ownerToken, student.id);
     expect(covered.uncoveredAttendances).toHaveLength(0);
-    expect(covered.totalDebt).toBe(5_000);
+    expect(covered.totalDebt).toBe(0);
     await finance.updateSubscription(ownerToken, subscription.id, {
       expiresAt: dateString(new Date(lessonStartsAt.getTime() + 10 * DAY_MS)),
       startsAt: dateString(new Date(lessonStartsAt.getTime() - DAY_MS)),
@@ -547,6 +738,11 @@ describe('Sprint 3 finance service', () => {
       validityDays: 30,
     });
     const subscription = await finance.createSubscription(ownerToken, {
+      initialPayment: {
+        amount: 5_000,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+      },
       salePrice: 5_000,
       startsAt: dateString(new Date(startsAt.getTime() - DAY_MS)),
       studentId: student.id,
@@ -687,7 +883,6 @@ describe('Sprint 3 finance service', () => {
       paidAt: new Date().toISOString(),
       paymentMethod: 'CASH',
       studentId: student.id,
-      subscriptionId: subscription.id,
     });
     await expect(
       finance.createRefund(manager.token, payment.id, {

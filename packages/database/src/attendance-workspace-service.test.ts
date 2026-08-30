@@ -450,12 +450,22 @@ describe('Attendance 2.0 workspace', () => {
       validityDays: 60,
     });
     const subscription = await finance.createSubscription(ownerToken, {
+      initialPayment: {
+        amount: 40_000,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+      },
       salePrice: 40_000,
       startsAt: '2026-08-01',
       studentId: data.student.id,
       tariffId: tariff.id,
     });
     const laterSubscription = await finance.createSubscription(ownerToken, {
+      initialPayment: {
+        amount: 40_000,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+      },
       salePrice: 40_000,
       startsAt: '2026-08-01',
       studentId: laterStudent.id,

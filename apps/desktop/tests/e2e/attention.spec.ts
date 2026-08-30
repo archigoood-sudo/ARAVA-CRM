@@ -109,12 +109,19 @@ test('центр внимания ведёт к действию, автораз
         type: 'LESSON_PACK',
         validityDays: 30,
       });
-      await api.subscriptions.create(token, {
-        initialPayment: { amount: 3_000, paidAt: new Date().toISOString(), paymentMethod: 'CARD' },
+      const subscription = await api.subscriptions.create(token, {
+        initialPayment: { amount: 8_000, paidAt: new Date().toISOString(), paymentMethod: 'CARD' },
         salePrice: 8_000,
         startsAt: new Date().toISOString().slice(0, 10),
         studentId: student.id,
         tariffId: tariff.id,
+      });
+      const salePayment = subscription.payments[0];
+      if (!salePayment) throw new Error('Sale payment was not created');
+      await api.refunds.create(token, salePayment.id, {
+        amount: 5_000,
+        reason: 'Возврат для проверки долга E2E',
+        refundedAt: new Date().toISOString(),
       });
       const startsAt = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
       const lesson = await api.lessons.create(token, {

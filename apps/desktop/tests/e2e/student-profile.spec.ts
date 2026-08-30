@@ -146,9 +146,9 @@ test('расширенный профиль объединяет работу а
         expectedVersion: trial.version ?? 1,
         outcome: 'THINKING',
       });
-      await api.subscriptions.create(token, {
+      const subscription = await api.subscriptions.create(token, {
         initialPayment: {
-          amount: 6_000,
+          amount: 10_000,
           paidAt: new Date().toISOString(),
           paymentMethod: 'CARD',
         },
@@ -156,6 +156,13 @@ test('расширенный профиль объединяет работу а
         startsAt: new Date().toISOString().slice(0, 10),
         studentId: student.id,
         tariffId: tariff.id,
+      });
+      const salePayment = subscription.payments[0];
+      if (!salePayment) throw new Error('Sale payment was not created');
+      await api.refunds.create(token, salePayment.id, {
+        amount: 4_000,
+        reason: 'Возврат для проверки профиля E2E',
+        refundedAt: new Date().toISOString(),
       });
       await api.cards.assign(token, {
         barcode: '0000042111',
@@ -249,12 +256,10 @@ test('расширенный профиль объединяет работу а
     await page.getByRole('button', { name: 'Оформить абонемент' }).click();
     const subscriptionDialog = page.getByRole('dialog', { name: 'Продажа абонемента' });
     await subscriptionDialog.getByLabel('Тариф').selectOption(context.tariffId);
-    await subscriptionDialog.getByLabel('Оплата при продаже').selectOption('NONE');
-    page.once('dialog', (dialog) => void dialog.accept());
-    await subscriptionDialog.getByRole('button', { name: 'Выдать с задолженностью' }).click();
+    await subscriptionDialog.getByRole('button', { name: 'Продолжить к оплате' }).click();
     await expect(subscriptionDialog).toBeHidden();
+    await page.getByRole('dialog').getByRole('button', { name: 'Оплатить и выдать' }).click();
     await expect(page.getByText('Активен', { exact: true }).first()).toBeVisible();
-    await page.getByRole('dialog').getByRole('button', { name: 'Закрыть окно' }).last().click();
 
     await page.evaluate((studentId) => {
       window.location.hash = `/students/${studentId}`;

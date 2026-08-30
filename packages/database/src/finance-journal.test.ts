@@ -99,20 +99,29 @@ describe('Finance operations journal', () => {
       type: 'LESSON_PACK',
       validityDays: 30,
     });
-    const subscription = await finance.createSubscription(ownerToken, {
-      initialPayment: {
-        amount: 3_300,
-        paidAt: timeToday(9).toISOString(),
-        paymentMethod: 'CASH',
+    const subscription = await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: ownerId,
+        lessonLimit: 8,
+        purchasedAt: timeToday(9),
+        salePrice: 3_800,
+        startsAt: timeToday(0),
+        status: 'ACTIVE',
+        studentId: student.id,
+        tariffId: tariff.id,
       },
-      salePrice: 3_800,
-      startsAt: localDate(),
-      studentId: student.id,
-      tariffId: tariff.id,
     });
-    const initial = await database.payment.findFirstOrThrow({
-      orderBy: { createdAt: 'asc' },
-      where: { subscriptionId: subscription.id },
+    const initial = await database.payment.create({
+      data: {
+        amount: 3_300,
+        branchId: branch.id,
+        createdByUserId: ownerId,
+        paidAt: timeToday(9),
+        paymentMethod: 'CASH',
+        studentId: student.id,
+        subscriptionId: subscription.id,
+      },
     });
     await finance.createPayment(ownerToken, {
       amount: 500,
@@ -167,11 +176,18 @@ describe('Finance operations journal', () => {
       price: 0,
       type: 'TRIAL',
     });
-    await finance.createSubscription(ownerToken, {
-      salePrice: 0,
-      startsAt: localDate(),
-      studentId: student.id,
-      tariffId: trial.id,
+    await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        createdByUserId: ownerId,
+        lessonLimit: 1,
+        purchasedAt: timeToday(9),
+        salePrice: 0,
+        startsAt: timeToday(0),
+        status: 'ACTIVE',
+        studentId: student.id,
+        tariffId: trial.id,
+      },
     });
 
     const journal = await finance.financeJournal(ownerToken, query());

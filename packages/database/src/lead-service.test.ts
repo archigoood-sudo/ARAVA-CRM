@@ -835,6 +835,11 @@ describe('LeadService safe conversion', () => {
       studentId: buyer.id,
     });
     await new FinanceService(database, application).createSubscription(ownerToken, {
+      initialPayment: {
+        amount: tariff.price,
+        paidAt: new Date().toISOString(),
+        paymentMethod: 'CASH',
+      },
       salePrice: tariff.price,
       startsAt: new Date().toISOString().slice(0, 10),
       studentId: buyer.id,

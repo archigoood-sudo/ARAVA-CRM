@@ -281,6 +281,11 @@ test('записывает заявку на пробное и автомати�
           type: 'LESSON_PACK',
         });
         await api.subscriptions.create(token, {
+          initialPayment: {
+            amount: 4000,
+            paidAt: new Date().toISOString(),
+            paymentMethod: 'CARD',
+          },
           salePrice: 4000,
           startsAt: new Date().toISOString().slice(0, 10),
           studentId: currentStudentId,

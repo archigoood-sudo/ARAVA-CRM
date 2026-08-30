@@ -1,5 +1,4 @@
 import {
-  subscriptionCreateInputSchema,
   t,
   type StudentSummary,
   type SubscriptionCreateInput,
@@ -16,7 +15,7 @@ function today(): string {
 
 export interface SubscriptionSalePaymentPlan {
   amount: number;
-  mode: 'FULL' | 'NONE' | 'PARTIAL';
+  mode: 'FULL';
 }
 
 function calculatedExpiryDate(startsAt: string, validityDays?: number): string {
@@ -40,7 +39,10 @@ export function SubscriptionDialog({
   error?: string | undefined;
   onClose: () => void;
   activeSubscriptionCount?: number | undefined;
-  onSubmit: (input: SubscriptionCreateInput, payment: SubscriptionSalePaymentPlan) => Promise<void>;
+  onSubmit: (
+    input: SubscriptionCreateInput,
+    payment: SubscriptionSalePaymentPlan,
+  ) => Promise<void> | void;
   open: boolean;
   student: StudentSummary;
   tariffs: TariffSummary[];
@@ -49,8 +51,6 @@ export function SubscriptionDialog({
   const [startsAt, setStartsAt] = useState(today());
   const [expiresAt, setExpiresAt] = useState('');
   const [notes, setNotes] = useState('');
-  const [paymentMode, setPaymentMode] = useState<SubscriptionSalePaymentPlan['mode']>('FULL');
-  const [paymentAmount, setPaymentAmount] = useState('0');
   const [validationError, setValidationError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const saleKey = useRef(crypto.randomUUID());
@@ -65,9 +65,7 @@ export function SubscriptionDialog({
     setTariffId(first?.id ?? '');
     setStartsAt(today());
     setExpiresAt(calculatedExpiryDate(today(), first?.validityDays));
-    setPaymentAmount(first ? String(first.price / 100) : '0');
     setNotes('');
-    setPaymentMode(first?.price === 0 ? 'NONE' : 'FULL');
     setValidationError(undefined);
     saleKey.current = crypto.randomUUID();
   }, [open, tariffs]);
@@ -76,8 +74,6 @@ export function SubscriptionDialog({
     const tariff = tariffs.find((item) => item.id === id);
     if (tariff) {
       setExpiresAt(calculatedExpiryDate(startsAt, tariff.validityDays));
-      setPaymentAmount(String(tariff.price / 100));
-      setPaymentMode(tariff.price === 0 ? 'NONE' : 'FULL');
     }
   };
   const submit = async () => {
@@ -90,38 +86,17 @@ export function SubscriptionDialog({
       studentId: student.id,
       tariffId,
     };
-    const result = subscriptionCreateInputSchema.safeParse(input);
-    if (!result.success) {
-      setValidationError(result.error.issues[0]?.message ?? t('validation.form'));
+    if (!selected || selected.price <= 0 || !tariffId || !startsAt) {
+      setValidationError('Выберите платный тариф для продажи абонемента.');
       return;
     }
-    const effectivePaymentMode = selected?.price === 0 ? 'NONE' : paymentMode;
-    const amount = effectivePaymentMode === 'NONE' ? 0 : Math.round(Number(paymentAmount) * 100);
-    if (
-      (effectivePaymentMode === 'FULL' && amount !== (selected?.price ?? 0)) ||
-      (effectivePaymentMode === 'PARTIAL' && (amount <= 0 || amount >= (selected?.price ?? 0)))
-    ) {
-      setValidationError(
-        effectivePaymentMode === 'PARTIAL'
-          ? 'Частичный платёж должен быть больше нуля и меньше стоимости абонемента.'
-          : 'Полная оплата должна совпадать со стоимостью абонемента.',
-      );
+    if (expiresAt && expiresAt < startsAt) {
+      setValidationError('Дата окончания не может быть раньше даты начала.');
       return;
     }
-    if (
-      effectivePaymentMode === 'NONE' &&
-      (selected?.price ?? 0) > 0 &&
-      !window.confirm(
-        `Абонемент будет выдан с задолженностью ${new Intl.NumberFormat('ru-RU', {
-          currency: 'RUB',
-          style: 'currency',
-        }).format((selected?.price ?? 0) / 100)}. Продолжить?`,
-      )
-    )
-      return;
     setSubmitting(true);
     try {
-      await onSubmit(result.data, { amount, mode: effectivePaymentMode });
+      await onSubmit(input, { amount: selected.price, mode: 'FULL' });
     } finally {
       setSubmitting(false);
     }
@@ -206,41 +181,10 @@ export function SubscriptionDialog({
             value={notes}
           />
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="subscription-payment-mode">Оплата при продаже</Label>
-          <Select
-            id="subscription-payment-mode"
-            onChange={(event) => {
-              const mode = event.target.value as SubscriptionSalePaymentPlan['mode'];
-              setPaymentMode(mode);
-              if (mode === 'FULL') setPaymentAmount(String((selected?.price ?? 0) / 100));
-            }}
-            value={paymentMode}
-          >
-            <option value="FULL">Полная оплата</option>
-            <option value="PARTIAL">Частичная оплата</option>
-            <option value="NONE">Без оплаты — с задолженностью</option>
-          </Select>
+        <div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-900">
+          Абонемент будет выдан только после полной оплаты. Способ оплаты — наличные, карта или СБП
+          — выбирается на следующем шаге.
         </div>
-        {paymentMode !== 'NONE' ? (
-          <div className="rounded-2xl bg-muted/40 p-4">
-            <div className="space-y-2">
-              <Label htmlFor="subscription-payment">{t('payment.amount')}</Label>
-              <Input
-                id="subscription-payment"
-                min="0.01"
-                onChange={(event) => setPaymentAmount(event.target.value)}
-                readOnly={paymentMode === 'FULL'}
-                step="0.01"
-                type="number"
-                value={paymentAmount}
-              />
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Способ оплаты — наличные, карта или СБП — выбирается на следующем шаге.
-            </p>
-          </div>
-        ) : null}
         {validationError || error ? (
           <p className="text-sm text-red-600">{validationError ?? error}</p>
         ) : null}
@@ -249,11 +193,7 @@ export function SubscriptionDialog({
             {t('common.cancel')}
           </Button>
           <Button disabled={submitting} onClick={() => void submit()}>
-            {submitting
-              ? t('common.saving')
-              : paymentMode === 'NONE'
-                ? 'Выдать с задолженностью'
-                : 'Продолжить к оплате'}
+            {submitting ? t('common.saving') : 'Продолжить к оплате'}
           </Button>
         </div>
       </div>

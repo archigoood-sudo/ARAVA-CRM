@@ -8,6 +8,28 @@ type LedgerClient = DatabaseClient | Prisma.TransactionClient;
 
 const DAY_MS = 86_400_000;
 
+export async function subscriptionHasSuccessfulFullPayment(
+  client: LedgerClient,
+  subscriptionId: string,
+  salePrice?: number,
+): Promise<boolean> {
+  const subscription = await client.subscription.findUnique({
+    include: { payments: { include: { refunds: { select: { amount: true } } } } },
+    where: { id: subscriptionId },
+  });
+  if (!subscription || subscription.payments.length === 0) return false;
+  const paid = subscription.payments
+    .filter(({ status }) => status !== 'CANCELLED')
+    .reduce(
+      (sum, payment) =>
+        sum +
+        payment.amount -
+        payment.refunds.reduce((refunds, refund) => refunds + refund.amount, 0),
+      0,
+    );
+  return paid >= (salePrice ?? subscription.salePrice);
+}
+
 export function addDays(value: Date, days: number): Date {
   return new Date(value.getTime() + days * DAY_MS);
 }
@@ -56,10 +78,17 @@ async function restoreSubscriptionAfterReversal(
 ): Promise<void> {
   const current = await client.subscription.findUniqueOrThrow({ where: { id: subscriptionId } });
   const lessonsUsed = Math.max(0, current.lessonsUsed - lessonDelta);
+  const nextStatus = subscriptionStatusAt({ ...current, lessonsUsed });
+  const status =
+    nextStatus === 'ACTIVE' && current.status !== 'ACTIVE'
+      ? (await subscriptionHasSuccessfulFullPayment(client, subscriptionId, current.salePrice))
+        ? nextStatus
+        : 'PENDING'
+      : nextStatus;
   await client.subscription.update({
     data: {
       lessonsUsed,
-      status: subscriptionStatusAt({ ...current, lessonsUsed }),
+      status,
     },
     where: { id: subscriptionId },
   });
@@ -159,7 +188,10 @@ export async function applyAttendanceWriteOff(
     throw new DomainError('CONFLICT', t('domain.conflict.writeOffDuplicate'));
 
   const candidates = await client.subscription.findMany({
-    include: { tariff: true },
+    include: {
+      payments: { include: { refunds: { select: { amount: true } } } },
+      tariff: true,
+    },
     orderBy: [
       { expiresAt: { nulls: 'last', sort: 'asc' } },
       { startsAt: 'asc' },
@@ -176,9 +208,22 @@ export async function applyAttendanceWriteOff(
         : { type: { in: ['LESSON_PACK', 'SINGLE_LESSON', 'UNLIMITED'] } },
     },
   });
-  const subscription = candidates.find(
-    (candidate) => candidate.lessonLimit === null || candidate.lessonsUsed < candidate.lessonLimit,
-  );
+  const subscription = candidates.find((candidate) => {
+    const paid = candidate.payments
+      .filter(({ status }) => status !== 'CANCELLED')
+      .reduce(
+        (sum, payment) =>
+          sum +
+          payment.amount -
+          payment.refunds.reduce((refunds, refund) => refunds + refund.amount, 0),
+        0,
+      );
+    return (
+      (candidate.status !== 'PENDING' ||
+        (candidate.payments.length > 0 && paid >= candidate.salePrice)) &&
+      (candidate.lessonLimit === null || candidate.lessonsUsed < candidate.lessonLimit)
+    );
+  });
   if (!subscription) return null;
 
   const lessonsUsed = subscription.lessonsUsed + 1;
