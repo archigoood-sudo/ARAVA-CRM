@@ -1,4 +1,4 @@
-name: Windows Development Release
+name: Desktop Development Release
 
 on:
   workflow_dispatch:
@@ -16,11 +16,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  prepare:
+    outputs:
+      commit: ${{ steps.verified.outputs.commit }}
+      version: ${{ steps.version.outputs.value }}
     permissions:
       actions: read
-      contents: write
-    runs-on: windows-latest
+      contents: read
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,67 +31,71 @@ jobs:
           ref: ${{ inputs.commit }}
       - name: Verify exact current main commit
         id: verified
-        shell: pwsh
         env:
           REQUESTED_COMMIT: ${{ inputs.commit }}
         run: |
           git fetch origin main
-          $requested = $env:REQUESTED_COMMIT
-          $head = git rev-parse HEAD
-          $main = git rev-parse origin/main
-          if ($head -ne $requested -or $main -ne $requested) {
-            throw "Requested commit must exactly equal current origin/main"
-          }
-          "commit=$head" >> $env:GITHUB_OUTPUT
+          head="$(git rev-parse HEAD)"
+          main="$(git rev-parse origin/main)"
+          if [ "$head" != "$REQUESTED_COMMIT" ] || [ "$main" != "$REQUESTED_COMMIT" ]; then
+            echo "Requested commit must exactly equal current origin/main" >&2
+            exit 1
+          fi
+          echo "commit=$head" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
-          cache: npm
           node-version: 22
       - name: Require successful Quality run for this commit
-        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REQUESTED_COMMIT: ${{ steps.verified.outputs.commit }}
         run: |
-          $requested = $env:REQUESTED_COMMIT
-          $runs = gh api "repos/${{ github.repository }}/actions/workflows/quality.yml/runs?head_sha=$requested&status=success&event=push&per_page=1" | ConvertFrom-Json
-          if ($runs.total_count -lt 1) {
-            throw "No successful Quality push run exists for $requested"
-          }
+          count="$(gh api "repos/${{ github.repository }}/actions/workflows/quality.yml/runs?head_sha=$REQUESTED_COMMIT&status=success&event=push&per_page=1" --jq '.total_count')"
+          if [ "$count" -lt 1 ]; then
+            echo "No successful Quality push run exists for $REQUESTED_COMMIT" >&2
+            exit 1
+          fi
       - name: Compute monotonic development version
         id: version
-        shell: pwsh
         run: |
-          $current = node -p "require('./apps/desktop/package.json').version"
-          $version = node scripts/compute-development-version.mjs $current "${{ github.run_number }}"
-          "value=$version" >> $env:GITHUB_OUTPUT
-          Write-Host "Development version: $version"
+          current="$(node -p "require('./apps/desktop/package.json').version")"
+          version="$(node scripts/compute-development-version.mjs "$current" "${{ github.run_number }}")"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "Development version: $version"
+
+  publish-windows:
+    needs: prepare
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    env:
+      ARAVA_BUILD_COMMIT: ${{ needs.prepare.outputs.commit }}
+      ARAVA_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      ARAVA_UPDATE_CHANNEL: dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: 22
       - run: npm ci
       - name: Build exact approved commit
-        env:
-          ARAVA_BUILD_COMMIT: ${{ steps.verified.outputs.commit }}
-          ARAVA_BUILD_VERSION: ${{ steps.version.outputs.value }}
-          ARAVA_UPDATE_CHANNEL: dev
         run: npm run build
       - name: Publish Windows development prerelease
         env:
-          ARAVA_BUILD_COMMIT: ${{ steps.verified.outputs.commit }}
-          ARAVA_BUILD_VERSION: ${{ steps.version.outputs.value }}
-          ARAVA_UPDATE_CHANNEL: dev
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
-        run: |
-          npm run prepackage:win -w @arava/desktop
-          Set-Location apps/desktop
-          npx electron-builder --config electron-builder.dev.yml --win nsis --x64 --publish always `
-            --config.extraMetadata.version=${{ steps.version.outputs.value }}
+        run: npm run release:win:dev -w @arava/desktop
       - name: Verify development package metadata
         shell: pwsh
         run: |
+          node scripts/verify-packaged-version.mjs '${{ needs.prepare.outputs.version }}' apps/desktop/release/win-unpacked/resources/app-metadata.json apps/desktop/release/win-unpacked/resources/app.asar
           $metadata = Get-Content apps/desktop/release/win-unpacked/resources/app-metadata.json | ConvertFrom-Json
-          if ($metadata.appVersion -ne '${{ steps.version.outputs.value }}') { throw 'Development app version mismatch' }
           if ($metadata.updateChannel -ne 'dev') { throw 'Development update channel mismatch' }
-          if (-not (Select-String -Path apps/desktop/release/dev.yml -Pattern '^version: ${{ steps.version.outputs.value }}$' -Quiet)) {
+          if (-not (Select-String -Path apps/desktop/release/dev.yml -Pattern '^version: ${{ needs.prepare.outputs.version }}$' -Quiet)) {
             throw 'dev.yml version mismatch'
           }
       - name: Record installer checksum
@@ -99,13 +106,60 @@ jobs:
           $hash = Get-FileHash $installer.FullName -Algorithm SHA256
           "Installer: $($installer.Name)" | Tee-Object -FilePath development-release.txt
           "SHA-256: $($hash.Hash.ToLowerInvariant())" | Tee-Object -FilePath development-release.txt -Append
-          "Commit: ${{ steps.verified.outputs.commit }}" | Tee-Object -FilePath development-release.txt -Append
+          "Commit: ${{ needs.prepare.outputs.commit }}" | Tee-Object -FilePath development-release.txt -Append
       - uses: actions/upload-artifact@v4
         with:
-          name: arava-crm-windows-development-${{ steps.verified.outputs.commit }}
+          name: arava-crm-windows-development-${{ needs.prepare.outputs.commit }}
           path: |
             apps/desktop/release/ARAVA-CRM-*-x64.exe
             apps/desktop/release/ARAVA-CRM-*-x64.exe.blockmap
             apps/desktop/release/dev.yml
             development-release.txt
+          if-no-files-found: error
+
+  publish-macos:
+    needs:
+      - prepare
+      - publish-windows
+    permissions:
+      contents: write
+    runs-on: macos-15-intel
+    env:
+      ARAVA_BUILD_COMMIT: ${{ needs.prepare.outputs.commit }}
+      ARAVA_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      ARAVA_UPDATE_CHANNEL: dev
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      - run: npm run package:mac:dev -w @arava/desktop
+      - name: Verify macOS development package metadata
+        run: |
+          node scripts/verify-packaged-version.mjs '${{ needs.prepare.outputs.version }}' 'apps/desktop/release/mac-universal/ARAVA CRM.app/Contents/Resources/app-metadata.json' 'apps/desktop/release/mac-universal/ARAVA CRM.app/Contents/Resources/app.asar' 'apps/desktop/release/mac-universal/ARAVA CRM.app/Contents/Info.plist'
+          grep -q '^version: ${{ needs.prepare.outputs.version }}$' apps/desktop/release/dev-mac.yml
+      - name: Attach macOS development package to prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload 'v${{ needs.prepare.outputs.version }}' \
+            'apps/desktop/release/ARAVA-CRM-${{ needs.prepare.outputs.version }}-universal.dmg' \
+            'apps/desktop/release/ARAVA-CRM-${{ needs.prepare.outputs.version }}-universal.dmg.blockmap' \
+            'apps/desktop/release/ARAVA-CRM-${{ needs.prepare.outputs.version }}-universal.zip' \
+            'apps/desktop/release/ARAVA-CRM-${{ needs.prepare.outputs.version }}-universal.zip.blockmap' \
+            apps/desktop/release/dev-mac.yml --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arava-crm-macos-development-${{ needs.prepare.outputs.commit }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/dev-mac.yml
           if-no-files-found: error

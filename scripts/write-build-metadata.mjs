@@ -1,12 +1,11 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
+import { resolveDesktopBuildVersion } from './build-version.mjs';
 
 const projectRoot = resolve(import.meta.dirname, '..');
 const metadataPath = resolve(projectRoot, 'apps/desktop/build/app-metadata.json');
-const packageMetadataPath = resolve(projectRoot, 'apps/desktop/package.json');
-const packageMetadata = JSON.parse(await readFile(packageMetadataPath, 'utf8'));
-const version = process.env.ARAVA_BUILD_VERSION?.trim() || packageMetadata.version || '0.4.5';
+const version = await resolveDesktopBuildVersion(process.env, projectRoot);
 const updateChannel = process.env.ARAVA_UPDATE_CHANNEL?.trim() === 'dev' ? 'dev' : 'latest';
 
 function getCommit() {
