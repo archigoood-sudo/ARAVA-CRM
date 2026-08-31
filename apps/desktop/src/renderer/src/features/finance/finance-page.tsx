@@ -51,6 +51,7 @@ import { FinanceJournal } from './finance-journal';
 import { FinanceDebts } from './finance-debts';
 import { FinanceAnalytics } from './finance-analytics';
 import { PaymentDetailsDialog } from './payment-details-dialog';
+import { canManagePaymentRefunds } from './finance-access';
 import { PaymentDialog } from './payment-dialog';
 import { financeTodayOperationTone, hasFinanceTodayActivity } from './finance-today-model';
 import { RefundDialog } from './refund-dialog';
@@ -97,7 +98,7 @@ function ProviderOperationList({
 
 export function FinancePage() {
   const user = useAuthStore((state) => state.user);
-  const canRefund = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const canRefund = canManagePaymentRefunds(user?.role);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [parameters, setParameters] = useSearchParams();

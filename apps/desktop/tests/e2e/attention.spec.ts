@@ -47,6 +47,9 @@ test('центр внимания ведёт к действию, автораз
     const page = await application.firstWindow();
     await login(page, 'owner@arava.local', 'Arava!ChangeMe1');
     await completePassword(page, 'Owner!AttentionE2E2026');
+    await page.getByRole('button', { name: 'Уведомления' }).click();
+    await expect(page.getByRole('heading', { name: 'Требует внимания', level: 1 })).toBeVisible();
+    await page.getByRole('link', { name: 'Главная', exact: true }).click();
     const context = await page.evaluate(async () => {
       const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
         state?: { token?: string };

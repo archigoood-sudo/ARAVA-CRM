@@ -62,6 +62,7 @@ vi.mock('electron', () => ({
 
 import { createIpcHandlers } from './ipc';
 import type { CustomerDisplayManager } from './customer-display-manager';
+import { ExpenseAttachmentManager } from './expense-attachment-manager';
 import type { IntegrationManager } from './integration-manager';
 
 class IpcTestCredentials implements IntegrationCredentialStore {
@@ -1169,6 +1170,68 @@ describe('Electron IPC boundary', () => {
     expect(await database.cashTransaction.count({ where: { sourceId: expense.id } })).toBe(1);
   });
 
+  it('stores expense documents as managed media without exposing raw paths', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!ExpenseAttachment2026',
+    });
+    const source = join(directory, 'кассовый-чек.pdf');
+    await writeFile(source, 'receipt');
+    const opened: string[] = [];
+    const expenseAttachments = new ExpenseAttachmentManager(directory);
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'), {
+      chooseExpenseAttachment: () => Promise.resolve(source),
+      expenseAttachments,
+      openExpenseAttachment: (path) => {
+        opened.push(path);
+        return Promise.resolve();
+      },
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Вложения расходов' });
+    const category = (await handlers[IPC_CHANNELS.expenseCategoryCreate]?.(owner.token, {
+      branchId: branch.id,
+      isActive: true,
+      name: 'Документы',
+    })) as ExpenseCategorySummary;
+    const selection = (await handlers[IPC_CHANNELS.expenseAttachmentSelect]?.(owner.token)) as {
+      fileName: string;
+      reference: string;
+    };
+    const expense = (await handlers[IPC_CHANNELS.expenseCreate]?.(owner.token, {
+      amount: 1_000,
+      attachmentPath: selection.reference,
+      branchId: branch.id,
+      categoryId: category.id,
+      description: 'Расход с чеком',
+      paymentMethod: 'CASH',
+      spentAt: new Date().toISOString(),
+    })) as ExpenseSummary;
+
+    expect(expense).not.toHaveProperty('attachmentPath');
+    expect(expense.attachment).toMatchObject({ managed: true });
+    expect(
+      await database.expense.findUnique({
+        select: { attachmentPath: true },
+        where: { id: expense.id },
+      }),
+    ).toMatchObject({ attachmentPath: selection.reference });
+    await handlers[IPC_CHANNELS.expenseAttachmentOpen]?.(owner.token, expense.id);
+    expect(opened).toEqual([expenseAttachments.resolve(selection.reference)]);
+
+    const historical = join(directory, 'historical-receipt.pdf');
+    await writeFile(historical, 'historical');
+    await database.expense.update({
+      data: { attachmentPath: historical },
+      where: { id: expense.id },
+    });
+    await handlers[IPC_CHANNELS.expenseAttachmentOpen]?.(owner.token, expense.id);
+    expect(opened.at(-1)).toBe(historical);
+  });
+
   it('validates and executes global search through the typed IPC boundary', async () => {
     const owner = await service.login({
       email: INITIAL_OWNER_EMAIL,
@@ -1544,7 +1607,12 @@ describe('Electron IPC boundary', () => {
     )) as AttendanceScanOptions;
     expect(options.lessons).toEqual([expect.objectContaining({ lessonId: lesson.id })]);
     expect(await database.attendance.count()).toBe(0);
-    await handlers[IPC_CHANNELS.attendanceScanConfirm]?.(owner.token, lesson.id, student.id);
+    await handlers[IPC_CHANNELS.attendanceScanConfirm]?.(owner.token, {
+      groupId: group.id,
+      lessonId: lesson.id,
+      startsAt: lesson.startsAt,
+      studentId: student.id,
+    });
     expect(scheduleIntegration).toHaveBeenCalledOnce();
     expect(await database.syncOutbox.count({ where: { entityType: 'ATTENDANCE_CHECKIN' } })).toBe(
       1,

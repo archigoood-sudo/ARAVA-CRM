@@ -40,6 +40,7 @@ import {
   type AnalyticsQuery,
   type AttentionFilters,
   type AttendanceEntryInput,
+  type AttendanceScanConfirmationInput,
   type EnrollmentInput,
   type CashCorrectionInput,
   type CashRegisterInput,
@@ -580,6 +581,13 @@ export const attendanceOccurrenceInputSchema = z.object({
   groupId: z.string().min(1).max(100),
   startsAt: isoDateTime,
 });
+export const attendanceScanConfirmationInputSchema: z.ZodType<AttendanceScanConfirmationInput> =
+  z.object({
+    groupId: z.string().min(1).max(100),
+    lessonId: z.string().min(1).max(100).optional(),
+    startsAt: isoDateTime,
+    studentId: z.string().min(1).max(100),
+  });
 
 const moneyAmount = z.number().int().min(0, t('validation.money')).max(1_000_000_000);
 const positiveMoneyAmount = z
@@ -837,7 +845,10 @@ export const expenseCategoryInputSchema: z.ZodType<ExpenseCategoryInput> = z.obj
 
 export const expenseInputSchema: z.ZodType<ExpenseInput> = z.object({
   amount: positiveMoneyAmount,
-  attachmentPath: optionalText(1000),
+  attachmentPath: z
+    .string()
+    .regex(/^media\/expenses\/[\da-f-]+\.(?:jpe?g|png|webp|pdf)$/iu)
+    .optional(),
   branchId: z.string().min(1).max(100),
   cashRegisterId: optionalIdentifier,
   categoryId: z.string().min(1).max(100),

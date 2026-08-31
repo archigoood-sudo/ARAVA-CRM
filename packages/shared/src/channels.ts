@@ -383,6 +383,9 @@ export const IPC_CHANNELS = {
   expenseCancel: 'expense:cancel',
   expenseConfirm: 'expense:confirm',
   expenseCreate: 'expense:create',
+  expenseAttachmentDiscard: 'expense-attachment:discard',
+  expenseAttachmentOpen: 'expense-attachment:open',
+  expenseAttachmentSelect: 'expense-attachment:select',
   expenseList: 'expense:list',
   expenseUpdate: 'expense:update',
   cashRegisterCreate: 'cash-register:create',
@@ -1609,6 +1612,11 @@ export interface ExpenseInput {
   vendor?: string | undefined;
 }
 
+export interface ExpenseAttachmentSelection {
+  fileName: string;
+  reference: string;
+}
+
 export interface ExpenseListQuery {
   branchId?: string | undefined;
   categoryId?: string | undefined;
@@ -1620,7 +1628,11 @@ export interface ExpenseListQuery {
   status?: ExpenseStatus | undefined;
 }
 
-export interface ExpenseSummary extends Omit<ExpenseInput, 'cashRegisterId'> {
+export interface ExpenseSummary extends Omit<ExpenseInput, 'attachmentPath' | 'cashRegisterId'> {
+  attachment?: {
+    fileName: string;
+    managed: boolean;
+  };
   branchName: string;
   categoryName: string;
   confirmedByName?: string | undefined;
@@ -2347,6 +2359,8 @@ export interface AttendanceWorkspaceLesson {
   id: string;
   lessonId?: string | undefined;
   roomName?: string | undefined;
+  roomId?: string | undefined;
+  replacement?: boolean | undefined;
   source: 'LESSON' | 'WEEKLY_SCHEDULE';
   startsAt: string;
   status: LessonStatus;
@@ -2367,10 +2381,20 @@ export interface AttendanceScanLessonOption {
   currentStatus?: AttendanceStatus | undefined;
   effectiveTrainerName?: string | undefined;
   endsAt: string;
+  groupId: string;
   groupName: string;
-  lessonId: string;
+  id: string;
+  lessonId?: string | undefined;
   roomName?: string | undefined;
+  source: 'LESSON' | 'WEEKLY_SCHEDULE';
   startsAt: string;
+}
+
+export interface AttendanceScanConfirmationInput {
+  groupId: string;
+  lessonId?: string | undefined;
+  startsAt: string;
+  studentId: string;
 }
 
 export interface AttendanceScanOptions {
@@ -3493,8 +3517,7 @@ export interface AravaDesktopApi {
     scanOptions: (token: string, studentId: string, date: string) => Promise<AttendanceScanOptions>;
     confirmScan: (
       token: string,
-      lessonId: string,
-      studentId: string,
+      input: AttendanceScanConfirmationInput,
     ) => Promise<AttendanceLessonDetail>;
     save: (
       token: string,
@@ -3594,10 +3617,13 @@ export interface AravaDesktopApi {
     ) => Promise<ExpenseCategorySummary>;
   };
   expenses: {
+    discardAttachment: (token: string, reference: string) => Promise<void>;
     cancel: (token: string, id: string) => Promise<ExpenseSummary>;
     confirm: (token: string, id: string, cashRegisterId: string) => Promise<ExpenseSummary>;
     create: (token: string, input: ExpenseInput) => Promise<ExpenseSummary>;
     list: (token: string, query: ExpenseListQuery) => Promise<ExpenseSummary[]>;
+    openAttachment: (token: string, id: string) => Promise<void>;
+    selectAttachment: (token: string) => Promise<ExpenseAttachmentSelection | undefined>;
     update: (token: string, id: string, input: ExpenseInput) => Promise<ExpenseSummary>;
   };
   cash: {

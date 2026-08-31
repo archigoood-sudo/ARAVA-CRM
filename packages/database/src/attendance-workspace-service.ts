@@ -1,4 +1,5 @@
 import type {
+  AttendanceScanConfirmationInput,
   AttendanceScanLessonOption,
   AttendanceScanOptions,
   AttendanceOccurrenceInput,
@@ -11,7 +12,7 @@ import type { EnrollmentStatus, Prisma, StudentStatus } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
 import { assertBranchAccess, assertPermission } from './permissions';
-import { endOfLocalDay, startOfLocalDay } from './schedule';
+import { startOfLocalDay } from './schedule';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
 import { LessonOccurrenceService } from './lesson-occurrence-service';
@@ -82,6 +83,14 @@ function effectiveTrainerName(lesson: WorkspaceLessonRecord): string | undefined
   );
 }
 
+function localDateKey(value: Date): string {
+  return [
+    String(value.getFullYear()).padStart(4, '0'),
+    String(value.getMonth() + 1).padStart(2, '0'),
+    String(value.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
 export function rankAttendanceOptions(
   options: AttendanceScanLessonOption[],
   now: Date,
@@ -146,6 +155,8 @@ export class AttendanceWorkspaceService {
             direction: lesson.group.direction,
             effectiveTrainerName: effectiveTrainerName(lesson),
             groupName: lesson.group.name,
+            replacement: Boolean(lesson.substitution),
+            roomId: lesson.roomId ?? undefined,
             roomName: lesson.roomEntity?.name ?? lesson.room ?? undefined,
           }
         : schedule
@@ -154,6 +165,8 @@ export class AttendanceWorkspaceService {
               direction: schedule.group.direction,
               effectiveTrainerName: schedule.coach?.fullName ?? schedule.group.coach?.fullName,
               groupName: schedule.group.name,
+              replacement: false,
+              roomId: schedule.roomId ?? undefined,
               roomName: schedule.roomEntity?.name ?? schedule.room ?? undefined,
             }
           : undefined;
@@ -189,6 +202,34 @@ export class AttendanceWorkspaceService {
     return this.studio.materializeLessonOccurrence(token, input);
   }
 
+  async confirmScan(
+    token: string,
+    input: AttendanceScanConfirmationInput,
+  ): Promise<Awaited<ReturnType<StudioService['confirmScannedAttendance']>>> {
+    const startsAt = new Date(input.startsAt);
+    const available = await this.scanOptions(token, input.studentId, localDateKey(startsAt));
+    const selected = available.lessons.find(
+      (option) =>
+        option.groupId === input.groupId &&
+        new Date(option.startsAt).getTime() === startsAt.getTime() &&
+        (!input.lessonId || option.lessonId === input.lessonId),
+    );
+    if (!selected)
+      throw new DomainError(
+        'VALIDATION',
+        'Выбранное занятие недоступно для отметки. Обновите список и попробуйте ещё раз.',
+      );
+    const lessonId =
+      selected.lessonId ??
+      (
+        await this.studio.materializeLessonOccurrence(token, {
+          groupId: selected.groupId,
+          startsAt: selected.startsAt,
+        })
+      ).id;
+    return this.studio.confirmScannedAttendance(token, lessonId, input.studentId);
+  }
+
   async scanOptions(
     token: string,
     studentId: string,
@@ -199,53 +240,76 @@ export class AttendanceWorkspaceService {
     if (!student) throw new DomainError('NOT_FOUND', 'Ученик не найден.');
     assertBranchAccess(actor, student.branchId);
     const from = startOfLocalDay(date);
-    const to = endOfLocalDay(date);
-    const lessons = await this.database.lesson.findMany({
-      include: workspaceLessonInclude,
-      where: {
-        branchId: student.branchId,
-        startsAt: { gte: from, lte: to },
-        status: { not: 'CANCELLED' },
-        OR: [
-          { attendance: { some: { studentId } } },
-          {
-            group: {
-              enrollments: {
-                some: {
-                  studentId,
-                  joinedAt: { lte: to },
-                  OR: [{ leftAt: null }, { leftAt: { gte: from } }],
-                },
-              },
-            },
-          },
-        ],
-      },
-    });
+    const occurrences = (
+      await new LessonOccurrenceService(this.database).resolveDay(actor, from)
+    ).filter(({ branchId }) => branchId === student.branchId);
+    const lessonIds = occurrences.flatMap(({ lessonId }) => (lessonId ? [lessonId] : []));
+    const scheduleIds = occurrences.flatMap(({ scheduleTemplateId }) =>
+      scheduleTemplateId ? [scheduleTemplateId] : [],
+    );
+    const [lessons, schedules] = await Promise.all([
+      lessonIds.length
+        ? this.database.lesson.findMany({
+            include: workspaceLessonInclude,
+            where: { id: { in: lessonIds } },
+          })
+        : Promise.resolve([] as WorkspaceLessonRecord[]),
+      scheduleIds.length
+        ? this.database.weeklySchedule.findMany({
+            include: workspaceScheduleInclude,
+            where: { id: { in: scheduleIds } },
+          })
+        : Promise.resolve([] as WorkspaceScheduleRecord[]),
+    ]);
+    const lessonById = new Map(lessons.map((lesson) => [lesson.id, lesson]));
+    const scheduleById = new Map(schedules.map((schedule) => [schedule.id, schedule]));
     const enrollments = await this.database.enrollment.findMany({
       include: { student: { select: { archivedAt: true, status: true } } },
       where: {
-        groupId: { in: [...new Set(lessons.map(({ groupId }) => groupId))] },
+        groupId: { in: [...new Set(occurrences.map(({ groupId }) => groupId))] },
         studentId,
       },
     });
     const enrollmentByGroup = new Map(
       enrollments.map((enrollment) => [enrollment.groupId, enrollment]),
     );
-    const options = lessons.flatMap((lesson): AttendanceScanLessonOption[] => {
-      const current = lesson.attendance.find((attendance) => attendance.studentId === studentId);
-      const enrollment = enrollmentByGroup.get(lesson.groupId);
-      if (!current && (!enrollment || !membershipValidAt(enrollment, lesson.startsAt))) return [];
+    const options = occurrences.flatMap((occurrence): AttendanceScanLessonOption[] => {
+      const lesson = occurrence.lessonId ? lessonById.get(occurrence.lessonId) : undefined;
+      const schedule = occurrence.scheduleTemplateId
+        ? scheduleById.get(occurrence.scheduleTemplateId)
+        : undefined;
+      const current = lesson?.attendance.find((attendance) => attendance.studentId === studentId);
+      const enrollment = enrollmentByGroup.get(occurrence.groupId);
+      if (!current && (!enrollment || !membershipValidAt(enrollment, occurrence.startsAt)))
+        return [];
+      const metadata = lesson
+        ? {
+            branchName: lesson.branch.name,
+            effectiveTrainerName: effectiveTrainerName(lesson),
+            groupName: lesson.group.name,
+            roomName: lesson.roomEntity?.name ?? lesson.room ?? undefined,
+          }
+        : schedule
+          ? {
+              branchName: schedule.branch.name,
+              effectiveTrainerName: schedule.coach?.fullName ?? schedule.group.coach?.fullName,
+              groupName: schedule.group.name,
+              roomName: schedule.roomEntity?.name ?? schedule.room ?? undefined,
+            }
+          : undefined;
+      if (!metadata) return [];
       return [
         {
-          branchName: lesson.branch.name,
-          currentStatus: current?.status,
-          effectiveTrainerName: effectiveTrainerName(lesson),
-          endsAt: lesson.endsAt.toISOString(),
-          groupName: lesson.group.name,
-          lessonId: lesson.id,
-          roomName: lesson.roomEntity?.name ?? lesson.room ?? undefined,
-          startsAt: lesson.startsAt.toISOString(),
+          ...metadata,
+          ...(current ? { currentStatus: current.status } : {}),
+          endsAt: occurrence.endsAt.toISOString(),
+          groupId: occurrence.groupId,
+          id:
+            occurrence.lessonId ??
+            `occurrence:${occurrence.groupId}:${String(occurrence.startsAt.getTime())}`,
+          ...(occurrence.lessonId ? { lessonId: occurrence.lessonId } : {}),
+          source: occurrence.source,
+          startsAt: occurrence.startsAt.toISOString(),
         },
       ];
     });

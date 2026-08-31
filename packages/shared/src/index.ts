@@ -8,6 +8,7 @@ export {
   attendanceEntriesSchema,
   attendanceEntryInputSchema,
   attendanceOccurrenceInputSchema,
+  attendanceScanConfirmationInputSchema,
   attendanceStatusSchema,
   attendanceWorkspaceDateSchema,
   analyticsQuerySchema,

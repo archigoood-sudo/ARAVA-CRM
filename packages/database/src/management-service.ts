@@ -95,9 +95,17 @@ function dateRangeScope(dateFrom: string, dateTo: string) {
 }
 
 function expenseSummary(expense: ExpenseRecord): ExpenseSummary {
+  const attachment = expense.attachmentPath
+    ? {
+        fileName: expense.attachmentPath.split(/[\\/]/u).at(-1) ?? 'Документ расхода',
+        managed: /^media\/expenses\/[\da-f-]+\.(?:jpe?g|png|webp|pdf)$/iu.test(
+          expense.attachmentPath,
+        ),
+      }
+    : undefined;
   return {
     amount: expense.amount,
-    attachmentPath: expense.attachmentPath ?? undefined,
+    ...(attachment ? { attachment } : {}),
     branchId: expense.branchId,
     branchName: expense.branch.name,
     categoryId: expense.categoryId,
@@ -439,6 +447,13 @@ export class ManagementService {
       await this.audit(transaction, actor.id, 'EXPENSE_CANCELLED', 'Expense', id);
     });
     return this.getExpense(token, id);
+  }
+
+  async expenseAttachmentReference(token: string, id: string): Promise<string | undefined> {
+    const actor = await this.financeActor(token, 'expenses:read');
+    const expense = await this.requireExpense(id);
+    assertBranchAccess(actor, expense.branchId);
+    return expense.attachmentPath ?? undefined;
   }
 
   async listCashRegisters(token: string, branchId?: string): Promise<CashRegisterSummary[]> {

@@ -19,7 +19,7 @@ import {
   TableRow,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, FileText, Plus, Search, X } from 'lucide-react';
+import { Check, FileText, Paperclip, Plus, Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
@@ -212,6 +212,19 @@ export function ExpensesPage() {
                           Подтвердить
                         </Button>
                       ) : null}
+                      {item.attachment ? (
+                        <Button
+                          aria-label={`Открыть документ расхода: ${item.attachment.fileName}`}
+                          onClick={() =>
+                            void getDesktopApi().expenses.openAttachment(getSessionToken(), item.id)
+                          }
+                          size="small"
+                          title={item.attachment.fileName}
+                          variant="ghost"
+                        >
+                          <Paperclip className="size-4" />
+                        </Button>
+                      ) : null}
                       {item.status !== 'CANCELLED' ? (
                         <Button
                           aria-label="Отменить расход"
@@ -246,6 +259,7 @@ export function ExpensesPage() {
             setOpen(false);
           } catch (caught) {
             setError(getErrorMessage(caught, 'Не удалось сохранить расход.'));
+            throw caught;
           }
         }}
         open={open}

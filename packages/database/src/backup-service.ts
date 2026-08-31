@@ -51,6 +51,7 @@ const MANAGED_MEDIA_DIRECTORIES = [
   'media/branding',
   'media/customer-display',
   'media/documents',
+  'media/expenses',
   'media/publications',
 ] as const;
 const ALLOWED_MEDIA_EXTENSION = new Set(['.jpg', '.jpeg', '.png', '.webp', '.pdf']);

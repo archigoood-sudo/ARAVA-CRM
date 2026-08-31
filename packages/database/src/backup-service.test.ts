@@ -115,19 +115,23 @@ describe('Sprint 4.3A local backup and restore', () => {
     const brandingDirectory = join(directory, 'media', 'branding');
     const customerDisplayDirectory = join(directory, 'media', 'customer-display');
     const documentsDirectory = join(directory, 'media', 'documents');
+    const expensesDirectory = join(directory, 'media', 'expenses');
     const publicationsDirectory = join(directory, 'media', 'publications');
     await mkdir(brandingDirectory, { recursive: true });
     await mkdir(customerDisplayDirectory, { recursive: true });
     await mkdir(documentsDirectory, { recursive: true });
+    await mkdir(expensesDirectory, { recursive: true });
     await mkdir(publicationsDirectory, { recursive: true });
 
     const brandingMedia = join(brandingDirectory, 'logo.png');
     const customerMedia = join(customerDisplayDirectory, 'client-screen.jpg');
     const documentMedia = join(documentsDirectory, 'contract.pdf');
+    const expenseMedia = join(expensesDirectory, 'receipt.pdf');
     const publicationMedia = join(publicationsDirectory, 'publication.webp');
     await writeFile(brandingMedia, 'branding-image-v1');
     await writeFile(customerMedia, 'customer-image-v1');
     await writeFile(documentMedia, 'document-pdf-v1');
+    await writeFile(expenseMedia, 'expense-pdf-v1');
     await writeFile(publicationMedia, 'publication-image-v1');
 
     const beforeBranch = await application.createBranch(ownerToken, {
@@ -137,6 +141,7 @@ describe('Sprint 4.3A local backup and restore', () => {
     await writeFile(brandingMedia, 'branding-image-v2');
     await writeFile(customerMedia, 'customer-image-v2');
     await writeFile(documentMedia, 'document-pdf-v2');
+    await writeFile(expenseMedia, 'expense-pdf-v2');
     await writeFile(publicationMedia, 'publication-image-v2');
     await application.createBranch(ownerToken, { name: 'До восстановления' });
 
@@ -154,6 +159,7 @@ describe('Sprint 4.3A local backup and restore', () => {
     expect(await readFile(brandingMedia, 'utf8')).toBe('branding-image-v1');
     expect(await readFile(customerMedia, 'utf8')).toBe('customer-image-v1');
     expect(await readFile(documentMedia, 'utf8')).toBe('document-pdf-v1');
+    expect(await readFile(expenseMedia, 'utf8')).toBe('expense-pdf-v1');
     expect(await readFile(publicationMedia, 'utf8')).toBe('publication-image-v1');
     expect(await stat(customerMedia)).toBeDefined();
     expect(await stat(documentMedia)).toBeDefined();

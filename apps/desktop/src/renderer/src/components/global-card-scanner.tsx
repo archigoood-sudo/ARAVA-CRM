@@ -163,7 +163,7 @@ export function GlobalCardScanner() {
             localDateKey(),
           );
           setAttendancePrompt(options);
-          setSelectedLessonId(options.lessons[0]?.lessonId);
+          setSelectedLessonId(options.lessons[0]?.id);
         } else if (result.result === 'OPENED' && result.studentId) {
           const profilePath = `/students/${result.studentId}`;
           const target = `${profilePath}?openedByCard=1`;
@@ -224,9 +224,7 @@ export function GlobalCardScanner() {
     };
   }, [navigate, role]);
 
-  const selectedLesson = attendancePrompt?.lessons.find(
-    ({ lessonId }) => lessonId === selectedLessonId,
-  );
+  const selectedLesson = attendancePrompt?.lessons.find(({ id }) => id === selectedLessonId);
   const openStudent = async () => {
     if (!attendancePrompt) return;
     const profilePath = `/students/${attendancePrompt.studentId}`;
@@ -238,17 +236,16 @@ export function GlobalCardScanner() {
     if (!attendancePrompt || !selectedLesson || selectedLesson.currentStatus === 'PRESENT') return;
     setSavingAttendance(true);
     try {
-      await getDesktopApi().attendance.confirmScan(
-        getSessionToken(),
-        selectedLesson.lessonId,
-        attendancePrompt.studentId,
-      );
+      await getDesktopApi().attendance.confirmScan(getSessionToken(), {
+        groupId: selectedLesson.groupId,
+        ...(selectedLesson.lessonId ? { lessonId: selectedLesson.lessonId } : {}),
+        startsAt: selectedLesson.startsAt,
+        studentId: attendancePrompt.studentId,
+      });
       setAttendancePrompt({
         ...attendancePrompt,
         lessons: attendancePrompt.lessons.map((lesson) =>
-          lesson.lessonId === selectedLesson.lessonId
-            ? { ...lesson, currentStatus: 'PRESENT' }
-            : lesson,
+          lesson.id === selectedLesson.id ? { ...lesson, currentStatus: 'PRESENT' } : lesson,
         ),
       });
       setMessage('Посещение отмечено');
@@ -315,10 +312,10 @@ export function GlobalCardScanner() {
           <div className="space-y-2">
             {attendancePrompt.lessons.map((lesson) => (
               <AttendanceLessonChoice
-                key={lesson.lessonId}
+                key={lesson.id}
                 lesson={lesson}
-                onSelect={() => setSelectedLessonId(lesson.lessonId)}
-                selected={lesson.lessonId === selectedLessonId}
+                onSelect={() => setSelectedLessonId(lesson.id)}
+                selected={lesson.id === selectedLessonId}
               />
             ))}
           </div>

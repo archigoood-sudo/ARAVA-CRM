@@ -51,7 +51,11 @@ import { invalidateLessonCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { LessonDialog } from './lesson-dialog';
-import { buildRoomWeekPrintModel, buildRoomWeekSections } from './room-week-model';
+import {
+  buildRoomWeekPrintModel,
+  buildRoomWeekSections,
+  roomWeekDateKeys,
+} from './room-week-model';
 import { ScheduleDialog } from './schedule-dialog';
 
 function calendarRange(view: 'day' | 'month' | 'week', selectedDate: string): LessonListQuery {
@@ -111,19 +115,17 @@ export function SchedulePage() {
     queryFn: () => getDesktopApi().lessons.list(getSessionToken(), lessonQuery),
     queryKey: queryKeys.lessons(lessonQuery),
   });
-  const weekLessonQuery = useMemo(
-    () => ({
-      ...calendarRange('week', selectedDate),
-      branchId: filter.branchId,
-      coachId: filter.coachId,
-      groupId: filter.groupId,
-      roomId: filter.roomId,
-    }),
-    [filter.branchId, filter.coachId, filter.groupId, filter.roomId, selectedDate],
-  );
-  const weekLessons = useQuery({
-    queryFn: () => getDesktopApi().lessons.list(getSessionToken(), weekLessonQuery),
-    queryKey: queryKeys.lessons(weekLessonQuery),
+  const printOccurrences = useQuery({
+    enabled: Boolean(printRoom),
+    queryFn: async () => {
+      const days = await Promise.all(
+        roomWeekDateKeys(selectedDate).map((date) =>
+          getDesktopApi().attendance.today(getSessionToken(), date),
+        ),
+      );
+      return days.flatMap(({ lessons: dayLessons }) => dayLessons);
+    },
+    queryKey: ['schedule-room-print-occurrences', selectedDate],
   });
   const groups = useQuery({
     queryFn: () => getDesktopApi().groups.list(getSessionToken(), {}),
@@ -231,10 +233,10 @@ export function SchedulePage() {
   );
   const printModel = useMemo(
     () =>
-      printRoom
-        ? buildRoomWeekPrintModel(printRoom, weekLessons.data ?? [], selectedDate)
+      printRoom && printOccurrences.data
+        ? buildRoomWeekPrintModel(printRoom, printOccurrences.data, selectedDate)
         : undefined,
-    [printRoom, selectedDate, weekLessons.data],
+    [printOccurrences.data, printRoom, selectedDate],
   );
   useEffect(() => {
     if (!printModel) return;
@@ -433,7 +435,6 @@ export function SchedulePage() {
               </div>
               <Button
                 data-testid={`print-room-week-${room.id}`}
-                disabled={weekLessons.isLoading || weekLessons.isError}
                 onClick={() => setPrintRoom(room)}
                 size="small"
                 variant="outline"

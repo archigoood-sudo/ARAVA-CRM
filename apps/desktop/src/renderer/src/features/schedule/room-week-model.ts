@@ -1,4 +1,4 @@
-import type { LessonSummary, RoomSummary, WeeklyScheduleSummary } from '@arava/shared';
+import type { AttendanceWorkspaceLesson, RoomSummary, WeeklyScheduleSummary } from '@arava/shared';
 
 export interface RoomWeekSection {
   room: RoomSummary;
@@ -57,7 +57,7 @@ export function buildRoomWeekSections(
 
 export function buildRoomWeekPrintModel(
   room: RoomSummary,
-  lessons: readonly LessonSummary[],
+  lessons: readonly AttendanceWorkspaceLesson[],
   selectedDate: string,
 ): RoomWeekPrintModel {
   const weekStart = startOfLocalWeek(selectedDate);
@@ -81,9 +81,9 @@ export function buildRoomWeekPrintModel(
           cancelled: lesson.status === 'CANCELLED',
           groupName: lesson.groupName,
           id: lesson.id,
-          replacement: Boolean(lesson.substituteCoachId),
+          replacement: Boolean(lesson.replacement),
           time: `${formatTime(lesson.startsAt)}–${formatTime(lesson.endsAt)}`,
-          trainerName: lesson.substituteCoachName ?? lesson.coachName ?? 'Тренер не назначен',
+          trainerName: lesson.effectiveTrainerName ?? 'Тренер не назначен',
         })),
     };
   });
@@ -95,6 +95,15 @@ export function buildRoomWeekPrintModel(
     roomName: room.name,
     weekRange: formatWeekRange(weekStart, weekEnd),
   };
+}
+
+export function roomWeekDateKeys(selectedDate: string): string[] {
+  const weekStart = startOfLocalWeek(selectedDate);
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(weekStart);
+    date.setDate(date.getDate() + index);
+    return localDateKey(date);
+  });
 }
 
 export function startOfLocalWeek(selectedDate: string): Date {

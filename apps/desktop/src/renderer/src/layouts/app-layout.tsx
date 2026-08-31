@@ -108,6 +108,7 @@ export function AppLayout() {
             <button
               aria-label={t('layout.notifications')}
               className="flex size-10 items-center justify-center rounded-xl border border-border bg-surface text-muted-foreground transition hover:text-foreground"
+              onClick={() => navigate('/attention')}
               type="button"
             >
               <Bell className="size-[18px]" />

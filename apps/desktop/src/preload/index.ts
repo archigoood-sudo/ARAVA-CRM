@@ -262,8 +262,7 @@ const desktopApi: AravaDesktopApi = {
       invoke(IPC_CHANNELS.substitutionAssign, token, id, input),
   },
   attendance: {
-    confirmScan: (token, lessonId, studentId) =>
-      invoke(IPC_CHANNELS.attendanceScanConfirm, token, lessonId, studentId),
+    confirmScan: (token, input) => invoke(IPC_CHANNELS.attendanceScanConfirm, token, input),
     get: (token, lessonId) => invoke(IPC_CHANNELS.attendanceGet, token, lessonId),
     manualSave: (token, lessonId, entry) =>
       invoke(IPC_CHANNELS.attendanceManualSave, token, lessonId, entry),
@@ -345,7 +344,11 @@ const desktopApi: AravaDesktopApi = {
     confirm: (token, id, cashRegisterId) =>
       invoke(IPC_CHANNELS.expenseConfirm, token, id, cashRegisterId),
     create: (token, input) => invoke(IPC_CHANNELS.expenseCreate, token, input),
+    discardAttachment: (token, reference) =>
+      invoke(IPC_CHANNELS.expenseAttachmentDiscard, token, reference),
     list: (token, query) => invoke(IPC_CHANNELS.expenseList, token, query),
+    openAttachment: (token, id) => invoke(IPC_CHANNELS.expenseAttachmentOpen, token, id),
+    selectAttachment: (token) => invoke(IPC_CHANNELS.expenseAttachmentSelect, token),
     update: (token, id, input) => invoke(IPC_CHANNELS.expenseUpdate, token, id, input),
   },
   cash: {

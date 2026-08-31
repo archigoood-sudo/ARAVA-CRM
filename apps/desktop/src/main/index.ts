@@ -21,6 +21,7 @@ import { createMainWindow, getMainWindow } from './window';
 import { createIntegrationCredentialStore, IntegrationManager } from './integration-manager';
 import { isDesktopUpdateSupported, UpdateManager } from './update-manager';
 import { getDesktopUpdateChannel } from './build-metadata';
+import { AutomaticBackupManager } from './automatic-backup-manager';
 
 const { autoUpdater } = electronUpdater;
 
@@ -33,6 +34,7 @@ let database: DatabaseClient | undefined;
 let customerDisplay: CustomerDisplayManager | undefined;
 let integration: IntegrationManager | undefined;
 let updates: UpdateManager | undefined;
+let automaticBackups: AutomaticBackupManager | undefined;
 let shutdownPromise: Promise<void> | undefined;
 let shutdownComplete = false;
 
@@ -75,8 +77,14 @@ async function bootstrap(): Promise<void> {
     ),
   );
   await integration.initialize();
-  const automaticBackup = await backups.runAutomaticBackup();
-  if (automaticBackup) log.info('Automatic backup created', { file: automaticBackup.fileName });
+  automaticBackups = new AutomaticBackupManager(backups, {
+    onCreated: (entry) => log.info('Automatic backup created', { file: entry.fileName }),
+    onError: (error) =>
+      log.warn('Automatic backup check failed', {
+        message: error instanceof Error ? error.message : 'unknown error',
+      }),
+  });
+  await automaticBackups.initialize();
   customerDisplay = new CustomerDisplayManager(database, service);
   await customerDisplay.initialize();
   updates = new UpdateManager(service, autoUpdater, {
@@ -126,6 +134,7 @@ async function shutdown(): Promise<void> {
   shutdownPromise = (async () => {
     removeIpcHandlers();
     updates?.shutdown();
+    automaticBackups?.shutdown();
     customerDisplay?.shutdown();
     integration?.shutdown();
     if (database) await closeDatabase(database);

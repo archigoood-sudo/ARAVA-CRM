@@ -1,4 +1,4 @@
-import type { LessonSummary, RoomSummary, WeeklyScheduleSummary } from '@arava/shared';
+import type { AttendanceWorkspaceLesson, RoomSummary, WeeklyScheduleSummary } from '@arava/shared';
 import { describe, expect, it } from 'vitest';
 
 import { buildRoomWeekPrintModel, buildRoomWeekSections } from './room-week-model';
@@ -30,19 +30,23 @@ const schedule = (id: string, roomId: string): WeeklyScheduleSummary => ({
   weekday: 1,
 });
 
-const lesson = (id: string, roomId: string, startsAt: string): LessonSummary => ({
+const lesson = (id: string, roomId: string, startsAt: string): AttendanceWorkspaceLesson => ({
   attendanceExpected: 0,
   attendanceMarked: 0,
+  attendancePresent: 0,
   branchId: 'branch-1',
   branchName: 'Центр',
-  coachId: 'coach-1',
-  coachName: 'Анна Петрова',
+  direction: 'Балет',
+  effectiveTrainerName: 'Анна Петрова',
   endsAt: startsAt.replace('18:00', '19:00'),
   groupId: `group-${id}`,
   groupName: `Группа ${id}`,
   id,
+  lessonId: id,
+  replacement: false,
   roomId,
   roomName: roomId,
+  source: 'LESSON',
   startsAt,
   status: 'PLANNED',
 });
@@ -69,10 +73,8 @@ describe('room week schedule model', () => {
   it('prints only the selected room and selected week with replacement/cancellation state', () => {
     const first = {
       ...lesson('one', 'room-1', '2026-08-24T18:00:00+03:00'),
-      originalCoachId: 'coach-old',
-      originalCoachName: 'Ирина Орлова',
-      substituteCoachId: 'coach-new',
-      substituteCoachName: 'Мария Лебедева',
+      effectiveTrainerName: 'Мария Лебедева',
+      replacement: true,
     };
     const cancelled = {
       ...lesson('cancelled', 'room-1', '2026-08-25T18:00:00+03:00'),
@@ -101,5 +103,19 @@ describe('room week schedule model', () => {
       trainerName: 'Мария Лебедева',
     });
     expect(model.days[1]?.lessons[0]?.cancelled).toBe(true);
+  });
+
+  it('prints a canonical weekly-schedule occurrence without a materialized lesson', () => {
+    const recurring = {
+      ...lesson('occurrence:group-weekly:1', 'room-1', '2026-08-24T18:00:00+03:00'),
+      lessonId: undefined,
+      source: 'WEEKLY_SCHEDULE' as const,
+    };
+
+    const model = buildRoomWeekPrintModel(room('room-1', 'Зал 1', 1), [recurring], '2026-08-26');
+
+    expect(model.days.flatMap(({ lessons }) => lessons)).toEqual([
+      expect.objectContaining({ groupName: recurring.groupName, id: recurring.id }),
+    ]);
   });
 });

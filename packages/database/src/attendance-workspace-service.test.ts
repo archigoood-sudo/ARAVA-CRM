@@ -265,6 +265,61 @@ describe('Attendance 2.0 workspace', () => {
     ).rejects.toThrow('У вас нет доступа к этому филиалу.');
   });
 
+  it('offers a weekly-only occurrence and materializes it only after confirmed check-in', async () => {
+    const data = await fixture();
+    await database.weeklySchedule.create({
+      data: {
+        branchId: data.branch.id,
+        coachId: data.coach.id,
+        endTime: '15:00',
+        groupId: data.group.id,
+        isActive: true,
+        startTime: '14:00',
+        validFrom: new Date('2026-08-01T00:00:00'),
+        weekday: 7,
+      },
+    });
+
+    const before = await database.lesson.count();
+    const options = await workspace.scanOptions(ownerToken, data.student.id, '2026-08-23');
+    const recurring = options.lessons.find(({ source }) => source === 'WEEKLY_SCHEDULE');
+    expect(recurring).toMatchObject({ groupId: data.group.id });
+    expect(recurring).not.toHaveProperty('lessonId');
+    expect(await database.lesson.count()).toBe(before);
+    if (!recurring) throw new Error('Weekly occurrence was not offered to the scanner.');
+
+    await workspace.confirmScan(ownerToken, {
+      groupId: recurring.groupId,
+      startsAt: recurring.startsAt,
+      studentId: data.student.id,
+    });
+    await workspace.confirmScan(ownerToken, {
+      groupId: recurring.groupId,
+      startsAt: recurring.startsAt,
+      studentId: data.student.id,
+    });
+
+    const materialized = await database.lesson.findMany({
+      where: { groupId: data.group.id, startsAt: new Date(recurring.startsAt) },
+    });
+    expect(materialized).toHaveLength(1);
+    const materializedLesson = materialized[0];
+    if (!materializedLesson) throw new Error('Weekly occurrence was not materialized.');
+    expect(
+      await database.attendance.count({
+        where: { lessonId: materializedLesson.id, studentId: data.student.id },
+      }),
+    ).toBe(1);
+    expect(
+      await database.syncOutbox.count({
+        where: {
+          entityType: 'ATTENDANCE_CHECKIN',
+          entityId: `${materializedLesson.id}:${data.student.id}`,
+        },
+      }),
+    ).toBe(1);
+  });
+
   it('keeps historical marked students visible after enrolment changes', async () => {
     const data = await fixture();
     await studio.saveAttendance(ownerToken, data.current.id, [
@@ -539,8 +594,11 @@ it('ranks current, upcoming and past scan choices deterministically', () => {
   ): AttendanceScanLessonOption => ({
     branchName: 'Центр',
     endsAt,
+    groupId: `group-${lessonId}`,
     groupName: lessonId,
+    id: lessonId,
     lessonId,
+    source: 'LESSON',
     startsAt,
   });
   expect(

@@ -1,6 +1,15 @@
-import type { BranchSummary, ExpenseCategorySummary, ExpenseInput } from '@arava/shared';
+import type {
+  BranchSummary,
+  ExpenseAttachmentSelection,
+  ExpenseCategorySummary,
+  ExpenseInput,
+} from '@arava/shared';
 import { Button, Dialog, Input, Label, Select, Textarea } from '@arava/ui';
+import { FileText, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+
+import { getDesktopApi } from '../../lib/desktop-api';
+import { getSessionToken } from '../../stores/auth-store';
 
 function localDateTime() {
   const now = new Date();
@@ -30,7 +39,7 @@ export function ExpenseDialog({
   const [vendor, setVendor] = useState('');
   const [description, setDescription] = useState('');
   const [documentNumber, setDocumentNumber] = useState('');
-  const [attachmentPath, setAttachmentPath] = useState('');
+  const [attachment, setAttachment] = useState<ExpenseAttachmentSelection>();
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     if (open && !branchId && branches[0]) setBranchId(branches[0].id);
@@ -38,11 +47,20 @@ export function ExpenseDialog({
   const availableCategories = categories.filter(
     (category) => !category.branchId || category.branchId === branchId,
   );
+  const discardAttachment = async () => {
+    if (!attachment) return;
+    await getDesktopApi().expenses.discardAttachment(getSessionToken(), attachment.reference);
+    setAttachment(undefined);
+  };
+  const close = async () => {
+    await discardAttachment().catch(() => undefined);
+    onClose();
+  };
   return (
     <Dialog
       closeLabel="Закрыть"
       description="Расход сохраняется черновиком и попадёт в отчёты только после подтверждения."
-      onClose={onClose}
+      onClose={() => void close()}
       open={open}
       title="Новый расход"
     >
@@ -53,7 +71,7 @@ export function ExpenseDialog({
           setSaving(true);
           void onSave({
             amount: Math.round(Number(amount.replace(',', '.')) * 100),
-            attachmentPath: attachmentPath || undefined,
+            ...(attachment ? { attachmentPath: attachment.reference } : {}),
             branchId,
             categoryId,
             description,
@@ -61,7 +79,10 @@ export function ExpenseDialog({
             paymentMethod,
             spentAt: new Date(spentAt).toISOString(),
             vendor: vendor || undefined,
-          }).finally(() => setSaving(false));
+          })
+            .then(() => setAttachment(undefined))
+            .catch(() => undefined)
+            .finally(() => setSaving(false));
         }}
       >
         <div className="grid grid-cols-2 gap-3">
@@ -149,12 +170,37 @@ export function ExpenseDialog({
             />
           </Label>
           <Label>
-            Путь к файлу
-            <Input
-              onChange={(event) => setAttachmentPath(event.target.value)}
-              placeholder="Чек или документ"
-              value={attachmentPath}
-            />
+            Чек или документ
+            <div className="flex min-h-10 items-center gap-2 rounded-lg border border-border px-2">
+              {attachment ? (
+                <>
+                  <FileText className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-sm">{attachment.fileName}</span>
+                  <Button
+                    aria-label="Убрать документ"
+                    onClick={() => void discardAttachment()}
+                    size="small"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  onClick={async () => {
+                    const selected =
+                      await getDesktopApi().expenses.selectAttachment(getSessionToken());
+                    if (selected) setAttachment(selected);
+                  }}
+                  size="small"
+                  type="button"
+                  variant="ghost"
+                >
+                  Выбрать файл
+                </Button>
+              )}
+            </div>
           </Label>
         </div>
         <Label>
@@ -168,7 +214,7 @@ export function ExpenseDialog({
         </Label>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         <div className="flex justify-end gap-2">
-          <Button onClick={onClose} type="button" variant="secondary">
+          <Button onClick={() => void close()} type="button" variant="secondary">
             Отмена
           </Button>
           <Button disabled={saving} type="submit">

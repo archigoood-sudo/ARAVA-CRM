@@ -29,6 +29,7 @@ import {
   attendanceEntryInputSchema,
   attendanceEntriesSchema,
   attendanceOccurrenceInputSchema,
+  attendanceScanConfirmationInputSchema,
   attendanceWorkspaceDateSchema,
   chatListQuerySchema,
   chatSendInputSchema,
@@ -142,6 +143,7 @@ import type { CustomerDisplayManager } from './customer-display-manager';
 import type { IntegrationManager } from './integration-manager';
 import type { UpdateController } from './update-manager';
 import { DocumentPackManager } from './document-pack-manager';
+import { ExpenseAttachmentManager } from './expense-attachment-manager';
 
 type IpcHandler = (...arguments_: unknown[]) => unknown;
 const customerDisplaySettingsSchema = z.object({
@@ -186,6 +188,7 @@ export interface BackupIpcDependencies {
   chooseBackupFolder?: () => Promise<string | undefined>;
   chooseExportPath?: (defaultPath: string) => Promise<string | undefined>;
   chooseFinanceExportPath?: (defaultPath: string) => Promise<string | undefined>;
+  chooseExpenseAttachment?: () => Promise<string | undefined>;
   chooseBrandingLogo?: () => Promise<string | undefined>;
   openFolder?: (path: string) => Promise<void>;
   relaunch?: () => void;
@@ -202,6 +205,8 @@ export interface BackupIpcDependencies {
     | 'print'
   >;
   integration?: IntegrationManager;
+  expenseAttachments?: ExpenseAttachmentManager;
+  openExpenseAttachment?: (path: string) => Promise<unknown>;
   updates?: UpdateController;
 }
 
@@ -223,6 +228,8 @@ export function createIpcHandlers(
   const studentProfiles = new StudentProfileService(database, service);
   const studentDocuments = new StudentDocumentService(database, service);
   const documentPacks = backupDependencies.documentPacks ?? new DocumentPackManager();
+  const expenseAttachments =
+    backupDependencies.expenseAttachments ?? new ExpenseAttachmentManager(dirname(databasePath));
   const studentBulk = new StudentBulkService(database, service);
   const trainerProfiles = new TrainerProfileService(database, service);
   const attention = new AttentionService(database, service);
@@ -1011,11 +1018,10 @@ export function createIpcHandlers(
         identifierSchema.parse(unsafeLessonId),
         attendanceEntriesSchema.parse(unsafeEntries),
       ),
-    [IPC_CHANNELS.attendanceScanConfirm]: async (unsafeToken, unsafeLessonId, unsafeStudentId) => {
-      const result = await studio.confirmScannedAttendance(
+    [IPC_CHANNELS.attendanceScanConfirm]: async (unsafeToken, unsafeInput) => {
+      const result = await attendanceWorkspace.confirmScan(
         sessionTokenSchema.parse(unsafeToken),
-        identifierSchema.parse(unsafeLessonId),
-        identifierSchema.parse(unsafeStudentId),
+        attendanceScanConfirmationInputSchema.parse(unsafeInput),
       );
       backupDependencies.integration?.schedule();
       return result;
@@ -1469,17 +1475,66 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         expenseListQuerySchema.parse(unsafeQuery),
       ),
-    [IPC_CHANNELS.expenseCreate]: (unsafeToken, unsafeInput) =>
-      management.createExpense(
-        sessionTokenSchema.parse(unsafeToken),
-        expenseInputSchema.parse(unsafeInput),
-      ),
-    [IPC_CHANNELS.expenseUpdate]: (unsafeToken, unsafeId, unsafeInput) =>
-      management.updateExpense(
-        sessionTokenSchema.parse(unsafeToken),
+    [IPC_CHANNELS.expenseAttachmentSelect]: async (unsafeToken) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      assertPermission(await service.authenticate(token), 'expenses:manage');
+      const source = backupDependencies.chooseExpenseAttachment
+        ? await backupDependencies.chooseExpenseAttachment()
+        : (
+            await dialog.showOpenDialog({
+              filters: [
+                { extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp'], name: 'Чек или документ' },
+              ],
+              properties: ['openFile'],
+              title: 'Выберите документ расхода',
+            })
+          ).filePaths[0];
+      return source ? expenseAttachments.store(source) : undefined;
+    },
+    [IPC_CHANNELS.expenseAttachmentDiscard]: async (unsafeToken, unsafeReference) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      assertPermission(await service.authenticate(token), 'expenses:manage');
+      await expenseAttachments.discard(
+        z
+          .string()
+          .regex(/^media\/expenses\/[\da-f-]+\.(?:jpe?g|png|webp|pdf)$/iu)
+          .parse(unsafeReference),
+      );
+    },
+    [IPC_CHANNELS.expenseAttachmentOpen]: async (unsafeToken, unsafeId) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const reference = await management.expenseAttachmentReference(
+        token,
         identifierSchema.parse(unsafeId),
-        expenseInputSchema.parse(unsafeInput),
-      ),
+      );
+      if (!reference) throw new Error('У расхода нет прикреплённого документа.');
+      const result = backupDependencies.openExpenseAttachment
+        ? await backupDependencies.openExpenseAttachment(expenseAttachments.resolve(reference))
+        : await shell.openPath(expenseAttachments.resolve(reference));
+      if (typeof result === 'string' && result) throw new Error('Не удалось открыть документ.');
+    },
+    [IPC_CHANNELS.expenseCreate]: (unsafeToken, unsafeInput) => {
+      const input = expenseInputSchema.parse(unsafeInput);
+      return management
+        .createExpense(sessionTokenSchema.parse(unsafeToken), input)
+        .then((created) => {
+          expenseAttachments.commit(input.attachmentPath);
+          return created;
+        });
+    },
+    [IPC_CHANNELS.expenseUpdate]: (unsafeToken, unsafeId, unsafeInput) => {
+      const input = expenseInputSchema.parse(unsafeInput);
+      return management
+        .updateExpense(
+          sessionTokenSchema.parse(unsafeToken),
+          identifierSchema.parse(unsafeId),
+          input,
+        )
+        .then((updated) => {
+          expenseAttachments.commit(input.attachmentPath);
+          return updated;
+        });
+    },
     [IPC_CHANNELS.expenseConfirm]: (unsafeToken, unsafeId, unsafeRegisterId) =>
       management.confirmExpense(
         sessionTokenSchema.parse(unsafeToken),
