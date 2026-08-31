@@ -49,38 +49,21 @@ test('рабочее место отмечает вручную, через по
         fullName: 'Ева Беглова',
         role: 'COACH',
       });
-      const students = await Promise.all([
-        api.students.create(token, {
-          branchId: branch.id,
-          firstName: 'Алиса',
-          lastName: 'Иванова',
-          status: 'ACTIVE',
-        }),
-        api.students.create(token, {
-          branchId: branch.id,
-          firstName: 'Борис',
-          lastName: 'Петров',
-          status: 'ACTIVE',
-        }),
-        api.students.create(token, {
-          branchId: branch.id,
-          firstName: 'Максим',
-          lastName: 'Карточкин',
-          status: 'ACTIVE',
-        }),
-        api.students.create(token, {
-          branchId: branch.id,
-          firstName: 'Ручная',
-          lastName: 'Кнопка',
-          status: 'ACTIVE',
-        }),
-        api.students.create(token, {
-          branchId: branch.id,
-          firstName: 'Сначала',
-          lastName: 'Кнопка',
-          status: 'ACTIVE',
-        }),
-      ]);
+      const students = [];
+      for (const input of [
+        { firstName: 'Алиса', lastName: 'Иванова' },
+        { firstName: 'Борис', lastName: 'Петров' },
+        { firstName: 'Максим', lastName: 'Карточкин' },
+        { firstName: 'Ручная', lastName: 'Кнопка' },
+        { firstName: 'Сначала', lastName: 'Кнопка' },
+      ])
+        students.push(
+          await api.students.create(token, {
+            branchId: branch.id,
+            ...input,
+            status: 'ACTIVE',
+          }),
+        );
       const group = await api.groups.create(token, {
         branchId: branch.id,
         capacity: 20,
@@ -141,24 +124,26 @@ test('рабочее место отмечает вручную, через по
         groupId: group.id,
         startsAt: startsAt.toISOString(),
       });
+      const cardStudent = students[2];
+      const manualThenScannerStudent = students[4];
+      if (!cardStudent || !manualThenScannerStudent)
+        throw new Error('Attendance check-in students were not created.');
       await api.cards.assign(token, {
         barcode: '0000098701',
         registerIfUnknown: true,
-        studentId: students[2].id,
+        studentId: cardStudent.id,
       });
       await api.cards.assign(token, {
         barcode: '0000098702',
         registerIfUnknown: true,
-        studentId: students[4].id,
+        studentId: manualThenScannerStudent.id,
       });
       return {
-        cardStudentId: students[2].id,
+        cardStudentId: cardStudent.id,
         groupId: group.id,
         laterStudentId: laterStudent.id,
         lessonId: lesson.id,
-        manualCheckInStudentId: students[3].id,
         manualStudentId: manualStudent.id,
-        manualThenScannerStudentId: students[4].id,
         pastDate,
       };
     });
