@@ -735,6 +735,12 @@ function LeadDetailView({
               >
                 Открыть ученика
               </Link>
+              <Link
+                className="inline-flex h-9 items-center justify-center rounded-xl border border-border bg-surface px-3 text-sm font-semibold text-foreground hover:bg-muted"
+                to={`/onboarding?leadId=${lead.id}&studentId=${lead.convertedStudentCrmId}`}
+              >
+                Продолжить оформление
+              </Link>
               <LeadWriteAction accessKey={accessKey} studentId={lead.convertedStudentCrmId} />
             </div>
           </div>
@@ -763,6 +769,12 @@ function LeadDetailView({
                 Связать: {candidate.displayName}
               </Button>
             ))}
+            <Link
+              className="inline-flex h-9 items-center justify-center rounded-xl bg-foreground px-3 text-sm font-semibold text-background hover:opacity-90"
+              to={`/onboarding?leadId=${lead.id}`}
+            >
+              Открыть мастер оформления
+            </Link>
           </div>
           {!allowDuplicate ? (
             <Button className="mt-3" onClick={onAllowDuplicate} size="small" variant="ghost">
@@ -772,10 +784,18 @@ function LeadDetailView({
         </div>
       ) : null}
       {!converted && (lead.existingStudentCandidates.length === 0 || allowDuplicate) ? (
-        <Button className="mt-5 w-full" disabled={!canCreateStudent} onClick={onCreateStudent}>
-          <UserPlus className="size-4" />
-          Создать ученика
-        </Button>
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          <Button disabled={!canCreateStudent} onClick={onCreateStudent} variant="outline">
+            <UserPlus className="size-4" />
+            Только создать ученика
+          </Button>
+          <Link
+            className="inline-flex h-11 items-center justify-center rounded-xl bg-accent px-5 text-sm font-semibold text-neutral-950 shadow-accent hover:bg-accent-strong"
+            to={`/onboarding?leadId=${lead.id}`}
+          >
+            Начать оформление
+          </Link>
+        </div>
       ) : null}
       {actionError ? (
         <p className="mt-3 text-sm text-red-600">

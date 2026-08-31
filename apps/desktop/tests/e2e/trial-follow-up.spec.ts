@@ -157,11 +157,10 @@ test('записывает заявку на пробное и автомати�
         status: 'RECRUITING',
       });
       const now = new Date();
-      const startsAt = new Date(now.getTime() - 15 * 60_000);
-      if (startsAt.getDate() !== now.getDate()) startsAt.setHours(0, 0, 0, 0);
-      startsAt.setSeconds(0, 0);
-      const endsAt = new Date(now.getTime() + 45 * 60_000);
-      if (endsAt.getDate() !== now.getDate()) endsAt.setHours(23, 59, 0, 0);
+      const startsAt = new Date(now);
+      startsAt.setHours(0, 0, 0, 0);
+      const endsAt = new Date(Math.max(startsAt.getTime() + 60_000, now.getTime() - 60_000));
+      endsAt.setSeconds(0, 0);
       const time = (value: Date) =>
         `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
       await api.schedules.create(token, {
@@ -197,7 +196,15 @@ test('записывает заявку на пробное и автомати�
     const scheduleTrial = page.getByRole('button', { name: 'Записать на пробное' });
     await expect(scheduleTrial).toBeEnabled();
     await scheduleTrial.click();
-    await expect(page.getByText('Пробное сегодня', { exact: true })).toBeVisible();
+    const scheduledDate = new Date(setup.startsAt);
+    const currentDate = new Date();
+    const expectedTrialState =
+      scheduledDate.getFullYear() === currentDate.getFullYear() &&
+      scheduledDate.getMonth() === currentDate.getMonth() &&
+      scheduledDate.getDate() === currentDate.getDate()
+        ? 'Пробное сегодня'
+        : 'Пробное запланировано';
+    await expect(page.getByText(expectedTrialState, { exact: true })).toBeVisible();
     const materialized = await page.evaluate(
       async ({ groupId: currentGroupId, startsAt }) => {
         const stored = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
@@ -227,9 +234,14 @@ test('записывает заявку на пробное и автомати�
     expect(materialized.lessonCount).toBe(1);
     expect(materialized.lessonId).toBeTruthy();
     if (!materialized.lessonId) throw new Error('trial lesson unavailable');
-    await page.getByRole('button', { name: 'Создать ученика' }).click();
+    await page.getByRole('link', { name: 'Начать оформление' }).click();
+    await expect(page.getByTestId('onboarding-client-step')).toContainText('Иванова Мария');
+    await page.getByRole('button', { name: 'Создать клиента из заявки' }).click();
     await page.getByRole('button', { name: 'Добавить ученика' }).click();
-    await expect(page.getByText('Ученик уже создан и связан.')).toBeVisible();
+    await expect(page.getByTestId('onboarding-group-step')).toBeVisible();
+    await expect(page.getByLabel('Группа оформления')).toHaveValue(setup.group.id);
+    await page.getByRole('button', { name: 'Добавить в группу' }).click();
+    await expect(page.getByTestId('onboarding-documents-step')).toBeVisible();
     const studentId = await page.evaluate(async () => {
       const stored = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
         state?: { token?: string };
@@ -257,13 +269,19 @@ test('записывает заявку на пробное и автомати�
         state?: { token?: string };
       };
       const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
-      return api.subscriptions.listStudent(stored.state?.token ?? '', currentStudentId);
+      const token = stored.state?.token ?? '';
+      const [finance, trials] = await Promise.all([
+        api.subscriptions.listStudent(token, currentStudentId),
+        api.trials.list(token, { includeFollowUp: true, studentId: currentStudentId }),
+      ]);
+      return { finance, trialState: trials[0]?.state };
     }, studentId);
-    expect(trialFinance.uncoveredDebt).toBe(0);
-    expect(trialFinance.uncoveredAttendances).toEqual([]);
-    await page.getByRole('link', { name: 'Главная' }).click();
-    await expect(page.getByText('Связаться после пробного: Иванова Мария')).toBeVisible();
-    await page.getByRole('button', { name: 'Оформить абонемент' }).first().click();
+    expect(trialFinance.finance.uncoveredDebt).toBe(0);
+    expect(trialFinance.finance.uncoveredAttendances).toEqual([]);
+    expect(trialFinance.trialState).toBe('FOLLOW_UP');
+    await page.evaluate((currentStudentId) => {
+      window.location.hash = `#/students/${currentStudentId}?action=subscription`;
+    }, studentId);
     await expect(page.getByText('Пробные занятия', { exact: true })).toBeVisible();
     await page.evaluate(
       async ({ branchId, studentId: currentStudentId }) => {

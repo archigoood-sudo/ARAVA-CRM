@@ -85,7 +85,7 @@ test('рабочее место отмечает вручную, через по
           studentId: student.id,
         });
       const pastDateValue = new Date();
-      pastDateValue.setDate(pastDateValue.getDate() - 1);
+      pastDateValue.setDate(pastDateValue.getDate() - 2);
       const pastDate = `${String(pastDateValue.getFullYear())}-${String(
         pastDateValue.getMonth() + 1,
       ).padStart(2, '0')}-${String(pastDateValue.getDate()).padStart(2, '0')}`;
@@ -209,6 +209,7 @@ test('рабочее место отмечает вручную, через по
     await repeatedPrompt.getByRole('button', { name: 'Закрыть' }).last().click();
 
     await page.getByRole('link', { name: 'Посещения', exact: true }).click();
+    await page.getByRole('button', { name: 'Предыдущий день' }).click();
     await page.getByRole('button', { name: 'Предыдущий день' }).click();
     await expect(page.getByLabel('Дата посещений')).toHaveValue(fixture.pastDate);
     const historicalCard = page.getByRole('button').filter({ hasText: 'Хип-хоп 8–10 лет' });

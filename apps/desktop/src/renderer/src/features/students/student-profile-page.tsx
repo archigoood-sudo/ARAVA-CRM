@@ -365,6 +365,12 @@ export function StudentProfilePage() {
               className="relative mt-5 flex flex-wrap gap-1.5 border-t border-white/10 pt-4"
               data-testid="student-profile-actions"
             >
+              <Link
+                className="inline-flex h-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-3 text-sm font-semibold text-white hover:bg-white/15"
+                to={`/onboarding?studentId=${studentId}`}
+              >
+                Продолжить оформление
+              </Link>
               {profile.primaryAction ? (
                 <Button
                   className="bg-accent text-neutral-950 hover:bg-accent/90"

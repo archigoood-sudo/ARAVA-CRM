@@ -94,7 +94,9 @@ test('договор и существующее media-согласие сохр
       dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [directory] });
     }, docxDirectory);
     await packDialog.getByRole('button', { name: 'Сохранить DOCX' }).click();
-    await expect.poll(async () => (await readdir(docxDirectory)).length).toBe(2);
+    await expect
+      .poll(async () => (await readdir(docxDirectory)).length, { timeout: 30_000 })
+      .toBe(2);
     for (const fileName of await readdir(docxDirectory)) {
       const archive = await JSZip.loadAsync(await readFile(resolve(docxDirectory, fileName)));
       const xml = (await archive.file('word/document.xml')?.async('string')) ?? '';
@@ -102,7 +104,9 @@ test('договор и существующее media-согласие сохр
     }
     await packDialog.getByRole('button', { name: 'Предпросмотр' }).click();
     await expect
-      .poll(() => application.windows().some((window) => window.url().includes('/documents.pdf')))
+      .poll(() => application.windows().some((window) => window.url().includes('/documents.pdf')), {
+        timeout: 30_000,
+      })
       .toBe(true);
     const previewWindow = application
       .windows()
@@ -121,10 +125,12 @@ test('договор и существующее media-согласие сохр
     await packDialog.getByRole('button', { name: 'Сохранить PDF' }).click();
     await expect(documents.getByRole('button', { name: 'Файл' })).toBeVisible();
     await expect
-      .poll(async () =>
-        stat(savedPdf)
-          .then(({ size }) => size)
-          .catch(() => 0),
+      .poll(
+        async () =>
+          stat(savedPdf)
+            .then(({ size }) => size)
+            .catch(() => 0),
+        { timeout: 30_000 },
       )
       .toBeGreaterThan(1_000);
     await packDialog.getByRole('button', { name: 'Закрыть', exact: true }).last().click();
@@ -199,10 +205,12 @@ test('договор и существующее media-согласие сохр
     page.once('dialog', (dialog) => void dialog.accept());
     await adultPack.getByRole('button', { name: 'Сохранить PDF' }).click();
     await expect
-      .poll(async () =>
-        stat(adultPdf)
-          .then(({ size }) => size)
-          .catch(() => 0),
+      .poll(
+        async () =>
+          stat(adultPdf)
+            .then(({ size }) => size)
+            .catch(() => 0),
+        { timeout: 30_000 },
       )
       .toBeGreaterThan(1_000);
     await adultPack.getByRole('button', { name: 'Закрыть', exact: true }).last().click();

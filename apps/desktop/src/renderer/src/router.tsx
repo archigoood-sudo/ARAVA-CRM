@@ -20,6 +20,7 @@ import { LeadsPage } from './features/leads/leads-page';
 import { PayrollPage } from './features/payroll/payroll-page';
 import { AnalyticsPage } from './features/analytics/analytics-page';
 import { ReportsPage } from './features/reports/reports-page';
+import { OnboardingPage } from './features/onboarding/onboarding-page';
 import { RoomsPage } from './features/rooms/rooms-page';
 import { GroupProfilePage } from './features/groups/group-profile-page';
 import { GroupsPage } from './features/groups/groups-page';
@@ -70,6 +71,7 @@ export const router = createHashRouter([
           { element: <AttendancePage />, path: '/attendance/:lessonId' },
           { element: <StudentsPage />, path: '/students' },
           { element: <StudentProfilePage />, path: '/students/:studentId' },
+          { element: <OnboardingPage />, path: '/onboarding' },
           { element: <CardsPage />, path: '/cards' },
           { element: <ChatsPage />, path: '/chats' },
           { element: <PublicationsPage />, path: '/publications' },

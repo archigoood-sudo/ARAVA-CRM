@@ -58,7 +58,7 @@ test('платёжная операция становится одним под
         status: 'ACTIVE',
         studentId: student.id,
       });
-      const lessonStartsAt = new Date(Date.now() - 86_400_000);
+      const lessonStartsAt = new Date(Date.now() - 12 * 60 * 60_000);
       const lesson = await api.lessons.create(token, {
         endsAt: new Date(lessonStartsAt.getTime() + 3_600_000).toISOString(),
         groupId: group.id,
@@ -93,6 +93,12 @@ test('платёжная операция становится одним под
         type: 'LESSON_PACK',
         validityDays: 30,
       });
+      const localToday = new Date();
+      const startsAt = [
+        String(localToday.getFullYear()).padStart(4, '0'),
+        String(localToday.getMonth() + 1).padStart(2, '0'),
+        String(localToday.getDate()).padStart(2, '0'),
+      ].join('-');
       const subscription = await api.subscriptions.create(token, {
         initialPayment: {
           amount: 100_000,
@@ -100,7 +106,7 @@ test('платёжная операция становится одним под
           paymentMethod: 'CASH',
         },
         salePrice: 100_000,
-        startsAt: new Date().toISOString().slice(0, 10),
+        startsAt,
         studentId: student.id,
         tariffId: tariff.id,
       });

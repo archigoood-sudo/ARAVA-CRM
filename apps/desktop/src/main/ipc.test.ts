@@ -2086,7 +2086,12 @@ describe('Electron IPC boundary', () => {
         sort: 'OLDEST',
       }),
     ).toThrow();
-    const date = new Date().toISOString().slice(0, 10);
+    const currentDate = new Date();
+    const date = [
+      String(currentDate.getFullYear()).padStart(4, '0'),
+      String(currentDate.getMonth() + 1).padStart(2, '0'),
+      String(currentDate.getDate()).padStart(2, '0'),
+    ].join('-');
     const analytics = (await handlers[IPC_CHANNELS.financeAnalytics]?.(owner.token, {
       dateFrom: date,
       dateTo: date,

@@ -19,7 +19,12 @@ import { ApplicationService } from './services';
 import { StudioService } from './studio-service';
 
 const DAY_MS = 86_400_000;
-const dateString = (value: Date) => value.toISOString().slice(0, 10);
+const dateString = (value: Date) =>
+  [
+    String(value.getFullYear()).padStart(4, '0'),
+    String(value.getMonth() + 1).padStart(2, '0'),
+    String(value.getDate()).padStart(2, '0'),
+  ].join('-');
 const freezeInput = (days: number, reason = 'Отпуск ученика') => ({
   endsAt: dateString(new Date(Date.now() + (days - 1) * DAY_MS)),
   reason,
