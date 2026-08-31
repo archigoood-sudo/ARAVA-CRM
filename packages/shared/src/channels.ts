@@ -327,6 +327,7 @@ export const IPC_CHANNELS = {
   lessonGet: 'lesson:get',
   lessonList: 'lesson:list',
   lessonUpdate: 'lesson:update',
+  attendanceCheckInConfirm: 'attendance:check-in-confirm',
   attendanceGet: 'attendance:get',
   attendanceManualSave: 'attendance:manual-save',
   attendanceOpenOccurrence: 'attendance:open-occurrence',
@@ -3507,6 +3508,11 @@ export interface AravaDesktopApi {
     ) => Promise<TrainerSubstitutionSummary>;
   };
   attendance: {
+    confirmCheckIn: (
+      token: string,
+      lessonId: string,
+      studentId: string,
+    ) => Promise<AttendanceLessonDetail>;
     get: (token: string, lessonId: string) => Promise<AttendanceLessonDetail>;
     manualSave: (
       token: string,

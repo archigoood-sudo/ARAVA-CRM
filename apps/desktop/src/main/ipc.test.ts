@@ -1627,6 +1627,70 @@ describe('Electron IPC boundary', () => {
       status: 'PRESENT',
       studentId: manualStudent.id,
     });
+    expect(await database.syncOutbox.count({ where: { entityType: 'ATTENDANCE_CHECKIN' } })).toBe(
+      1,
+    );
+    await expect(
+      handlers[IPC_CHANNELS.attendanceCheckInConfirm]?.(owner.token, lesson.id, manualStudent.id),
+    ).rejects.toThrow('Отметить приход ребёнка можно только для сегодняшнего занятия.');
+    await studio.addEnrollment(owner.token, group.id, {
+      joinedAt: '2026-08-01',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: manualStudent.id,
+    });
+    const scannerFirstStudent = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Сначала',
+      lastName: 'Сканер',
+      status: 'ACTIVE',
+    });
+    await studio.addEnrollment(owner.token, group.id, {
+      joinedAt: '2026-08-01',
+      overrideCapacity: false,
+      status: 'ACTIVE',
+      studentId: scannerFirstStudent.id,
+    });
+    const startsAt = new Date(Date.now() - 5 * 60_000);
+    const todayLesson = await studio.createLesson(owner.token, {
+      coachId: coach.id,
+      endsAt: new Date(startsAt.getTime() + 60 * 60_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+
+    await handlers[IPC_CHANNELS.attendanceCheckInConfirm]?.(
+      owner.token,
+      todayLesson.id,
+      manualStudent.id,
+    );
+    await handlers[IPC_CHANNELS.attendanceCheckInConfirm]?.(
+      owner.token,
+      todayLesson.id,
+      manualStudent.id,
+    );
+    await handlers[IPC_CHANNELS.attendanceScanConfirm]?.(owner.token, {
+      groupId: group.id,
+      lessonId: todayLesson.id,
+      startsAt: todayLesson.startsAt,
+      studentId: manualStudent.id,
+    });
+    await handlers[IPC_CHANNELS.attendanceScanConfirm]?.(owner.token, {
+      groupId: group.id,
+      lessonId: todayLesson.id,
+      startsAt: todayLesson.startsAt,
+      studentId: scannerFirstStudent.id,
+    });
+    await handlers[IPC_CHANNELS.attendanceCheckInConfirm]?.(
+      owner.token,
+      todayLesson.id,
+      scannerFirstStudent.id,
+    );
+    expect(
+      await database.syncOutbox.count({
+        where: { entityType: 'ATTENDANCE_CHECKIN', entityId: { startsWith: todayLesson.id } },
+      }),
+    ).toBe(2);
     expect(
       await database.attendance.count({
         where: { lessonId: lesson.id, studentId: manualStudent.id },

@@ -68,6 +68,18 @@ test('рабочее место отмечает вручную, через по
           lastName: 'Карточкин',
           status: 'ACTIVE',
         }),
+        api.students.create(token, {
+          branchId: branch.id,
+          firstName: 'Ручная',
+          lastName: 'Кнопка',
+          status: 'ACTIVE',
+        }),
+        api.students.create(token, {
+          branchId: branch.id,
+          firstName: 'Сначала',
+          lastName: 'Кнопка',
+          status: 'ACTIVE',
+        }),
       ]);
       const group = await api.groups.create(token, {
         branchId: branch.id,
@@ -134,12 +146,19 @@ test('рабочее место отмечает вручную, через по
         registerIfUnknown: true,
         studentId: students[2].id,
       });
+      await api.cards.assign(token, {
+        barcode: '0000098702',
+        registerIfUnknown: true,
+        studentId: students[4].id,
+      });
       return {
         cardStudentId: students[2].id,
         groupId: group.id,
         laterStudentId: laterStudent.id,
         lessonId: lesson.id,
+        manualCheckInStudentId: students[3].id,
         manualStudentId: manualStudent.id,
+        manualThenScannerStudentId: students[4].id,
         pastDate,
       };
     });
@@ -150,7 +169,7 @@ test('рабочее место отмечает вручную, через по
       page.getByTestId('main-scroll').getByRole('heading', { name: 'Посещения', exact: true }),
     ).toBeVisible();
     const lessonCard = page.getByRole('button').filter({ hasText: 'Хип-хоп 8–10 лет' });
-    await expect(lessonCard).toContainText('Отмечено 0 из 4');
+    await expect(lessonCard).toContainText('Отмечено 0 из 6');
     await lessonCard.click();
     await expect(page).toHaveURL(new RegExp(`/attendance/${fixture.lessonId}`, 'u'));
 
@@ -167,6 +186,24 @@ test('рабочее место отмечает вручную, через по
     await expect(page.getByText('Опоздали', { exact: true }).locator('..')).toContainText('1');
     await page.getByRole('button', { name: 'Петров Борис: Присутствовал' }).click();
     await search.fill('');
+
+    const manualCheckIn = page.getByRole('button', {
+      name: 'Кнопка Ручная: Ребёнок в студии',
+    });
+    await manualCheckIn.click();
+    await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('3');
+    await manualCheckIn.click();
+    await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('3');
+
+    await page.getByRole('button', { name: 'Кнопка Сначала: Ребёнок в студии' }).click();
+    await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('4');
+    await scan(page, '0000098702');
+    const manualThenScannerPrompt = page.getByRole('dialog');
+    await expect(manualThenScannerPrompt.getByText('✓ Уже отмечен')).toBeVisible();
+    await expect(
+      manualThenScannerPrompt.getByRole('button', { name: 'Уже отмечен', exact: true }),
+    ).toBeDisabled();
+    await manualThenScannerPrompt.getByRole('button', { name: 'Закрыть' }).last().click();
 
     await scan(page, '0000098701');
     const prompt = page.getByRole('dialog');
@@ -187,7 +224,9 @@ test('рабочее место отмечает вручную, через по
 
     await page.getByRole('link', { name: 'Посещения', exact: true }).click();
     await page.getByRole('button').filter({ hasText: 'Хип-хоп 8–10 лет' }).click();
-    await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('3');
+    await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('5');
+    await page.getByRole('button', { name: 'Карточкин Максим: Ребёнок в студии' }).click();
+    await expect(page.getByText('Присутствуют', { exact: true }).locator('..')).toContainText('5');
 
     await scan(page, '0000098701');
     const repeatedPrompt = page.getByRole('dialog');
@@ -213,9 +252,10 @@ test('рабочее место отмечает вручную, через по
     await page.getByRole('button', { name: 'Предыдущий день' }).click();
     await expect(page.getByLabel('Дата посещений')).toHaveValue(fixture.pastDate);
     const historicalCard = page.getByRole('button').filter({ hasText: 'Хип-хоп 8–10 лет' });
-    await expect(historicalCard).toContainText('Отмечено 0 из 3');
+    await expect(historicalCard).toContainText('Отмечено 0 из 5');
     await historicalCard.click();
     await expect(page).toHaveURL(/\/attendance\/[^/]+\?from=workspace&date=/u);
+    await expect(page.getByRole('button', { name: /Ребёнок в студии/u })).toHaveCount(0);
     const historicalUrl = page.url();
     const historicalLessonId = /\/attendance\/([^?]+)/u.exec(historicalUrl)?.[1];
     if (!historicalLessonId) throw new Error('Historical lesson route was not resolved.');

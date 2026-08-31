@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { AttendanceWorkspaceLesson } from '@arava/shared';
 
-import { attendanceProgress, groupAttendanceLessons, localDateKey } from './attendance-workspace';
+import {
+  attendanceProgress,
+  groupAttendanceLessons,
+  isAttendanceCheckInDate,
+  localDateKey,
+} from './attendance-workspace';
 
 function lesson(
   id: string,
@@ -64,5 +69,12 @@ describe('attendance workspace presentation', () => {
 
   it('uses a local calendar date instead of a UTC date', () => {
     expect(localDateKey(new Date(2026, 7, 23, 0, 5))).toBe('2026-08-23');
+  });
+
+  it('offers explicit studio check-in only for the current local date', () => {
+    const today = new Date(2026, 7, 23, 12, 0);
+    expect(isAttendanceCheckInDate('2026-08-23T00:05:00', today)).toBe(true);
+    expect(isAttendanceCheckInDate('2026-08-22T23:55:00', today)).toBe(false);
+    expect(isAttendanceCheckInDate('2026-08-24T00:05:00', today)).toBe(false);
   });
 });

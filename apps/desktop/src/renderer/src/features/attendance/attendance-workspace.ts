@@ -1,5 +1,7 @@
 import type { AttendanceWorkspaceLesson } from '@arava/shared';
 
+import { localDateInputValue } from '../../lib/local-date';
+
 export { localDateInputValue as localDateKey } from '../../lib/local-date';
 
 export type AttendanceTimeGroup = 'CURRENT' | 'UPCOMING' | 'LATER' | 'COMPLETED';
@@ -37,4 +39,8 @@ export function attendanceProgress(lesson: AttendanceWorkspaceLesson): string {
   if (lesson.attendanceMarked === 0) return 'Не заполняли';
   const remaining = Math.max(0, lesson.attendanceExpected - lesson.attendanceMarked);
   return remaining > 0 ? `Осталось отметить ${String(remaining)}` : 'Посещаемость заполнена';
+}
+
+export function isAttendanceCheckInDate(startsAt: string, today = new Date()): boolean {
+  return localDateInputValue(new Date(startsAt)) === localDateInputValue(today);
 }

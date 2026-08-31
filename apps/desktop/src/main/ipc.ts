@@ -1018,6 +1018,20 @@ export function createIpcHandlers(
         identifierSchema.parse(unsafeLessonId),
         attendanceEntriesSchema.parse(unsafeEntries),
       ),
+    [IPC_CHANNELS.attendanceCheckInConfirm]: async (
+      unsafeToken,
+      unsafeLessonId,
+      unsafeStudentId,
+    ) => {
+      const result = await studio.confirmAttendanceCheckIn(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeLessonId),
+        identifierSchema.parse(unsafeStudentId),
+        { todayOnly: true },
+      );
+      backupDependencies.integration?.schedule();
+      return result;
+    },
     [IPC_CHANNELS.attendanceScanConfirm]: async (unsafeToken, unsafeInput) => {
       const result = await attendanceWorkspace.confirmScan(
         sessionTokenSchema.parse(unsafeToken),

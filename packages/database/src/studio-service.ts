@@ -960,10 +960,11 @@ export class StudioService {
     return this.getAttendance(token, lessonId);
   }
 
-  async confirmScannedAttendance(
+  async confirmAttendanceCheckIn(
     token: string,
     lessonId: string,
     studentId: string,
+    options: { todayOnly?: boolean } = {},
   ): Promise<AttendanceLessonDetail> {
     const actor = await this.application.authenticate(token);
     assertPermission(actor, 'attendance:manage');
@@ -971,6 +972,14 @@ export class StudioService {
       throw new DomainError('AUTHORIZATION', t('domain.authorization.permissionDenied'));
     const lesson = await this.requireLesson(lessonId);
     this.assertLessonRead(actor, lesson);
+    if (
+      options.todayOnly &&
+      (lesson.startsAt < startOfLocalDay(new Date()) || lesson.startsAt > endOfLocalDay(new Date()))
+    )
+      throw new DomainError(
+        'VALIDATION',
+        'Отметить приход ребёнка можно только для сегодняшнего занятия.',
+      );
     if (lesson.status === 'CANCELLED')
       throw new DomainError('VALIDATION', t('domain.validation.attendanceCancelled'));
     const allowedStudents = await this.attendanceStudentIds(lesson);
@@ -1102,7 +1111,7 @@ export class StudioService {
     webActionId?: string,
     allowCoachCorrection = false,
     manuallyAddedStudents: Set<string> = new Set<string>(),
-    scannerCheckinStudents: Set<string> = new Set<string>(),
+    checkinStudents: Set<string> = new Set<string>(),
   ): Promise<void> {
     if (new Set(entries.map(({ studentId }) => studentId)).size !== entries.length)
       throw new DomainError('VALIDATION', t('domain.validation.attendanceUnique'));
@@ -1172,11 +1181,7 @@ export class StudioService {
             lessonStartsAt: lesson.startsAt,
             studentId: entry.studentId,
           });
-        if (
-          scannerCheckinStudents.has(entry.studentId) &&
-          entry.status === 'PRESENT' &&
-          previous?.status !== 'PRESENT'
-        ) {
+        if (checkinStudents.has(entry.studentId) && entry.status === 'PRESENT') {
           const idempotencyKey = `attendance-checkin:${lesson.id}:${entry.studentId}`;
           await transaction.syncOutbox.upsert({
             create: {

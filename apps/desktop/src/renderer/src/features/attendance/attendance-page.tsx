@@ -15,6 +15,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  BellRing,
   CheckCheck,
   CircleCheck,
   Clock3,
@@ -31,6 +32,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { invalidateAttendanceCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
+import { isAttendanceCheckInDate } from './attendance-workspace';
 
 const operationalStatuses: {
   active: string;
@@ -95,6 +97,14 @@ export function AttendancePage() {
       await invalidateAttendanceCaches(client);
     },
   });
+  const checkIn = useMutation({
+    mutationFn: (studentId: string) =>
+      getDesktopApi().attendance.confirmCheckIn(getSessionToken(), lessonId, studentId),
+    onSuccess: async (data) => {
+      client.setQueryData(queryKeys.attendance(lessonId), data);
+      await invalidateAttendanceCaches(client);
+    },
+  });
   const studentOptions = useQuery({
     enabled: manualOpen && Boolean(attendance.data?.lesson.branchId),
     queryFn: () =>
@@ -139,6 +149,7 @@ export function AttendancePage() {
     );
 
   const { lesson, participants } = attendance.data;
+  const isToday = isAttendanceCheckInDate(lesson.startsAt);
   const participantIds = new Set(participants.map(({ studentId }) => studentId));
   const manualCandidates = (studentOptions.data ?? []).filter(({ id }) => !participantIds.has(id));
   const counts = {
@@ -272,27 +283,41 @@ export function AttendancePage() {
                     <Badge className="ml-2 bg-amber-50 text-amber-700">Пробное</Badge>
                   ) : null}
                 </div>
-                <div className="grid grid-cols-4 gap-2">
-                  {operationalStatuses.map(({ active, icon: Icon, label, status }) => (
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {isToday && user?.role !== 'COACH' ? (
                     <button
-                      aria-label={`${participant.studentName}: ${label}`}
-                      className={cn(
-                        'flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-semibold transition active:scale-[0.98]',
-                        participant.status === status
-                          ? active
-                          : 'border-border bg-surface hover:border-neutral-300 hover:bg-muted',
-                      )}
-                      disabled={save.isPending}
-                      key={status}
-                      onClick={() =>
-                        void save.mutateAsync([{ status, studentId: participant.studentId }])
-                      }
+                      aria-label={`${participant.studentName}: Ребёнок в студии`}
+                      className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 text-xs font-semibold text-violet-800 transition hover:border-violet-300 hover:bg-violet-100 active:scale-[0.98]"
+                      disabled={checkIn.isPending || save.isPending}
+                      onClick={() => void checkIn.mutateAsync(participant.studentId)}
                       type="button"
                     >
-                      <Icon className="size-4" />
-                      <span className="hidden xl:inline">{label}</span>
+                      <BellRing className="size-4" />
+                      Ребёнок в студии
                     </button>
-                  ))}
+                  ) : null}
+                  <div className="grid grid-cols-4 gap-2">
+                    {operationalStatuses.map(({ active, icon: Icon, label, status }) => (
+                      <button
+                        aria-label={`${participant.studentName}: ${label}`}
+                        className={cn(
+                          'flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-semibold transition active:scale-[0.98]',
+                          participant.status === status
+                            ? active
+                            : 'border-border bg-surface hover:border-neutral-300 hover:bg-muted',
+                        )}
+                        disabled={checkIn.isPending || save.isPending}
+                        key={status}
+                        onClick={() =>
+                          void save.mutateAsync([{ status, studentId: participant.studentId }])
+                        }
+                        type="button"
+                      >
+                        <Icon className="size-4" />
+                        <span className="hidden xl:inline">{label}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </article>
             ))}

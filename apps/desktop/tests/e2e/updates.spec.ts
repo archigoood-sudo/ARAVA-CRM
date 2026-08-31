@@ -28,7 +28,9 @@ test('показывает безопасное состояние обновл�
     await expect(page.getByText('Обновления приложения')).toBeVisible();
     await expect(
       page.getByText(
-        'Автоматическое обновление доступно в установленной версии для Windows и macOS',
+        executablePath
+          ? 'Автоматическая установка на macOS недоступна. Установите новую версию вручную.'
+          : 'Автоматическое обновление доступно в установленной версии для Windows и macOS',
       ),
     ).toBeVisible();
     await expect(page.getByText(/Обновления автоматически проверяются/)).toBeVisible();

@@ -58,7 +58,9 @@ test('платёжная операция становится одним под
         status: 'ACTIVE',
         studentId: student.id,
       });
-      const lessonStartsAt = new Date(Date.now() - 12 * 60 * 60_000);
+      const lessonStartsAt = new Date();
+      lessonStartsAt.setDate(lessonStartsAt.getDate() - 1);
+      lessonStartsAt.setHours(18, 0, 0, 0);
       const lesson = await api.lessons.create(token, {
         endsAt: new Date(lessonStartsAt.getTime() + 3_600_000).toISOString(),
         groupId: group.id,

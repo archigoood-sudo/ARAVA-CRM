@@ -205,7 +205,7 @@ export class AttendanceWorkspaceService {
   async confirmScan(
     token: string,
     input: AttendanceScanConfirmationInput,
-  ): Promise<Awaited<ReturnType<StudioService['confirmScannedAttendance']>>> {
+  ): Promise<Awaited<ReturnType<StudioService['confirmAttendanceCheckIn']>>> {
     const startsAt = new Date(input.startsAt);
     const available = await this.scanOptions(token, input.studentId, localDateKey(startsAt));
     const selected = available.lessons.find(
@@ -227,7 +227,7 @@ export class AttendanceWorkspaceService {
           startsAt: selected.startsAt,
         })
       ).id;
-    return this.studio.confirmScannedAttendance(token, lessonId, input.studentId);
+    return this.studio.confirmAttendanceCheckIn(token, lessonId, input.studentId);
   }
 
   async scanOptions(
