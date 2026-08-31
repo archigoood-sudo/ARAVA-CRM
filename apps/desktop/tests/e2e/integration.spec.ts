@@ -70,7 +70,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
   let targetGroupId: string | null = null;
   const receivedPaymentPaths: string[] = [];
   let clientAccessState: 'ACTIVE' | 'INVITED' | 'NOT_ISSUED' = 'NOT_ISSUED';
-  const openConflictIds = new Set(['auto-branch-e2e', 'conflict-local-e2e', 'conflict-server-e2e']);
+  const openConflictIds = new Set(['auto-branch-e2e']);
   const receivedConflictResolutions: Record<string, unknown>[] = [];
   let conflictStudentId = 'student-conflict-pending';
   let conflictGroupId = 'group-conflict-pending';
@@ -596,6 +596,8 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     conflictGroupId = accessFixture.group.id;
     conflictLessonAId = accessFixture.lessonA.id;
     conflictLessonBId = accessFixture.lessonB.id;
+    openConflictIds.add('conflict-local-e2e');
+    openConflictIds.add('conflict-server-e2e');
     chat.branchId = accessFixture.student.branchId;
     chat.linkedStudents = [
       {
@@ -714,27 +716,33 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByRole('link', { name: 'Настройки' }).click();
     await page.getByRole('button', { name: 'Проверить соединение' }).click();
     await expect(page.getByText('Соединение с сайтом установлено.')).toBeVisible();
+    await page.getByRole('button', { name: 'Синхронизировать сейчас' }).click();
+    await expect(page.getByText('Синхронизация завершена.')).toBeVisible();
+    await expect.poll(() => receivedConflictResolutions, { timeout: 15_000 }).toHaveLength(3);
+    await page.getByRole('button', { name: 'Проверить соединение' }).click();
     const conflictCenter = page.getByTestId('integration-conflicts');
-    await expect(page.getByTestId('integration-conflict-auto-branch-e2e')).toHaveCount(0);
+    await expect(conflictCenter.getByText('Журнал согласования')).toBeVisible();
+    await expect(page.getByTestId('integration-conflict-auto-branch-e2e')).toContainText(
+      'Разрешён автоматически',
+    );
     await expect(
       conflictCenter.getByText('Пробное занятие изменено на другом устройстве').first(),
     ).toBeVisible();
     await expect(conflictCenter.getByText('Кабинетова Анна').first()).toBeVisible();
     await expect(conflictCenter.getByText('Результат: Думает').first()).toBeVisible();
     await expect(conflictCenter.getByText('Результат: Отказался').first()).toBeVisible();
-    const localConflict = page.getByTestId('integration-conflict-conflict-local-e2e');
-    await localConflict
-      .getByRole('button', { name: 'Оставить изменения этого устройства' })
-      .click();
-    await page.getByRole('button', { name: 'Подтвердить решение' }).click();
+    await expect(page.getByTestId('integration-conflict-conflict-local-e2e')).toContainText(
+      'Разрешён автоматически',
+    );
+    await expect(page.getByTestId('integration-conflict-conflict-server-e2e')).toContainText(
+      'Разрешён автоматически',
+    );
     await expect(
-      page.getByText('Конфликт разрешён. Новая версия будет получена активными устройствами.'),
-    ).toBeVisible();
-    await expect(localConflict).toHaveCount(0);
-    const serverConflict = page.getByTestId('integration-conflict-conflict-server-e2e');
-    await serverConflict.getByRole('button', { name: 'Использовать изменения с сервера' }).click();
-    await page.getByRole('button', { name: 'Подтвердить решение' }).click();
-    await expect(serverConflict).toHaveCount(0);
+      conflictCenter.getByRole('button', { name: 'Оставить изменения этого устройства' }),
+    ).toHaveCount(0);
+    await expect(
+      conflictCenter.getByRole('button', { name: 'Использовать изменения с сервера' }),
+    ).toHaveCount(0);
     await expect
       .poll(() => receivedConflictResolutions)
       .toEqual(
@@ -749,7 +757,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
           }),
           expect.objectContaining({
             conflictId: 'conflict-server-e2e',
-            resolution: 'KEEP_CANONICAL',
+            resolution: 'ACCEPT_CANDIDATE',
           }),
         ]),
       );

@@ -1,8 +1,4 @@
-import type {
-  IntegrationConflictSummary,
-  IntegrationConnectionState,
-  IntegrationDiagnosticLevel,
-} from '@arava/shared';
+import type { IntegrationConnectionState, IntegrationDiagnosticLevel } from '@arava/shared';
 import {
   Badge,
   Button,
@@ -55,7 +51,9 @@ const stateLabels: Record<IntegrationConnectionState, string> = {
   VERSION_UNSUPPORTED: 'Требуется обновление',
 };
 const resultLabels: Record<string, string> = {
+  AUTO_RESOLVED: 'Согласовано автоматически',
   FAILED: 'Ошибка',
+  OBSOLETE: 'Устарело',
   QUEUED: 'Поставлено в очередь',
   RETRY: 'Повторная попытка',
   SUCCESS: 'Успешно',
@@ -90,6 +88,11 @@ const diagnosticLevelLabels: Record<IntegrationDiagnosticLevel, string> = {
   WARNING: 'Предупреждение',
   WORKING: 'Работает',
 };
+const conflictDiagnosticLabels = {
+  AUTO_RESOLVED: 'Разрешён автоматически',
+  OBSOLETE: 'Устарел',
+  REAL_ERROR: 'Требует диагностики',
+} as const;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error
@@ -117,7 +120,7 @@ function relativeSyncTime(value?: string): string {
 function statusExplanation(state: IntegrationConnectionState): string {
   const explanations: Record<IntegrationConnectionState, string> = {
     AUTH_ERROR: 'Это устройство больше не авторизовано для синхронизации.',
-    CONFLICT: 'Некоторые данные изменены одновременно и требуют вашего выбора.',
+    CONFLICT: 'Автоматическое согласование части данных завершилось ошибкой.',
     CONNECTED: 'Все изменения синхронизированы.',
     DISABLED: 'Синхронизация выключена в настройках.',
     NOT_PAIRED: 'Подключите устройство к ARAVA-WEB.',
@@ -142,11 +145,6 @@ export function IntegrationSettings() {
   const [editingDisplayName, setEditingDisplayName] = useState('');
   const [revokingDeviceId, setRevokingDeviceId] = useState<string>();
   const [recoveryConfirmationOpen, setRecoveryConfirmationOpen] = useState(false);
-  const [resolving, setResolving] = useState<{
-    conflict: IntegrationConflictSummary;
-    resolution: 'KEEP_CANONICAL' | 'ACCEPT_CANDIDATE';
-  }>();
-  const [resolutionError, setResolutionError] = useState<string>();
   const status = useQuery({
     queryFn: () => getDesktopApi().integration.getStatus(getSessionToken()),
     queryKey: queryKeys.integrationStatus,
@@ -259,25 +257,6 @@ export function IntegrationSettings() {
     onSuccess: async () => {
       setRevokingDeviceId(undefined);
       setNotice('Доступ устройства отозван. Для повторной работы потребуется новое подключение.');
-      await refresh();
-    },
-  });
-  const resolve = useMutation({
-    mutationFn: ({ conflict, resolution }: NonNullable<typeof resolving>) =>
-      getDesktopApi().integration.resolveConflict(getSessionToken(), conflict.id, {
-        expectedCanonicalRevision: conflict.canonicalRevision,
-        idempotencyKey: `resolve:${conflict.id}:${String(conflict.canonicalRevision)}:${resolution}`,
-        resolution,
-      }),
-    onError: () => {
-      setResolutionError(
-        'Не удалось применить выбранное решение. Обновите данные и попробуйте ещё раз.',
-      );
-    },
-    onSuccess: async () => {
-      setResolving(undefined);
-      setResolutionError(undefined);
-      setNotice('Конфликт разрешён. Новая версия будет получена активными устройствами.');
       await refresh();
     },
   });
@@ -792,13 +771,14 @@ export function IntegrationSettings() {
 
         {conflicts.data?.length ? (
           <div
-            className="space-y-3 rounded-2xl border border-amber-300 bg-amber-50/50 p-5"
+            className="space-y-3 rounded-2xl border border-border bg-muted/20 p-5"
             data-testid="integration-conflicts"
           >
             <div>
-              <h3 className="text-lg font-semibold">Конфликты синхронизации</h3>
+              <h3 className="text-lg font-semibold">Журнал согласования</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Эти данные были изменены одновременно. Выберите правильную версию целиком.
+                CRM автоматически применяет последнее изменение, принятое сервером. Этот раздел
+                нужен только для диагностики — выбирать версию вручную не требуется.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {Object.entries(
@@ -833,7 +813,7 @@ export function IntegrationSettings() {
                       {dateTime(conflict.createdAt)}
                     </p>
                   </div>
-                  <Badge>Требует решения</Badge>
+                  <Badge>{conflictDiagnosticLabels[conflict.diagnosticStatus]}</Badge>
                 </div>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   {[
@@ -866,86 +846,16 @@ export function IntegrationSettings() {
                     <p>ID устройства: {formatShortDeviceId(conflict.sourceDeviceId)}</p>
                   </div>
                 </details>
-                {conflict.entityType === 'SUBSCRIPTION' ||
-                conflict.entityType === 'SUBSCRIPTION_LEDGER' ? (
+                {conflict.diagnosticStatus === 'REAL_ERROR' ? (
                   <p className="mt-3 rounded-xl bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                    Финансовый конфликт нельзя перезаписать обычным выбором. Проверьте данные и
-                    обратитесь к владельцу системы.
+                    Автоматическое согласование не завершено. CRM повторит безопасную обработку;
+                    техническая причина доступна в журнале синхронизации.
                   </p>
-                ) : (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button
-                      disabled={resolve.isPending}
-                      onClick={() => {
-                        setResolutionError(undefined);
-                        setResolving({ conflict, resolution: 'KEEP_CANONICAL' });
-                      }}
-                      size="small"
-                      variant="outline"
-                    >
-                      Использовать изменения с сервера
-                    </Button>
-                    <Button
-                      disabled={resolve.isPending}
-                      onClick={() => {
-                        setResolutionError(undefined);
-                        setResolving({ conflict, resolution: 'ACCEPT_CANDIDATE' });
-                      }}
-                      size="small"
-                    >
-                      Оставить изменения этого устройства
-                    </Button>
-                  </div>
-                )}
+                ) : null}
               </div>
             ))}
           </div>
         ) : null}
-
-        <Dialog
-          closeLabel="Закрыть"
-          description="Перед сохранением сервер повторно проверит каноническую ревизию. Устаревшее решение будет отклонено."
-          footer={
-            <div className="flex justify-end gap-2">
-              <Button
-                disabled={resolve.isPending}
-                onClick={() => {
-                  setResolving(undefined);
-                  setResolutionError(undefined);
-                }}
-                variant="outline"
-              >
-                Отмена
-              </Button>
-              <Button
-                disabled={resolve.isPending}
-                onClick={() => resolving && resolve.mutate(resolving)}
-              >
-                {resolve.isPending ? 'Применяем...' : 'Подтвердить решение'}
-              </Button>
-            </div>
-          }
-          onClose={() => {
-            if (resolve.isPending) return;
-            setResolving(undefined);
-            setResolutionError(undefined);
-          }}
-          open={Boolean(resolving)}
-          title="Разрешить конфликт?"
-        >
-          <p className="text-sm text-muted-foreground">
-            {resolving?.resolution === 'KEEP_CANONICAL'
-              ? 'Будут использованы изменения с сервера.'
-              : 'Будут сохранены изменения выбранного устройства.'}{' '}
-            После разрешения выбранная версия станет основной и синхронизируется на другие
-            устройства.
-          </p>
-          {resolutionError ? (
-            <p className="mt-3 rounded-xl bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              {resolutionError}
-            </p>
-          ) : null}
-        </Dialog>
 
         {reconciliation.data ? (
           <div

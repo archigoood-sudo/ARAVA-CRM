@@ -611,6 +611,7 @@ function parseManagedConflict(value: unknown): IntegrationConflictSummary {
     canonicalOperation: value.canonicalOperation,
     canonicalRevision: value.canonicalRevision,
     createdAt: value.createdAt,
+    diagnosticStatus: 'REAL_ERROR',
     differences,
     display: fallbackConflictDisplay(value.entityType, value.sourceDeviceName),
     entityId: value.entityId,
@@ -622,6 +623,15 @@ function parseManagedConflict(value: unknown): IntegrationConflictSummary {
       : {}),
     status: value.status,
   };
+}
+
+function conflictDifferences(
+  candidate: Record<string, unknown>,
+  canonical: Record<string, unknown>,
+): IntegrationConflictSummary['differences'] {
+  return [...new Set([...Object.keys(candidate), ...Object.keys(canonical)])]
+    .filter((field) => stableJson(candidate[field]) !== stableJson(canonical[field]))
+    .map((field) => ({ candidate: candidate[field], canonical: canonical[field], field }));
 }
 
 const SYNC_ENTITY_LABELS: Record<string, string> = {
@@ -2391,7 +2401,6 @@ const ENTITY_PRIORITY: Record<SyncEntityType, number> = {
 
 export class IntegrationService {
   private processing = false;
-  private processingWaiters: (() => void)[] = [];
   private readonly finance: FinanceService;
   private readonly studio: StudioService;
 
@@ -4122,7 +4131,7 @@ export class IntegrationService {
       .map(({ id }) => id);
     if (alreadyResolvedIds.length > 0) {
       await this.database.syncConflict.updateMany({
-        data: { resolvedAt: this.now(), status: 'RESOLVED' },
+        data: { resolvedAt: this.now(), status: 'OBSOLETE' },
         where: { id: { in: alreadyResolvedIds }, status: 'OPEN' },
       });
     }
@@ -4142,8 +4151,22 @@ export class IntegrationService {
           context,
         );
         await this.database.$transaction([
-          this.database.syncConflict.updateMany({
-            data: { resolvedAt: this.now(), status: 'RESOLVED' },
+          this.database.syncConflict.upsert({
+            create: {
+              baseRevision: conflict.baseRevision,
+              candidateOperation: conflict.candidateOperation,
+              candidatePayloadJson: JSON.stringify(conflict.candidate),
+              canonicalOperation: conflict.canonicalOperation,
+              canonicalPayloadJson: JSON.stringify(conflict.canonical),
+              canonicalRevision: conflict.canonicalRevision,
+              entityId: conflict.entityId,
+              entityType: conflict.entityType,
+              resolvedAt: this.now(),
+              serverConflictId: conflict.id,
+              sourceDeviceId: conflict.sourceDeviceId,
+              status: 'AUTO_RESOLVED',
+            },
+            update: { resolvedAt: this.now(), status: 'AUTO_RESOLVED' },
             where: { serverConflictId: conflict.id },
           }),
           this.database.syncLog.create({
@@ -4167,8 +4190,22 @@ export class IntegrationService {
       } catch (error) {
         const errorCode = error instanceof IntegrationApiError ? error.errorCode : 'UNKNOWN';
         if (errorCode === 'NOT_FOUND') {
-          await this.database.syncConflict.updateMany({
-            data: { resolvedAt: this.now(), status: 'RESOLVED' },
+          await this.database.syncConflict.upsert({
+            create: {
+              baseRevision: conflict.baseRevision,
+              candidateOperation: conflict.candidateOperation,
+              candidatePayloadJson: JSON.stringify(conflict.candidate),
+              canonicalOperation: conflict.canonicalOperation,
+              canonicalPayloadJson: JSON.stringify(conflict.canonical),
+              canonicalRevision: conflict.canonicalRevision,
+              entityId: conflict.entityId,
+              entityType: conflict.entityType,
+              resolvedAt: this.now(),
+              serverConflictId: conflict.id,
+              sourceDeviceId: conflict.sourceDeviceId,
+              status: 'OBSOLETE',
+            },
+            update: { resolvedAt: this.now(), status: 'OBSOLETE' },
             where: { serverConflictId: conflict.id },
           });
           continue;
@@ -4249,7 +4286,7 @@ export class IntegrationService {
       .map(({ id }) => id);
     if (missingRemoteIds.length > 0) {
       await this.database.syncConflict.updateMany({
-        data: { resolvedAt: this.now(), status: 'RESOLVED' },
+        data: { resolvedAt: this.now(), status: 'OBSOLETE' },
         where: { id: { in: missingRemoteIds }, status: 'OPEN' },
       });
     }
@@ -4307,7 +4344,7 @@ export class IntegrationService {
         reconciledIds.add(conflict.id);
         await this.database.$transaction([
           this.database.syncConflict.updateMany({
-            data: { resolvedAt: this.now(), status: 'RESOLVED' },
+            data: { resolvedAt: this.now(), status: 'OBSOLETE' },
             where: { serverConflictId: conflict.id, status: 'OPEN' },
           }),
           this.database.syncLog.create({
@@ -4334,51 +4371,55 @@ export class IntegrationService {
       }
     }
 
-    const localOnlyResolved: string[] = [];
+    const localOnlyObsolete: string[] = [];
     for (const conflict of localOpen.filter(({ serverConflictId }) => !serverConflictId)) {
       if (
-        conflict.sourceDeviceId !== deviceId ||
+        !isAutoResolvableLwwEntityType(conflict.entityType) ||
         !INBOUND_ENTITY_TYPES.has(conflict.entityType as InboundChange['entityType'])
       )
         continue;
       const canonical = canonicalByEntity.get(`${conflict.entityType}:${conflict.entityId}`);
       if (canonical === undefined) continue;
-      if (canonical.sourceDeviceId !== deviceId) continue;
-      let storedCanonical: unknown;
+      if (canonical.revision < conflict.canonicalRevision) continue;
+      const pending = await this.database.syncOutbox.count({
+        where: {
+          entityId: conflict.entityId,
+          entityType: conflict.entityType,
+          status: { in: ['PENDING', 'PROCESSING'] },
+        },
+      });
+      await this.database.syncConflict.updateMany({
+        data: { resolvedAt: this.now(), status: 'OBSOLETE' },
+        where: { id: conflict.id, status: 'OPEN' },
+      });
       try {
-        storedCanonical = JSON.parse(conflict.canonicalPayloadJson) as unknown;
-      } catch {
-        continue;
-      }
-      if (
-        canonical.revision < conflict.canonicalRevision ||
-        stableJson(canonical.payload) !== stableJson(storedCanonical)
-      )
-        continue;
-      const localPayload = await this.payloadForOperation(
-        conflict.entityType as InboundChange['entityType'],
-        conflict.entityId,
-        canonical.operation,
-      );
-      if (stableJson(localPayload) === stableJson(canonical.payload)) {
-        localOnlyResolved.push(conflict.id);
+        if (pending === 0) await this.applyInboundChange(canonical, deviceId);
+        localOnlyObsolete.push(conflict.id);
+      } catch (error) {
+        await this.database.syncConflict.updateMany({
+          data: { resolvedAt: null, status: 'OPEN' },
+          where: { id: conflict.id, status: 'OBSOLETE' },
+        });
+        const errorCode = error instanceof IntegrationApiError ? error.errorCode : 'UNKNOWN';
+        await this.log(
+          undefined,
+          'CONFLICT_RECONCILE',
+          'FAILED',
+          1,
+          errorCode,
+          `entityType=${conflict.entityType}; canonicalRevision=${String(canonical.revision)}`,
+        );
       }
     }
-    if (localOnlyResolved.length > 0) {
-      await this.database.$transaction([
-        this.database.syncConflict.updateMany({
-          data: { resolvedAt: this.now(), status: 'RESOLVED' },
-          where: { id: { in: localOnlyResolved }, status: 'OPEN' },
-        }),
-        this.database.syncLog.create({
-          data: {
-            attemptCount: 1,
-            message: `strategy=PROVEN_CONVERGENCE; resolved=${String(localOnlyResolved.length)}`,
-            operation: 'CONFLICT_RECONCILE',
-            result: 'AUTO_RESOLVED',
-          },
-        }),
-      ]);
+    if (localOnlyObsolete.length > 0) {
+      await this.database.syncLog.create({
+        data: {
+          attemptCount: 1,
+          message: `strategy=CANONICAL_RECONCILE; obsolete=${String(localOnlyObsolete.length)}`,
+          operation: 'CONFLICT_RECONCILE',
+          result: 'OBSOLETE',
+        },
+      });
     }
     return reconciledIds;
   }
@@ -4406,76 +4447,70 @@ export class IntegrationService {
   async listConflicts(token: string): Promise<IntegrationConflictSummary[]> {
     const actor = await this.assertOwner(token);
     const connection = await this.integrationConnection();
-    const conflicts = await this.api.listConflicts(
-      connection.baseUrl,
-      connection.deviceId,
-      connection.token,
-      this.ownerContext(actor),
-    );
-    return this.humanizeConflicts(
-      conflicts.filter(({ entityType }) => !isAutoResolvableLwwEntityType(entityType)),
-    );
+    const [remoteConflicts, localConflicts] = await Promise.all([
+      this.api.listConflicts(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        this.ownerContext(actor),
+      ),
+      this.database.syncConflict.findMany({ orderBy: { createdAt: 'desc' }, take: 50 }),
+    ]);
+    const diagnostics = new Map<string, IntegrationConflictSummary>();
+    for (const conflict of remoteConflicts) {
+      if (!isAutoResolvableLwwEntityType(conflict.entityType)) {
+        diagnostics.set(conflict.id, { ...conflict, diagnosticStatus: 'REAL_ERROR' });
+      }
+    }
+    for (const conflict of localConflicts) {
+      let candidate: Record<string, unknown> = { id: conflict.entityId, invalid: true };
+      let canonical: Record<string, unknown> = { id: conflict.entityId, invalid: true };
+      try {
+        const parsedCandidate = JSON.parse(conflict.candidatePayloadJson) as unknown;
+        const parsedCanonical = JSON.parse(conflict.canonicalPayloadJson) as unknown;
+        if (isRecord(parsedCandidate)) candidate = parsedCandidate;
+        if (isRecord(parsedCanonical)) canonical = parsedCanonical;
+      } catch {
+        // Corrupt historical diagnostics remain visible without exposing a raw parser error.
+      }
+      const id = conflict.serverConflictId ?? conflict.id;
+      if (diagnostics.has(id)) continue;
+      diagnostics.set(id, {
+        baseRevision: conflict.baseRevision,
+        candidate,
+        candidateOperation: conflict.candidateOperation === 'ARCHIVE' ? 'ARCHIVE' : 'UPSERT',
+        canonical,
+        canonicalOperation: conflict.canonicalOperation === 'ARCHIVE' ? 'ARCHIVE' : 'UPSERT',
+        canonicalRevision: conflict.canonicalRevision,
+        createdAt: conflict.createdAt.toISOString(),
+        diagnosticStatus:
+          conflict.status === 'OBSOLETE'
+            ? 'OBSOLETE'
+            : conflict.status === 'AUTO_RESOLVED' || conflict.status === 'RESOLVED'
+              ? 'AUTO_RESOLVED'
+              : 'REAL_ERROR',
+        differences: conflictDifferences(candidate, canonical),
+        display: fallbackConflictDisplay(conflict.entityType),
+        entityId: conflict.entityId,
+        entityType: conflict.entityType,
+        id,
+        sourceDeviceId: conflict.sourceDeviceId ?? 'unknown',
+        status: conflict.status === 'OPEN' ? 'OPEN' : 'RESOLVED',
+      });
+    }
+    return this.humanizeConflicts([...diagnostics.values()]);
   }
 
   async resolveConflict(
     token: string,
-    conflictId: string,
-    input: IntegrationConflictResolutionInput,
+    _conflictId: string,
+    _input: IntegrationConflictResolutionInput,
   ): Promise<IntegrationConflictSummary> {
-    const actor = await this.assertOwner(token);
-    const connection = await this.integrationConnection();
-    const openConflict = (
-      await this.api.listConflicts(
-        connection.baseUrl,
-        connection.deviceId,
-        connection.token,
-        this.ownerContext(actor),
-      )
-    ).find((conflict) => conflict.id === conflictId && conflict.status === 'OPEN');
-    if (!openConflict) {
-      throw new DomainError('CONFLICT', 'Конфликт уже разрешён или больше не существует.');
-    }
-    if (
-      openConflict.entityType === 'SUBSCRIPTION' ||
-      openConflict.entityType === 'SUBSCRIPTION_LEDGER'
-    ) {
-      throw new DomainError(
-        'AUTHORIZATION',
-        'Финансовый конфликт нельзя разрешить обычным перезаписыванием.',
-      );
-    }
-    let resolved: IntegrationConflictSummary;
-    try {
-      resolved = await this.api.resolveConflict(
-        connection.baseUrl,
-        connection.deviceId,
-        connection.token,
-        conflictId,
-        input,
-        this.ownerContext(actor),
-      );
-    } catch (error) {
-      const errorCode = error instanceof IntegrationApiError ? error.errorCode : 'UNKNOWN';
-      await this.log(
-        undefined,
-        'CONFLICT_RESOLUTION',
-        'FAILED',
-        1,
-        errorCode,
-        `Не удалось разрешить конфликт ${conflictId}.`,
-      );
-      throw error;
-    }
-    await this.database.syncConflict.updateMany({
-      data: { resolvedAt: this.now(), status: 'RESOLVED' },
-      where: { serverConflictId: conflictId },
-    });
-    await this.waitForPendingProcessing();
-    await this.processPending();
-    if (INBOUND_ENTITY_TYPES.has(resolved.entityType as InboundChange['entityType'])) {
-      this.onInboundApplied?.(resolved.entityType as SyncEntityType);
-    }
-    return resolved;
+    await this.assertOwner(token);
+    throw new DomainError(
+      'AUTHORIZATION',
+      'Синхронизация автоматически выбирает последнюю принятую сервером версию.',
+    );
   }
 
   async recoverFromServer(token: string): Promise<IntegrationRecoveryResult> {
@@ -5202,14 +5237,7 @@ export class IntegrationService {
       await this.processInboundSafely(baseUrl, deviceId, token);
     } finally {
       this.processing = false;
-      const waiters = this.processingWaiters.splice(0);
-      for (const resolve of waiters) resolve();
     }
-  }
-
-  private async waitForPendingProcessing(): Promise<void> {
-    if (!this.processing) return;
-    await new Promise<void>((resolve) => this.processingWaiters.push(resolve));
   }
 
   private async queueLegacyTrialBootstrap(): Promise<void> {
@@ -6014,7 +6042,7 @@ export class IntegrationService {
           }
           if (resolvedConflictIds.length > 0) {
             await transaction.syncConflict.updateMany({
-              data: { resolvedAt: this.now(), status: 'RESOLVED' },
+              data: { resolvedAt: this.now(), status: 'OBSOLETE' },
               where: { id: { in: resolvedConflictIds }, status: 'OPEN' },
             });
           }

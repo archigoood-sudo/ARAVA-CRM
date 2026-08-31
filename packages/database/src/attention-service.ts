@@ -860,15 +860,15 @@ export class AttentionService {
           });
         else if (conflictCount > 0)
           add({
-            actionLabel: 'Разрешить конфликты',
+            actionLabel: 'Открыть диагностику',
             actionRoute: '/settings#integration',
             category: 'INTEGRATION',
-            description: `Требуют выбора: ${String(conflictCount)}. Данные не будут перезаписаны автоматически.`,
+            description: `Ошибок согласования: ${String(conflictCount)}. Обычные изменения CRM согласует автоматически.`,
             entityId: 'integration-conflicts',
             entityType: 'Integration',
             id: 'integration:conflicts',
             severity: 'CRITICAL',
-            title: 'Конфликт синхронизации',
+            title: 'Ошибка согласования синхронизации',
           });
         else if (failedSync >= 3 || pendingCount >= 100 || oldestHours >= 24)
           add({

@@ -497,7 +497,7 @@ describe('Sprint 4.2B attention center', () => {
     );
   });
 
-  it('prioritizes unresolved synchronization conflicts over ordinary queue warnings', async () => {
+  it('shows immutable synchronization errors as diagnostics instead of manual conflicts', async () => {
     await database.appSetting.create({
       data: { key: 'integration.enabled', value: 'true' },
     });
@@ -509,15 +509,15 @@ describe('Sprint 4.2B attention center', () => {
         canonicalOperation: 'UPSERT',
         canonicalPayloadJson: '{}',
         canonicalRevision: 2,
-        entityId: 'trial-conflict-attention',
-        entityType: 'TRIAL_APPOINTMENT',
+        entityId: 'ledger-conflict-attention',
+        entityType: 'SUBSCRIPTION_LEDGER',
       },
     });
 
     const items = await attention.listItems(ownerToken, { category: 'INTEGRATION' });
     expect(items).toContainEqual(
       expect.objectContaining({
-        actionLabel: 'Разрешить конфликты',
+        actionLabel: 'Открыть диагностику',
         id: 'integration:conflicts',
         severity: 'CRITICAL',
       }),

@@ -2959,6 +2959,7 @@ export interface IntegrationConflictSummary {
   canonicalRevision: number;
   createdAt: string;
   differences: IntegrationConflictDifference[];
+  diagnosticStatus: 'AUTO_RESOLVED' | 'OBSOLETE' | 'REAL_ERROR';
   display: IntegrationConflictDisplay;
   entityId: string;
   entityType: string;
