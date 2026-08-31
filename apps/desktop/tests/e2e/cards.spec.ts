@@ -22,6 +22,11 @@ async function scan(page: Page, barcode: string) {
   await page.keyboard.press('Enter');
 }
 
+async function scanEnrollment(page: Page, barcode: string, withEnter = true) {
+  await page.keyboard.type(barcode, { delay: 60 });
+  if (withEnter) await page.keyboard.press('Enter');
+}
+
 async function openScannedProfile(page: Page) {
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText('Сегодня занятий не найдено')).toBeVisible();
@@ -72,16 +77,59 @@ test('регистрация, привязка, сканирование, уте
       return (await api.students.getProfile(token, studentId)).attendance;
     }, firstStudentId);
 
-    await page.getByRole('link', { name: 'Карты', exact: true }).click();
-    await page.getByRole('button', { name: 'Зарегистрировать карту' }).click();
-    const registerDialog = page.getByRole('dialog');
-    await registerDialog.getByLabel('Штрихкод').fill('0000001001');
-    await registerDialog.getByRole('button', { name: 'Зарегистрировать карту' }).click();
-    await expect(page.getByText('0000001001', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Привязать карту' }).click();
-    const assignDialog = page.getByRole('dialog');
-    await assignDialog.getByLabel('Клиент').selectOption({ label: 'Карточкина Анна' });
-    await assignDialog.getByRole('button', { name: 'Привязать' }).click();
+    const studentCardDialog = page.getByRole('dialog');
+    const studentCardInput = studentCardDialog.getByLabel('Штрихкод новой карты');
+    await studentCardInput.focus();
+    await scanEnrollment(page, '0000001001');
+    await expect(studentCardDialog).toBeHidden();
+    await expect(page.getByText('0000001001', { exact: true })).toBeVisible();
+
+    await page.getByRole('link', { name: 'Карты', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Зарегистрировать карту' }).click();
+    const noEnterDialog = page.getByRole('dialog');
+    const noEnterInput = noEnterDialog.getByLabel('Штрихкод');
+    await noEnterInput.focus();
+    await scanEnrollment(page, '0000001005', false);
+    await expect(noEnterDialog).toBeHidden();
+    await expect(page.getByText('0000001005', { exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Зарегистрировать карту' }).click();
+    const manualDialog = page.getByRole('dialog');
+    await manualDialog.getByLabel('Штрихкод').fill('0000001006');
+    await manualDialog.getByRole('button', { name: 'Зарегистрировать карту' }).click();
+    await expect(page.getByText('0000001006', { exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Зарегистрировать карту' }).click();
+    const duplicateDialog = page.getByRole('dialog');
+    const duplicateInput = duplicateDialog.getByLabel('Штрихкод');
+    await duplicateInput.focus();
+    await scanEnrollment(page, '0000001005');
+    await expect(
+      duplicateDialog.getByText('Карта с таким штрихкодом уже зарегистрирована.'),
+    ).toBeVisible();
+    await expect(duplicateInput).toHaveValue('0000001005');
+    const enrollmentState = await page.evaluate(async () => {
+      const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+        state?: { token?: string };
+      };
+      const token = persisted.state?.token ?? '';
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const [cards, scans] = await Promise.all([
+        api.cards.list(token, {
+          page: 1,
+          pageSize: 20,
+          search: '0000001005',
+          sortBy: 'createdAt',
+          sortDirection: 'desc',
+        }),
+        api.cards.scanHistory(token),
+      ]);
+      return { cardCount: cards.total, scanCount: scans.length };
+    });
+    expect(enrollmentState).toEqual({ cardCount: 1, scanCount: 0 });
+    await duplicateDialog.getByRole('button', { name: 'Отмена' }).click();
 
     // This is intentionally scanned without moving focus after the assignment dialog.
     await scan(page, '0000001001');

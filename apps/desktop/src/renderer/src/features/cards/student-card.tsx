@@ -13,12 +13,13 @@ import {
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, CreditCard, Link2, RefreshCw, ScanLine, Unlink } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
+import { useCardEnrollmentScanner } from '../../components/card-enrollment-scanner';
 
 const labels: Record<MembershipCardStatus, string> = {
   ARCHIVED: 'В архиве',
@@ -44,6 +45,7 @@ export function StudentCard({
   const [barcode, setBarcode] = useState('');
   const [replacementStatus, setReplacementStatus] = useState<'BLOCKED' | 'LOST'>('LOST');
   const [error, setError] = useState<string>();
+  const submitting = useRef(false);
   const card = useQuery({
     queryFn: () => getDesktopApi().cards.studentCurrent(getSessionToken(), studentId),
     queryKey: ['cards', 'student-current', studentId],
@@ -62,17 +64,17 @@ export function StudentCard({
     ]);
   };
   const save = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (nextBarcode: string) => {
       if (dialog === 'replace' && card.data)
         return getDesktopApi().cards.replace(getSessionToken(), {
-          newBarcode: barcode.trim(),
+          newBarcode: nextBarcode,
           oldCardId: card.data.id,
           oldCardStatus: replacementStatus,
           registerIfUnknown: true,
           studentId,
         });
       return getDesktopApi().cards.assign(getSessionToken(), {
-        barcode: barcode.trim(),
+        barcode: nextBarcode,
         registerIfUnknown: true,
         studentId,
       });
@@ -82,6 +84,23 @@ export function StudentCard({
       setDialog(undefined);
       setBarcode('');
     },
+  });
+  const submitCard = async (nextBarcode: string) => {
+    if (submitting.current || save.isPending) return;
+    submitting.current = true;
+    setError(undefined);
+    try {
+      await save.mutateAsync(nextBarcode.trim());
+    } catch (caught) {
+      setError(getErrorMessage(caught, 'Не удалось сохранить карту.'));
+    } finally {
+      submitting.current = false;
+    }
+  };
+  const scannerInput = useCardEnrollmentScanner({
+    disabled: save.isPending,
+    onScan: submitCard,
+    onValueChange: setBarcode,
   });
   const action = useMutation({
     mutationFn: async (kind: 'block' | 'lost' | 'reactivate' | 'unassign') => {
@@ -229,14 +248,7 @@ export function StudentCard({
             </Button>
             <Button
               disabled={save.isPending || barcode.trim().length < 4}
-              onClick={async () => {
-                setError(undefined);
-                try {
-                  await save.mutateAsync();
-                } catch (caught) {
-                  setError(getErrorMessage(caught, 'Не удалось сохранить карту.'));
-                }
-              }}
+              onClick={() => void submitCard(barcode)}
             >
               {dialog === 'replace' ? 'Заменить карту' : 'Привязать карту'}
             </Button>
@@ -250,6 +262,7 @@ export function StudentCard({
           <div>
             <Label htmlFor="student-card-barcode">Штрихкод новой карты</Label>
             <Input
+              {...scannerInput}
               autoFocus
               id="student-card-barcode"
               onChange={(event) => setBarcode(event.target.value)}

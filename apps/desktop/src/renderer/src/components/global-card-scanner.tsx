@@ -14,10 +14,13 @@ import { getDesktopApi } from '../lib/desktop-api';
 import { getSessionToken, useAuthStore } from '../stores/auth-store';
 import { localDateKey } from '../features/attendance/attendance-workspace';
 import { BarcodeScannerBuffer } from './barcode-scanner-buffer';
+import {
+  configuredScannerMinimum,
+  isCardEnrollmentScannerTarget,
+  SCANNER_SETTINGS_EVENT,
+} from './card-enrollment-scanner';
 import { GLOBAL_SEARCH_CLOSE_EVENT } from './global-search';
 
-export const SCANNER_MIN_LENGTH_KEY = 'arava-scanner-minimum-length';
-export const SCANNER_SETTINGS_EVENT = 'arava-scanner-settings-changed';
 const SCANNER_BURST_SETTLE_MS = 340;
 
 const feedback: Record<CardScanResult, string> = {
@@ -37,11 +40,6 @@ const attendanceStatusLabels = {
   PRESENT: 'Уже отмечен',
   TRIAL: 'Сейчас: пробное занятие',
 } as const;
-
-function configuredMinimum(): number {
-  const parsed = Number(localStorage.getItem(SCANNER_MIN_LENGTH_KEY));
-  return Number.isInteger(parsed) && parsed >= 4 && parsed <= 64 ? parsed : 6;
-}
 
 type EditableElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLElement;
 
@@ -115,7 +113,7 @@ export function GlobalCardScanner() {
   const role = useAuthStore(({ user }) => user?.role);
   const buffer = useRef(new BarcodeScannerBuffer());
   const editableSnapshot = useRef<EditableSnapshot>();
-  const minimumLength = useRef(configuredMinimum());
+  const minimumLength = useRef(configuredScannerMinimum());
   const [message, setMessage] = useState<string>();
   const [attendancePrompt, setAttendancePrompt] = useState<AttendanceScanOptions>();
   const [selectedLessonId, setSelectedLessonId] = useState<string>();
@@ -126,7 +124,7 @@ export function GlobalCardScanner() {
 
   useEffect(() => {
     const updateSettings = () => {
-      minimumLength.current = configuredMinimum();
+      minimumLength.current = configuredScannerMinimum();
     };
     window.addEventListener('storage', updateSettings);
     window.addEventListener(SCANNER_SETTINGS_EVENT, updateSettings);
@@ -197,6 +195,10 @@ export function GlobalCardScanner() {
       return true;
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      if (isCardEnrollmentScannerTarget(event.target)) {
+        reset();
+        return;
+      }
       if (event.ctrlKey || event.metaKey || event.altKey) {
         reset();
         return;

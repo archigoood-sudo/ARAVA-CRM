@@ -38,7 +38,7 @@ import {
   Search,
   Unlink,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -47,7 +47,8 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import {
   SCANNER_MIN_LENGTH_KEY,
   SCANNER_SETTINGS_EVENT,
-} from '../../components/global-card-scanner';
+  useCardEnrollmentScanner,
+} from '../../components/card-enrollment-scanner';
 
 const statusLabels: Record<MembershipCardStatus, string> = {
   ARCHIVED: 'В архиве',
@@ -530,6 +531,21 @@ function RegisterCardDialog({
 }) {
   const [barcode, setBarcode] = useState('');
   const [notes, setNotes] = useState('');
+  const submitting = useRef(false);
+  const submit = async (nextBarcode: string) => {
+    if (submitting.current || loading) return;
+    submitting.current = true;
+    try {
+      await onSubmit({ barcode: nextBarcode.trim(), notes: notes || undefined });
+    } finally {
+      submitting.current = false;
+    }
+  };
+  const scannerInput = useCardEnrollmentScanner({
+    disabled: loading,
+    onScan: submit,
+    onValueChange: setBarcode,
+  });
   return (
     <Dialog
       closeLabel="Закрыть"
@@ -541,7 +557,7 @@ function RegisterCardDialog({
           </Button>
           <Button
             disabled={loading || barcode.trim().length < 4}
-            onClick={() => void onSubmit({ barcode: barcode.trim(), notes: notes || undefined })}
+            onClick={() => void submit(barcode)}
           >
             Зарегистрировать карту
           </Button>
@@ -555,6 +571,7 @@ function RegisterCardDialog({
         <div>
           <Label htmlFor="card-barcode">Штрихкод</Label>
           <Input
+            {...scannerInput}
             autoFocus
             id="card-barcode"
             onChange={(event) => setBarcode(event.target.value)}
