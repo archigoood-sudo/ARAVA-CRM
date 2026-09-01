@@ -208,39 +208,40 @@ describe('Sprint 6.1 schedule exceptions and global archive', () => {
       validFrom: '2026-08-01',
       weekday: 4,
     });
+    const actor = await application.authenticate(ownerToken);
+    const originalDate = new Date(2026, 7, 20, 12);
+    const originalOccurrence = (
+      await new LessonOccurrenceService(database).resolveDay(actor, originalDate)
+    ).find(({ groupId }) => groupId === group.id);
+    expect(originalOccurrence).toBeDefined();
     const occurrence = await studio.materializeLessonOccurrence(ownerToken, {
       groupId: group.id,
-      startsAt: '2026-08-20T15:00:00.000Z',
+      startsAt: originalOccurrence?.startsAt.toISOString() ?? '',
     });
+    const movedStartsAt = new Date(2026, 7, 21, 18);
+    const movedEndsAt = new Date(2026, 7, 21, 19);
     const moved = await studio.rescheduleLesson(ownerToken, occurrence.id, {
       coachId: coach.id,
-      endsAt: '2026-08-21T17:00:00.000Z',
+      endsAt: movedEndsAt.toISOString(),
       roomId: room.id,
-      startsAt: '2026-08-21T16:00:00.000Z',
+      startsAt: movedStartsAt.toISOString(),
     });
     expect(moved).toMatchObject({
-      originalStartsAt: '2026-08-20T15:00:00.000Z',
-      startsAt: '2026-08-21T16:00:00.000Z',
+      originalStartsAt: originalOccurrence?.startsAt.toISOString(),
+      startsAt: movedStartsAt.toISOString(),
     });
     expect(await database.weeklySchedule.findUnique({ where: { id: schedule.id } })).toMatchObject({
       isActive: true,
       startTime: '18:00',
       weekday: 4,
     });
-    const actor = await application.authenticate(ownerToken);
-    const oldDay = await new LessonOccurrenceService(database).resolveDay(
-      actor,
-      new Date('2026-08-20T12:00:00.000Z'),
-    );
-    const newDay = await new LessonOccurrenceService(database).resolveDay(
-      actor,
-      new Date('2026-08-21T12:00:00.000Z'),
-    );
+    const oldDay = await new LessonOccurrenceService(database).resolveDay(actor, originalDate);
+    const newDay = await new LessonOccurrenceService(database).resolveDay(actor, movedStartsAt);
     expect(oldDay.filter(({ groupId }) => groupId === group.id)).toHaveLength(0);
     expect(newDay.filter(({ groupId }) => groupId === group.id)).toEqual([
       expect.objectContaining({
         lessonId: occurrence.id,
-        startsAt: new Date('2026-08-21T16:00:00.000Z'),
+        startsAt: movedStartsAt,
       }),
     ]);
   });
