@@ -375,6 +375,10 @@ const desktopApi: AravaDesktopApi = {
     listRules: (token, branchId) => invoke(IPC_CHANNELS.payrollRuleList, token, branchId),
     payPeriod: (token, id, input) => invoke(IPC_CHANNELS.payrollPeriodPay, token, id, input),
     updateRule: (token, id, input) => invoke(IPC_CHANNELS.payrollRuleUpdate, token, id, input),
+    getTrainerPayoutProfile: (token, trainerId) =>
+      invoke(IPC_CHANNELS.trainerPayoutProfileGet, token, trainerId),
+    saveTrainerPayoutProfile: (token, input) =>
+      invoke(IPC_CHANNELS.trainerPayoutProfileSave, token, input),
   },
   analytics: {
     get: (token, query) => invoke(IPC_CHANNELS.analyticsGet, token, query),

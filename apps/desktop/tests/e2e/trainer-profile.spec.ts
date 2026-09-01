@@ -66,6 +66,13 @@ test('профиль тренера открывается из сотрудни
     await expect(page.getByText('Расписание', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('Посещаемость', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Зарплата' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Выплаты тренеру' })).toBeVisible();
+    await page.getByRole('button', { name: 'Настроить' }).click();
+    const payoutDialog = page.getByRole('dialog', { name: 'Выплаты тренеру' });
+    await payoutDialog.getByLabel('Расчёт').first().selectOption('FIXED_PER_ATTENDANCE');
+    await payoutDialog.getByLabel('Сумма, ₽').fill('150');
+    await payoutDialog.getByRole('button', { name: 'Сохранить версию' }).click();
+    await expect(page.getByText('Фиксировано за посещение')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Сбросить пароль' })).toBeVisible();
 
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
@@ -84,6 +91,7 @@ test('профиль тренера открывается из сотрудни
     await page.getByRole('link', { name: 'Мой профиль' }).click();
     await expect(page.getByRole('heading', { name: created.trainerA.fullName })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Сбросить пароль' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Выплаты тренеру' })).toHaveCount(0);
     await page.evaluate((trainerId) => {
       (globalThis as typeof globalThis & { location: { hash: string } }).location.hash =
         `/trainers/${trainerId}`;

@@ -1,3 +1,4 @@
+import { PAYOUT_CATEGORIES } from '@arava/shared';
 import type {
   AnalyticsBreakdownRow,
   AnalyticsMetric,
@@ -25,6 +26,9 @@ import type {
   PayrollPendingLessonSummary,
   PayrollRuleInput,
   PayrollRuleSummary,
+  PayoutCategory,
+  TrainerPayoutProfile,
+  TrainerPayoutProfileInput,
   ReportData,
   ReportQuery,
 } from '@arava/shared';
@@ -163,6 +167,13 @@ function accrualSummary(accrual: PayrollPeriodRecord['accruals'][number]): Payro
     lessonId: accrual.lessonId ?? undefined,
     lessonStartsAt: accrual.lesson?.startsAt.toISOString(),
     manualAdjustment: accrual.manualAdjustment,
+    payoutAmount: accrual.payoutAmount ?? undefined,
+    payoutCategory: accrual.payoutCategory ?? undefined,
+    payoutMode: accrual.payoutMode ?? undefined,
+    payoutPercentage:
+      accrual.payoutPercentageBasisPoints === null
+        ? undefined
+        : accrual.payoutPercentageBasisPoints / 100,
     revenueBase: accrual.revenueBase ?? undefined,
     type: accrual.type,
   };
@@ -191,6 +202,9 @@ function periodDetail(
     ...periodSummary(period),
     accruals: period.accruals.map(accrualSummary),
     pendingAttendance,
+    unconfiguredPayoutCount: period.accruals.filter(
+      ({ payoutCategory, payoutMode }) => payoutCategory !== null && payoutMode === null,
+    ).length,
   };
 }
 
@@ -684,6 +698,126 @@ export class ManagementService {
     return records.map(ruleSummary);
   }
 
+  async getTrainerPayoutProfile(token: string, trainerId: string): Promise<TrainerPayoutProfile> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'payroll:read');
+    const trainer = await this.database.user.findUnique({
+      include: { branchAssignments: true },
+      where: { id: trainerId },
+    });
+    if (trainer?.role !== 'COACH') throw new DomainError('NOT_FOUND', 'Тренер не найден.');
+    if (actor.role === 'COACH')
+      throw new DomainError('AUTHORIZATION', 'Настройки выплат недоступны тренеру.');
+    const branchIds = accessibleBranchIds(actor);
+    if (
+      branchIds &&
+      trainer.branchAssignments.length > 0 &&
+      !trainer.branchAssignments.some(({ branchId }) => branchIds.includes(branchId))
+    )
+      throw new DomainError('AUTHORIZATION', 'Профиль выплат недоступен в ваших филиалах.');
+    const [rules, legacyRuleCount] = await Promise.all([
+      this.database.trainerPayoutRule.findMany({
+        orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+        where: { trainerId },
+      }),
+      this.database.payrollRule.count({ where: { coachId: trainerId, isActive: true } }),
+    ]);
+    const now = new Date();
+    const version = (rule: (typeof rules)[number]) => ({
+      amount: rule.amount ?? undefined,
+      category: rule.category,
+      createdAt: rule.createdAt.toISOString(),
+      effectiveFrom: rule.effectiveFrom.toISOString().slice(0, 10),
+      id: rule.id,
+      mode: rule.mode ?? undefined,
+      percentage:
+        rule.percentageBasisPoints === null ? undefined : rule.percentageBasisPoints / 100,
+    });
+    return {
+      canEdit: actor.role === 'OWNER',
+      categories: PAYOUT_CATEGORIES.map((category) => {
+        const matching = rules.filter((rule) => rule.category === category);
+        const current = matching.find((rule) => rule.effectiveFrom <= now);
+        return {
+          category,
+          current: current ? version(current) : undefined,
+          future: matching
+            .filter((rule) => rule.effectiveFrom > now)
+            .reverse()
+            .map(version),
+          history: matching
+            .filter((rule) => rule.effectiveFrom <= now && rule.id !== current?.id)
+            .map(version),
+        };
+      }),
+      legacyRuleCount,
+      trainerId,
+      trainerName: trainer.fullName,
+    };
+  }
+
+  async saveTrainerPayoutProfile(
+    token: string,
+    input: TrainerPayoutProfileInput,
+  ): Promise<TrainerPayoutProfile> {
+    const actor = await this.application.authenticate(token);
+    if (actor.role !== 'OWNER')
+      throw new DomainError('AUTHORIZATION', 'Настраивать выплаты может только владелец.');
+    const trainer = await this.database.user.findUnique({ where: { id: input.trainerId } });
+    if (trainer?.role !== 'COACH') throw new DomainError('NOT_FOUND', 'Тренер не найден.');
+    if (
+      input.rules.length !== PAYOUT_CATEGORIES.length ||
+      new Set(input.rules.map(({ category }) => category)).size !== PAYOUT_CATEGORIES.length
+    )
+      throw new DomainError('VALIDATION', 'Укажите правило для каждой категории.');
+    const effectiveFrom = new Date(`${input.effectiveFrom}T00:00:00`);
+    if (Number.isNaN(effectiveFrom.getTime()))
+      throw new DomainError('VALIDATION', 'Укажите корректную дату начала действия.');
+    for (const rule of input.rules) this.assertTrainerPayoutRule(rule);
+    await this.database.$transaction(async (transaction) => {
+      for (const rule of input.rules) {
+        await transaction.trainerPayoutRule.upsert({
+          create: {
+            amount: rule.amount ?? null,
+            category: rule.category,
+            createdByUserId: actor.id,
+            effectiveFrom,
+            mode: rule.mode ?? null,
+            percentageBasisPoints:
+              rule.percentage === undefined ? null : Math.round(rule.percentage * 100),
+            trainerId: input.trainerId,
+          },
+          update: {
+            amount: rule.amount ?? null,
+            createdByUserId: actor.id,
+            mode: rule.mode ?? null,
+            percentageBasisPoints:
+              rule.percentage === undefined ? null : Math.round(rule.percentage * 100),
+          },
+          where: {
+            trainerId_category_effectiveFrom: {
+              category: rule.category,
+              effectiveFrom,
+              trainerId: input.trainerId,
+            },
+          },
+        });
+      }
+      await this.audit(
+        transaction,
+        actor.id,
+        'TRAINER_PAYOUT_PROFILE_SAVED',
+        'User',
+        input.trainerId,
+        {
+          categories: input.rules.map(({ category, mode }) => ({ category, mode: mode ?? null })),
+          effectiveFrom: input.effectiveFrom,
+        },
+      );
+    });
+    return this.getTrainerPayoutProfile(token, input.trainerId);
+  }
+
   async createPayrollRule(token: string, input: PayrollRuleInput): Promise<PayrollRuleSummary> {
     const actor = await this.financeActor(token, 'payroll:manage');
     assertBranchAccess(actor, input.branchId);
@@ -792,24 +926,111 @@ export class ManagementService {
     if (period.status === 'APPROVED' || period.status === 'PAID')
       throw new DomainError('VALIDATION', 'Утверждённый расчёт нельзя изменить.');
     const lessons = await this.database.lesson.findMany({
-      include: { attendance: true },
+      include: {
+        attendance: true,
+        substitution: true,
+        trialAppointments: {
+          select: { status: true, studentId: true, supersededAt: true },
+        },
+      },
       where: {
         ...(period.branchId ? { branchId: period.branchId } : {}),
         startsAt: { gte: period.dateFrom, lte: period.dateTo },
         status: 'COMPLETED',
       },
     });
-    const rules = await this.database.payrollRule.findMany({
-      where: {
-        isActive: true,
-        ...(period.branchId ? { branchId: period.branchId } : {}),
-        validFrom: { lte: period.dateTo },
-        OR: [{ validTo: null }, { validTo: { gte: period.dateFrom } }],
-      },
-    });
+    const coachIds = [...new Set(lessons.flatMap(({ coachId }) => (coachId ? [coachId] : [])))];
+    const [rules, payoutRules] = await Promise.all([
+      this.database.payrollRule.findMany({
+        where: {
+          coachId: { in: coachIds },
+          isActive: true,
+          ...(period.branchId ? { branchId: period.branchId } : {}),
+          validFrom: { lte: period.dateTo },
+          OR: [{ validTo: null }, { validTo: { gte: period.dateFrom } }],
+        },
+      }),
+      this.database.trainerPayoutRule.findMany({
+        orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+        where: { trainerId: { in: coachIds } },
+      }),
+    ]);
     const accruals: Prisma.PayrollAccrualCreateManyInput[] = [];
     for (const lesson of lessons) {
       if (!lesson.coachId) continue;
+      if (!lesson.attendanceCompletedAt) continue;
+      const trainerPolicies = payoutRules.filter(({ trainerId }) => trainerId === lesson.coachId);
+      if (trainerPolicies.length > 0) {
+        const effectiveRule = (category: PayoutCategory) =>
+          trainerPolicies.find(
+            (rule) => rule.category === category && rule.effectiveFrom <= lesson.startsAt,
+          );
+        const substitutionRule = lesson.substitution ? effectiveRule('SUBSTITUTION') : undefined;
+        const useSubstitutionRule = Boolean(substitutionRule?.mode);
+        const trialStudentIds = new Set(
+          lesson.trialAppointments.flatMap((appointment) =>
+            appointment.studentId &&
+            appointment.status === 'BOOKED' &&
+            appointment.supersededAt === null
+              ? [appointment.studentId]
+              : [],
+          ),
+        );
+        const eligible = lesson.attendance.filter(
+          ({ status }) => status === 'PRESENT' || status === 'TRIAL',
+        );
+        const categorized = new Map<PayoutCategory, string[]>();
+        for (const attendance of eligible) {
+          const category: PayoutCategory = useSubstitutionRule
+            ? 'SUBSTITUTION'
+            : attendance.status === 'TRIAL' || trialStudentIds.has(attendance.studentId)
+              ? 'TRIAL'
+              : attendance.directPaymentId
+                ? 'SINGLE_VISIT'
+                : lesson.payoutCategory;
+          categorized.set(category, [...(categorized.get(category) ?? []), attendance.studentId]);
+        }
+        if (categorized.size === 0) {
+          const category: PayoutCategory = useSubstitutionRule
+            ? 'SUBSTITUTION'
+            : lesson.payoutCategory;
+          categorized.set(category, []);
+        }
+        for (const [category, studentIds] of categorized) {
+          const rule = category === 'SUBSTITUTION' ? substitutionRule : effectiveRule(category);
+          const mode = rule?.mode ?? null;
+          const revenueBase =
+            mode === 'PERCENTAGE' ? await this.lessonRevenueBase(lesson.id, studentIds) : null;
+          const calculatedAmount = this.calculateTrainerPayout(
+            mode,
+            rule?.amount ?? 0,
+            rule?.percentageBasisPoints ?? 0,
+            studentIds.length,
+            revenueBase ?? 0,
+          );
+          const type = this.payoutModeToPayrollType(mode);
+          accruals.push({
+            attendeeCount: studentIds.length,
+            baseAmount: rule?.amount ?? 0,
+            branchId: lesson.branchId,
+            calculatedAmount,
+            coachId: lesson.coachId,
+            finalAmount: calculatedAmount,
+            groupId: lesson.groupId,
+            lessonId: lesson.id,
+            payoutAmount: rule?.amount ?? null,
+            payoutCategory: category,
+            payoutMode: mode,
+            payoutPercentageBasisPoints: rule?.percentageBasisPoints ?? null,
+            payoutRuleEffectiveFrom: rule?.effectiveFrom ?? null,
+            payoutRuleId: rule?.id ?? null,
+            payrollPeriodId: id,
+            revenueBase,
+            type,
+          });
+        }
+        continue;
+      }
       const rule = rules
         .filter(
           (item) =>
@@ -821,7 +1042,6 @@ export class ManagementService {
         )
         .sort((a, b) => Number(Boolean(b.groupId)) - Number(Boolean(a.groupId)))[0];
       if (!rule || rule.type === 'FIXED_MONTHLY') continue;
-      if (!lesson.attendanceCompletedAt) continue;
       const attendeeCount = lesson.attendance.filter(({ status }) => status === 'PRESENT').length;
       const revenueBase =
         rule.type === 'PERCENT_OF_REVENUE' ? await this.lessonRevenueBase(lesson.id) : null;
@@ -840,7 +1060,10 @@ export class ManagementService {
         type: rule.type,
       });
     }
-    for (const rule of rules.filter(({ type }) => type === 'FIXED_MONTHLY')) {
+    const trainersWithProfiles = new Set(payoutRules.map(({ trainerId }) => trainerId));
+    for (const rule of rules.filter(
+      ({ coachId, type }) => type === 'FIXED_MONTHLY' && !trainersWithProfiles.has(coachId),
+    )) {
       const calculatedAmount = rule.monthlyAmount ?? 0;
       accruals.push({
         baseAmount: calculatedAmount,
@@ -901,6 +1124,15 @@ export class ManagementService {
       throw new DomainError(
         'VALIDATION',
         'Посещаемость заполнена не для всех занятий — расчёт нельзя утвердить.',
+      );
+    if (
+      period.accruals.some(
+        ({ payoutCategory, payoutMode }) => payoutCategory !== null && payoutMode === null,
+      )
+    )
+      throw new DomainError(
+        'VALIDATION',
+        'Для части занятий выплаты тренеру не настроены — расчёт нельзя утвердить.',
       );
     await this.database.$transaction(async (transaction) => {
       await transaction.payrollPeriod.update({
@@ -1196,6 +1428,24 @@ export class ManagementService {
     };
   }
 
+  private assertTrainerPayoutRule(rule: TrainerPayoutProfileInput['rules'][number]): void {
+    const fixed = rule.mode === 'FIXED_PER_ATTENDANCE' || rule.mode === 'FIXED_PER_LESSON';
+    if (fixed && (!Number.isInteger(rule.amount) || (rule.amount ?? 0) < 0))
+      throw new DomainError('VALIDATION', 'Укажите корректную сумму выплаты.');
+    if (!fixed && rule.amount !== undefined)
+      throw new DomainError('VALIDATION', 'Сумма допустима только для фиксированного правила.');
+    if (
+      rule.mode === 'PERCENTAGE' &&
+      (rule.percentage === undefined ||
+        rule.percentage <= 0 ||
+        rule.percentage > 100 ||
+        Math.round(rule.percentage * 100) !== rule.percentage * 100)
+    )
+      throw new DomainError('VALIDATION', 'Процент должен быть от 0,01 до 100.');
+    if (rule.mode !== 'PERCENTAGE' && rule.percentage !== undefined)
+      throw new DomainError('VALIDATION', 'Процент допустим только для процентного правила.');
+  }
+
   private async assertExpenseCategory(categoryId: string, branchId: string): Promise<void> {
     const category = await this.requireCategory(categoryId);
     if (!category.isActive || category.archivedAt)
@@ -1273,11 +1523,32 @@ export class ManagementService {
     return 0;
   }
 
+  private payoutModeToPayrollType(
+    mode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null,
+  ): 'FIXED_PER_LESSON' | 'PER_ATTENDEE' | 'PERCENT_OF_REVENUE' {
+    if (mode === 'FIXED_PER_ATTENDANCE') return 'PER_ATTENDEE';
+    if (mode === 'PERCENTAGE') return 'PERCENT_OF_REVENUE';
+    return 'FIXED_PER_LESSON';
+  }
+
+  private calculateTrainerPayout(
+    mode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null,
+    amount: number,
+    percentageBasisPoints: number,
+    attendees: number,
+    revenue: number,
+  ): number {
+    if (mode === 'FIXED_PER_ATTENDANCE') return amount * attendees;
+    if (mode === 'FIXED_PER_LESSON') return amount;
+    if (mode === 'PERCENTAGE') return Math.round((revenue * percentageBasisPoints) / 10_000);
+    return 0;
+  }
+
   private async pendingPayrollAttendance(
     period: PayrollPeriodRecord,
   ): Promise<PayrollPendingLessonSummary[]> {
     if (period.status === 'APPROVED' || period.status === 'PAID') return [];
-    const [lessons, rules] = await Promise.all([
+    const [lessons, rules, payoutRules] = await Promise.all([
       this.database.lesson.findMany({
         include: {
           branch: { select: { name: true } },
@@ -1300,9 +1571,14 @@ export class ManagementService {
           OR: [{ validTo: null }, { validTo: { gte: period.dateFrom } }],
         },
       }),
+      this.database.trainerPayoutRule.findMany({
+        select: { trainerId: true },
+        where: { effectiveFrom: { lte: period.dateTo } },
+      }),
     ]);
     return lessons.flatMap((lesson) => {
       if (!lesson.coachId || !lesson.coach) return [];
+      const hasPayoutProfile = payoutRules.some(({ trainerId }) => trainerId === lesson.coachId);
       const rule = rules
         .filter(
           (item) =>
@@ -1314,7 +1590,7 @@ export class ManagementService {
             (!item.validTo || item.validTo >= lesson.startsAt),
         )
         .sort((a, b) => Number(Boolean(b.groupId)) - Number(Boolean(a.groupId)))[0];
-      if (!rule) return [];
+      if (!rule && !hasPayoutProfile) return [];
       return [
         {
           branchId: lesson.branchId,
@@ -1330,12 +1606,27 @@ export class ManagementService {
     });
   }
 
-  private async lessonRevenueBase(lessonId: string): Promise<number> {
-    const entries = await this.database.subscriptionLedger.findMany({
-      include: { subscription: { include: { payments: { include: { refunds: true } } } } },
-      where: { lessonId, type: 'LESSON_WRITE_OFF', reversals: { none: {} } },
-    });
-    return entries.reduce((sum, entry) => {
+  private async lessonRevenueBase(lessonId: string, studentIds?: string[]): Promise<number> {
+    const [entries, directPayments] = await Promise.all([
+      this.database.subscriptionLedger.findMany({
+        include: { subscription: { include: { payments: { include: { refunds: true } } } } },
+        where: {
+          lessonId,
+          type: 'LESSON_WRITE_OFF',
+          reversals: { none: {} },
+          ...(studentIds ? { studentId: { in: studentIds } } : {}),
+        },
+      }),
+      this.database.payment.findMany({
+        include: { refunds: true },
+        where: {
+          attendanceLessonId: lessonId,
+          status: { not: 'CANCELLED' },
+          ...(studentIds ? { studentId: { in: studentIds } } : {}),
+        },
+      }),
+    ]);
+    const subscriptionRevenue = entries.reduce((sum, entry) => {
       const paid = entry.subscription.payments
         .filter(({ status }) => status !== 'CANCELLED')
         .reduce(
@@ -1348,6 +1639,16 @@ export class ManagementService {
       const divisor = entry.subscription.lessonLimit ?? Math.max(1, entry.subscription.lessonsUsed);
       return sum + Math.floor(paid / divisor);
     }, 0);
+    return (
+      subscriptionRevenue +
+      directPayments.reduce(
+        (sum, payment) =>
+          sum +
+          payment.amount -
+          payment.refunds.reduce((refundSum, refund) => refundSum + refund.amount, 0),
+        0,
+      )
+    );
   }
 
   private async analyticsPeriod(

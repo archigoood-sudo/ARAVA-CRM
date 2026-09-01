@@ -21,9 +21,18 @@ interface LessonForm {
   endsAt: string;
   groupId: string;
   notes?: string | undefined;
+  payoutCategory?: 'REGULAR_ATTENDANCE' | 'MAKEUP' | 'PROMOTIONAL_FREE' | 'PERSONAL_LESSON';
   room?: string | undefined;
   roomId?: string | undefined;
   startsAt: string;
+}
+
+function editablePayoutCategory(
+  value: LessonSummary['payoutCategory'],
+): 'REGULAR_ATTENDANCE' | 'MAKEUP' | 'PROMOTIONAL_FREE' | 'PERSONAL_LESSON' {
+  return value === 'MAKEUP' || value === 'PROMOTIONAL_FREE' || value === 'PERSONAL_LESSON'
+    ? value
+    : 'REGULAR_ATTENDANCE';
 }
 
 export function LessonDialog({
@@ -75,6 +84,7 @@ export function LessonDialog({
             endsAt: localDateTime(lesson.endsAt),
             groupId: lesson.groupId,
             notes: lesson.notes,
+            payoutCategory: editablePayoutCategory(lesson.payoutCategory),
             room: lesson.room,
             roomId: lesson.roomId,
             startsAt: localDateTime(lesson.startsAt),
@@ -82,6 +92,7 @@ export function LessonDialog({
         : {
             endsAt: localDateTime(end.toISOString()),
             groupId: groups[0]?.id ?? '',
+            payoutCategory: 'REGULAR_ATTENDANCE',
             startsAt: localDateTime(start.toISOString()),
           },
     );
@@ -145,7 +156,14 @@ export function LessonDialog({
               ))}
           </Select>
         </Field>
-        <span />
+        <Field label="Категория выплаты">
+          <Select {...register('payoutCategory')}>
+            <option value="REGULAR_ATTENDANCE">Обычное занятие</option>
+            <option value="MAKEUP">Отработка</option>
+            <option value="PROMOTIONAL_FREE">Промо / бесплатное</option>
+            <option value="PERSONAL_LESSON">Персональное занятие</option>
+          </Select>
+        </Field>
         {selectedGroup &&
         selectedRoom?.capacity &&
         selectedGroup.studentCount > selectedRoom.capacity ? (

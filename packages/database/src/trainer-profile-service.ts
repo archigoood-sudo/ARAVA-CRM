@@ -420,6 +420,13 @@ export class TrainerProfileService {
           lessonId: item.lessonId ?? undefined,
           lessonStartsAt: item.lesson?.startsAt.toISOString(),
           periodStatus: item.payrollPeriod.status,
+          payoutAmount: item.payoutAmount ?? undefined,
+          payoutCategory: item.payoutCategory ?? undefined,
+          payoutMode: item.payoutMode ?? undefined,
+          payoutPercentage:
+            item.payoutPercentageBasisPoints === null
+              ? undefined
+              : item.payoutPercentageBasisPoints / 100,
           rate: item.baseAmount,
           type: item.type,
         })),

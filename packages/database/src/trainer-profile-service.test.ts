@@ -102,14 +102,10 @@ describe('Sprint 4.3D trainer profile', () => {
       },
     });
     const now = new Date();
-    const month = `${String(now.getFullYear())}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const past = new Date(now.getFullYear(), now.getMonth(), Math.max(1, now.getDate() - 2), 10);
-    const replacementPast = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      Math.max(1, now.getDate() - 1),
-      12,
-    );
+    const payrollMonth = new Date(now.getFullYear(), now.getMonth() - 1, 15, 10);
+    const month = `${String(payrollMonth.getFullYear())}-${String(payrollMonth.getMonth() + 1).padStart(2, '0')}`;
+    const past = payrollMonth;
+    const replacementPast = new Date(payrollMonth.getTime() + 24 * 60 * 60_000);
     const future = new Date(now.getTime() + 3 * 86_400_000);
     const studentA = await application.createStudent(ownerToken, {
       branchId: branch.id,
@@ -241,14 +237,14 @@ describe('Sprint 4.3D trainer profile', () => {
         groupId: group.id,
         isActive: true,
         type: 'PER_ATTENDEE',
-        validFrom: new Date(now.getFullYear(), now.getMonth(), 1),
+        validFrom: new Date(payrollMonth.getFullYear(), payrollMonth.getMonth(), 1),
       },
     });
     const period = await database.payrollPeriod.create({
       data: {
         createdByUserId: trainer.id,
-        dateFrom: new Date(now.getFullYear(), now.getMonth(), 1),
-        dateTo: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
+        dateFrom: new Date(payrollMonth.getFullYear(), payrollMonth.getMonth(), 1),
+        dateTo: new Date(payrollMonth.getFullYear(), payrollMonth.getMonth() + 1, 0, 23, 59, 59),
         status: 'APPROVED',
       },
     });
@@ -270,8 +266,8 @@ describe('Sprint 4.3D trainer profile', () => {
       data: {
         branchId: branch.id,
         createdByUserId: trainer.id,
-        dateFrom: new Date(now.getFullYear(), now.getMonth(), 1),
-        dateTo: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
+        dateFrom: new Date(payrollMonth.getFullYear(), payrollMonth.getMonth(), 1),
+        dateTo: new Date(payrollMonth.getFullYear(), payrollMonth.getMonth() + 1, 0, 23, 59, 59),
         status: 'DRAFT',
       },
     });

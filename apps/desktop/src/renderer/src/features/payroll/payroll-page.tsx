@@ -1,4 +1,11 @@
-import { PAYROLL_TYPES, formatDate, type PayrollRuleInput, type PayrollType } from '@arava/shared';
+import {
+  PAYROLL_TYPES,
+  formatDate,
+  type PayrollRuleInput,
+  type PayrollType,
+  type PayoutCalculationMode,
+  type PayoutCategory,
+} from '@arava/shared';
 import {
   Badge,
   Button,
@@ -39,6 +46,21 @@ const periodLabels = {
   DRAFT: 'Черновик',
   PAID: 'Выплачен',
 } as const;
+const payoutCategoryLabels: Record<PayoutCategory, string> = {
+  MAKEUP: 'Отработка',
+  PERSONAL_LESSON: 'Персональное',
+  PROMOTIONAL_FREE: 'Промо / бесплатное',
+  REGULAR_ATTENDANCE: 'Обычное посещение',
+  SINGLE_VISIT: 'Разовое посещение',
+  SUBSTITUTION: 'Замена',
+  TRIAL: 'Пробное',
+};
+const payoutModeLabels: Record<PayoutCalculationMode, string> = {
+  FIXED_PER_ATTENDANCE: 'за посещение',
+  FIXED_PER_LESSON: 'за занятие',
+  NO_PAYOUT: 'без выплаты',
+  PERCENTAGE: 'процент',
+};
 function inputDate(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 }
@@ -69,7 +91,7 @@ export function PayrollPage() {
   const [coachId, setCoachId] = useState('');
   const [groupId, setGroupId] = useState('');
   const [type, setType] = useState<PayrollType>('PER_ATTENDEE');
-  const [rate, setRate] = useState('100');
+  const [rate, setRate] = useState('');
   const [secondRate, setSecondRate] = useState('');
   const [validFrom, setValidFrom] = useState(inputDate(now));
   const [validTo, setValidTo] = useState('');
@@ -338,7 +360,10 @@ export function PayrollPage() {
                     </Button>
                   ) : null}
                   {selected.data.status === 'CALCULATED' && canApprove ? (
-                    <Button onClick={() => void periodAction('approve')}>
+                    <Button
+                      disabled={selected.data.unconfiguredPayoutCount > 0}
+                      onClick={() => void periodAction('approve')}
+                    >
                       <Check className="size-4" />
                       Утвердить
                     </Button>
@@ -370,7 +395,21 @@ export function PayrollPage() {
                       </TableCell>
                       <TableCell>{item.coachName}</TableCell>
                       <TableCell>{item.groupName ?? 'Все группы'}</TableCell>
-                      <TableCell>{payrollLabels[item.type]}</TableCell>
+                      <TableCell>
+                        {item.payoutCategory ? (
+                          <div>
+                            <p>{payoutCategoryLabels[item.payoutCategory]}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {item.payoutMode ? payoutModeLabels[item.payoutMode] : 'Не настроено'}
+                              {item.payoutMode === 'PERCENTAGE'
+                                ? ` · ${String(item.payoutPercentage ?? 0).replace('.', ',')}%`
+                                : ''}
+                            </p>
+                          </div>
+                        ) : (
+                          payrollLabels[item.type]
+                        )}
+                      </TableCell>
                       <TableCell>{attendanceCalculation(item)}</TableCell>
                       <TableCell className="text-right">
                         <Money amount={item.finalAmount} />
@@ -402,6 +441,12 @@ export function PayrollPage() {
                       </Link>
                     ))}
                   </div>
+                </div>
+              ) : null}
+              {selected.data.unconfiguredPayoutCount ? (
+                <div className="border-t border-border bg-amber-50/70 p-5 text-sm text-amber-800 dark:bg-amber-950/10 dark:text-amber-300">
+                  Для {selected.data.unconfiguredPayoutCount} начислений правило не настроено.
+                  Настройте профиль выплат тренера перед утверждением периода.
                 </div>
               ) : null}
             </Card>
@@ -476,13 +521,22 @@ export function PayrollPage() {
                   : type === 'FIXED_MONTHLY'
                     ? 'В месяц, ₽'
                     : 'За занятие, ₽'}
-              <Input onChange={(event) => setRate(event.target.value)} type="number" value={rate} />
+              <Input
+                min={type === 'PERCENT_OF_REVENUE' ? 0.01 : 0}
+                onChange={(event) => setRate(event.target.value)}
+                required
+                step="0.01"
+                type="number"
+                value={rate}
+              />
             </Label>
             {type === 'COMBINED' ? (
               <Label>
                 За ученика, ₽
                 <Input
                   onChange={(event) => setSecondRate(event.target.value)}
+                  required
+                  step="0.01"
                   type="number"
                   value={secondRate}
                 />
@@ -541,7 +595,13 @@ export function PayrollPage() {
           <Button onClick={() => setDialog(undefined)} variant="outline">
             Отмена
           </Button>
-          <Button onClick={() => void (dialog === 'rule' ? createRule() : createPeriod())}>
+          <Button
+            disabled={
+              dialog === 'rule' &&
+              (!branchId || !coachId || !rate || (type === 'COMBINED' && !secondRate))
+            }
+            onClick={() => void (dialog === 'rule' ? createRule() : createPeriod())}
+          >
             Сохранить
           </Button>
         </div>

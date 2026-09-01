@@ -813,4 +813,22 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'CREATE INDEX "Subscription_sequenceAfterSubscriptionId_idx" ON "Subscription"("sequenceAfterSubscriptionId")',
     ],
   },
+  {
+    id: '20260901000000_trainer_payout_policies',
+    statements: [
+      'ALTER TABLE "Lesson" ADD COLUMN "payoutCategory" TEXT NOT NULL DEFAULT \'REGULAR_ATTENDANCE\'',
+      'CREATE TABLE "TrainerPayoutRule" (\n  "id" TEXT NOT NULL PRIMARY KEY,\n  "trainerId" TEXT NOT NULL,\n  "category" TEXT NOT NULL,\n  "mode" TEXT,\n  "amount" INTEGER,\n  "percentageBasisPoints" INTEGER,\n  "effectiveFrom" DATETIME NOT NULL,\n  "createdByUserId" TEXT NOT NULL,\n  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  "updatedAt" DATETIME NOT NULL,\n  CONSTRAINT "TrainerPayoutRule_trainerId_fkey" FOREIGN KEY ("trainerId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT "TrainerPayoutRule_createdByUserId_fkey" FOREIGN KEY ("createdByUserId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE\n)',
+      'CREATE UNIQUE INDEX "TrainerPayoutRule_trainerId_category_effectiveFrom_key" ON "TrainerPayoutRule"("trainerId", "category", "effectiveFrom")',
+      'CREATE INDEX "TrainerPayoutRule_trainerId_category_effectiveFrom_idx" ON "TrainerPayoutRule"("trainerId", "category", "effectiveFrom")',
+      'CREATE INDEX "TrainerPayoutRule_effectiveFrom_idx" ON "TrainerPayoutRule"("effectiveFrom")',
+      'ALTER TABLE "PayrollAccrual" ADD COLUMN "payoutCategory" TEXT',
+      'ALTER TABLE "PayrollAccrual" ADD COLUMN "payoutMode" TEXT',
+      'ALTER TABLE "PayrollAccrual" ADD COLUMN "payoutAmount" INTEGER',
+      'ALTER TABLE "PayrollAccrual" ADD COLUMN "payoutPercentageBasisPoints" INTEGER',
+      'ALTER TABLE "PayrollAccrual" ADD COLUMN "payoutRuleId" TEXT',
+      'ALTER TABLE "PayrollAccrual" ADD COLUMN "payoutRuleEffectiveFrom" DATETIME',
+      'DROP INDEX "PayrollAccrual_payrollPeriodId_coachId_lessonId_type_key"',
+      'CREATE UNIQUE INDEX "PayrollAccrual_payrollPeriodId_coachId_lessonId_payoutCategory_key" ON "PayrollAccrual"("payrollPeriodId", "coachId", "lessonId", "payoutCategory")',
+    ],
+  },
 ];

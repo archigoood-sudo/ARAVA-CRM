@@ -91,6 +91,23 @@ export const PAYROLL_TYPES = [
   'COMBINED',
 ] as const;
 export type PayrollType = (typeof PAYROLL_TYPES)[number];
+export const PAYOUT_CATEGORIES = [
+  'REGULAR_ATTENDANCE',
+  'TRIAL',
+  'SINGLE_VISIT',
+  'MAKEUP',
+  'PROMOTIONAL_FREE',
+  'PERSONAL_LESSON',
+  'SUBSTITUTION',
+] as const;
+export type PayoutCategory = (typeof PAYOUT_CATEGORIES)[number];
+export const PAYOUT_CALCULATION_MODES = [
+  'NO_PAYOUT',
+  'FIXED_PER_ATTENDANCE',
+  'FIXED_PER_LESSON',
+  'PERCENTAGE',
+] as const;
+export type PayoutCalculationMode = (typeof PAYOUT_CALCULATION_MODES)[number];
 export const PAYROLL_PERIOD_STATUSES = [
   'DRAFT',
   'CALCULATED',
@@ -398,6 +415,8 @@ export const IPC_CHANNELS = {
   payrollRuleCreate: 'payroll-rule:create',
   payrollRuleList: 'payroll-rule:list',
   payrollRuleUpdate: 'payroll-rule:update',
+  trainerPayoutProfileGet: 'trainer-payout-profile:get',
+  trainerPayoutProfileSave: 'trainer-payout-profile:save',
   payrollPeriodApprove: 'payroll-period:approve',
   payrollPeriodCalculate: 'payroll-period:calculate',
   payrollPeriodCreate: 'payroll-period:create',
@@ -1752,6 +1771,10 @@ export interface PayrollAccrualSummary {
   lessonId?: string | undefined;
   lessonStartsAt?: string | undefined;
   manualAdjustment: number;
+  payoutAmount?: number | undefined;
+  payoutCategory?: PayoutCategory | undefined;
+  payoutMode?: PayoutCalculationMode | undefined;
+  payoutPercentage?: number | undefined;
   revenueBase?: number | undefined;
   type: PayrollType;
 }
@@ -1780,6 +1803,7 @@ export interface PayrollPeriodSummary extends PayrollPeriodInput {
 export interface PayrollPeriodDetail extends PayrollPeriodSummary {
   accruals: PayrollAccrualSummary[];
   pendingAttendance: PayrollPendingLessonSummary[];
+  unconfiguredPayoutCount: number;
 }
 
 export interface GlobalSearchResult {
@@ -1920,6 +1944,48 @@ export interface TrainerProfilePayrollDetail {
   periodStatus: PayrollPeriodStatus;
   rate: number;
   type: PayrollType;
+  payoutCategory?: PayoutCategory | undefined;
+  payoutMode?: PayoutCalculationMode | undefined;
+  payoutAmount?: number | undefined;
+  payoutPercentage?: number | undefined;
+}
+
+export interface TrainerPayoutRuleVersion {
+  amount?: number | undefined;
+  category: PayoutCategory;
+  createdAt: string;
+  effectiveFrom: string;
+  id: string;
+  mode?: PayoutCalculationMode | undefined;
+  percentage?: number | undefined;
+}
+
+export interface TrainerPayoutCategoryProfile {
+  category: PayoutCategory;
+  current?: TrainerPayoutRuleVersion | undefined;
+  future: TrainerPayoutRuleVersion[];
+  history: TrainerPayoutRuleVersion[];
+}
+
+export interface TrainerPayoutProfile {
+  categories: TrainerPayoutCategoryProfile[];
+  canEdit: boolean;
+  legacyRuleCount: number;
+  trainerId: string;
+  trainerName: string;
+}
+
+export interface TrainerPayoutRuleVersionInput {
+  amount?: number | undefined;
+  category: PayoutCategory;
+  mode?: PayoutCalculationMode | undefined;
+  percentage?: number | undefined;
+}
+
+export interface TrainerPayoutProfileInput {
+  effectiveFrom: string;
+  rules: TrainerPayoutRuleVersionInput[];
+  trainerId: string;
 }
 
 export interface TrainerProfileOverview {
@@ -2139,6 +2205,7 @@ export interface LessonInput {
   endsAt: string;
   groupId: string;
   notes?: string | undefined;
+  payoutCategory?: Exclude<PayoutCategory, 'TRIAL' | 'SINGLE_VISIT' | 'SUBSTITUTION'> | undefined;
   room?: string | undefined;
   roomId?: string | undefined;
   startsAt: string;
@@ -2166,6 +2233,7 @@ export interface LessonSummary {
   groupName: string;
   id: string;
   notes?: string | undefined;
+  payoutCategory?: PayoutCategory | undefined;
   room?: string | undefined;
   roomId?: string | undefined;
   roomName?: string | undefined;
@@ -3672,6 +3740,11 @@ export interface AravaDesktopApi {
       input: PayrollPaymentInput,
     ) => Promise<PayrollPeriodDetail>;
     updateRule: (token: string, id: string, input: PayrollRuleInput) => Promise<PayrollRuleSummary>;
+    getTrainerPayoutProfile: (token: string, trainerId: string) => Promise<TrainerPayoutProfile>;
+    saveTrainerPayoutProfile: (
+      token: string,
+      input: TrainerPayoutProfileInput,
+    ) => Promise<TrainerPayoutProfile>;
   };
   analytics: {
     get: (token: string, query: AnalyticsQuery) => Promise<ManagementAnalytics>;

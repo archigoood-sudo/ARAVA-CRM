@@ -21,6 +21,8 @@ import {
   PAYMENT_STATUSES,
   PAYROLL_PERIOD_STATUSES,
   PAYROLL_TYPES,
+  PAYOUT_CALCULATION_MODES,
+  PAYOUT_CATEGORIES,
   PUBLICATION_AUDIENCES,
   PUBLICATION_TYPES,
   REPORT_KINDS,
@@ -82,6 +84,7 @@ import {
   type PayrollPaymentInput,
   type PayrollPeriodInput,
   type PayrollRuleInput,
+  type TrainerPayoutProfileInput,
   type ReportQuery,
   type StudentContactInput,
   type StudentBulkAddToGroupInput,
@@ -165,6 +168,8 @@ export const expenseStatusSchema = z.enum(EXPENSE_STATUSES);
 export const cashRegisterTypeSchema = z.enum(CASH_REGISTER_TYPES);
 export const payrollTypeSchema = z.enum(PAYROLL_TYPES);
 export const payrollPeriodStatusSchema = z.enum(PAYROLL_PERIOD_STATUSES);
+export const payoutCategorySchema = z.enum(PAYOUT_CATEGORIES);
+export const payoutCalculationModeSchema = z.enum(PAYOUT_CALCULATION_MODES);
 export const reportKindSchema = z.enum(REPORT_KINDS);
 
 export const userCreateSchema: z.ZodType<UserCreateInput> = z.object({
@@ -457,6 +462,9 @@ export const lessonInputSchema: z.ZodType<LessonInput> = z
     endsAt: isoDateTime,
     groupId: z.string().min(1).max(100),
     notes: optionalText(2000),
+    payoutCategory: z
+      .enum(['REGULAR_ATTENDANCE', 'MAKEUP', 'PROMOTIONAL_FREE', 'PERSONAL_LESSON'])
+      .optional(),
     room: optionalText(120),
     roomId: optionalIdentifier,
     startsAt: isoDateTime,
@@ -968,6 +976,59 @@ export const payrollRuleInputSchema: z.ZodType<PayrollRuleInput> = z
         path: ['monthlyAmount'],
       });
   });
+
+export const trainerPayoutProfileInputSchema: z.ZodType<TrainerPayoutProfileInput> = z
+  .object({
+    effectiveFrom: isoDate,
+    rules: z
+      .array(
+        z
+          .object({
+            amount: moneyAmount.optional(),
+            category: payoutCategorySchema,
+            mode: payoutCalculationModeSchema.optional(),
+            percentage: z.number().min(0.01).max(100).multipleOf(0.01).optional(),
+          })
+          .strict()
+          .superRefine((rule, context) => {
+            const fixed = rule.mode === 'FIXED_PER_ATTENDANCE' || rule.mode === 'FIXED_PER_LESSON';
+            if (fixed && rule.amount === undefined)
+              context.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'Укажите сумму выплаты.',
+                path: ['amount'],
+              });
+            if (rule.mode === 'PERCENTAGE' && rule.percentage === undefined)
+              context.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'Укажите процент.',
+                path: ['percentage'],
+              });
+            if (!fixed && rule.amount !== undefined)
+              context.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'Сумма допустима только для фиксированного правила.',
+                path: ['amount'],
+              });
+            if (rule.mode !== 'PERCENTAGE' && rule.percentage !== undefined)
+              context.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'Процент допустим только для процентного правила.',
+                path: ['percentage'],
+              });
+          }),
+      )
+      .length(PAYOUT_CATEGORIES.length)
+      .superRefine((rules, context) => {
+        if (new Set(rules.map(({ category }) => category)).size !== PAYOUT_CATEGORIES.length)
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Каждая категория выплаты должна быть указана ровно один раз.',
+          });
+      }),
+    trainerId: z.string().min(1).max(100),
+  })
+  .strict();
 
 export const payrollPeriodInputSchema: z.ZodType<PayrollPeriodInput> = z
   .object({ branchId: optionalIdentifier, dateFrom: isoDate, dateTo: isoDate })

@@ -4,6 +4,8 @@ import {
   type LessonStatus,
   type PayrollPeriodStatus,
   type PayrollType,
+  type PayoutCalculationMode,
+  type PayoutCategory,
   type TrainerProfileLesson,
 } from '@arava/shared';
 import {
@@ -45,6 +47,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
+import { TrainerPayoutProfileCard } from './trainer-payout-profile-card';
 
 const groupStatuses: Record<GroupStatus, string> = {
   ACTIVE: 'Активна',
@@ -73,6 +76,21 @@ const payrollTypes: Record<PayrollType, string> = {
   FIXED_PER_LESSON: 'За занятие',
   PERCENT_OF_REVENUE: 'Процент от выручки',
   PER_ATTENDEE: 'За присутствующего',
+};
+const payoutCategories: Record<PayoutCategory, string> = {
+  MAKEUP: 'Отработка',
+  PERSONAL_LESSON: 'Персональное занятие',
+  PROMOTIONAL_FREE: 'Промо / бесплатное занятие',
+  REGULAR_ATTENDANCE: 'Обычное посещение',
+  SINGLE_VISIT: 'Разовое посещение',
+  SUBSTITUTION: 'Замена',
+  TRIAL: 'Пробное занятие',
+};
+const payoutModes: Record<PayoutCalculationMode, string> = {
+  FIXED_PER_ATTENDANCE: 'за посещение',
+  FIXED_PER_LESSON: 'за занятие',
+  NO_PAYOUT: 'без выплаты',
+  PERCENTAGE: 'процент',
 };
 
 const weekdays = [
@@ -574,6 +592,7 @@ export function TrainerProfilePage() {
       </div>
 
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
+        {actor?.role !== 'COACH' ? <TrainerPayoutProfileCard trainerId={trainerId} /> : null}
         <Card>
           <CardHeader>
             <CardTitle>Замены</CardTitle>
@@ -639,9 +658,11 @@ export function TrainerProfilePage() {
                       · {item.groupName ?? item.branchName}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {item.type === 'PER_ATTENDEE' && item.attendeeCount !== undefined
-                        ? `${String(item.attendeeCount)} × ${formatMoney(item.rate)}`
-                        : payrollTypes[item.type]}{' '}
+                      {item.payoutCategory
+                        ? `${payoutCategories[item.payoutCategory]} · ${item.payoutMode ? payoutModes[item.payoutMode] : 'Не настроено'}`
+                        : item.type === 'PER_ATTENDEE' && item.attendeeCount !== undefined
+                          ? `${String(item.attendeeCount)} × ${formatMoney(item.rate)}`
+                          : payrollTypes[item.type]}{' '}
                       · {payrollStatuses[item.periodStatus]}
                     </p>
                   </div>

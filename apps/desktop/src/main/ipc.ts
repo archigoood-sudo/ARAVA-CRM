@@ -93,6 +93,7 @@ import {
   payrollPaymentInputSchema,
   payrollPeriodInputSchema,
   payrollRuleInputSchema,
+  trainerPayoutProfileInputSchema,
   refundInputSchema,
   reportQuerySchema,
   roomClosureInputSchema,
@@ -1606,6 +1607,16 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
         payrollRuleInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.trainerPayoutProfileGet]: (unsafeToken, unsafeTrainerId) =>
+      management.getTrainerPayoutProfile(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeTrainerId),
+      ),
+    [IPC_CHANNELS.trainerPayoutProfileSave]: (unsafeToken, unsafeInput) =>
+      management.saveTrainerPayoutProfile(
+        sessionTokenSchema.parse(unsafeToken),
+        trainerPayoutProfileInputSchema.parse(unsafeInput),
       ),
     [IPC_CHANNELS.payrollPeriodList]: (unsafeToken, unsafeBranchId) =>
       management.listPayrollPeriods(

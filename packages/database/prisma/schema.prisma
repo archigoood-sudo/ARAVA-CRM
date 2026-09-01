@@ -179,6 +179,23 @@ enum PayrollType {
   COMBINED
 }
 
+enum PayoutCategory {
+  REGULAR_ATTENDANCE
+  TRIAL
+  SINGLE_VISIT
+  MAKEUP
+  PROMOTIONAL_FREE
+  PERSONAL_LESSON
+  SUBSTITUTION
+}
+
+enum PayoutCalculationMode {
+  NO_PAYOUT
+  FIXED_PER_ATTENDANCE
+  FIXED_PER_LESSON
+  PERCENTAGE
+}
+
 enum PayrollPeriodStatus {
   DRAFT
   CALCULATED
@@ -303,6 +320,8 @@ model User {
   confirmedExpenses        Expense[]             @relation("ExpenseConfirmer")
   cashTransactions         CashTransaction[]
   payrollRules             PayrollRule[]         @relation("PayrollCoach")
+  payoutRules              TrainerPayoutRule[]   @relation("TrainerPayoutCoach")
+  createdPayoutRules       TrainerPayoutRule[]   @relation("TrainerPayoutCreator")
   createdPayrolls          PayrollPeriod[]       @relation("PayrollCreator")
   approvedPayrolls         PayrollPeriod[]       @relation("PayrollApprover")
   payrollAccruals          PayrollAccrual[]      @relation("PayrollAccrualCoach")
@@ -606,6 +625,7 @@ model Lesson {
   status                LessonStatus         @default(PLANNED)
   cancellationReason    String?
   notes                 String?
+  payoutCategory        PayoutCategory       @default(REGULAR_ATTENDANCE)
   attendanceCompletedAt DateTime?
   attendance            Attendance[]
   ledgerEntries         SubscriptionLedger[]
@@ -1045,6 +1065,25 @@ model PayrollRule {
   @@index([validFrom, validTo])
 }
 
+model TrainerPayoutRule {
+  id                       String                  @id @default(cuid())
+  trainerId                String
+  trainer                  User                    @relation("TrainerPayoutCoach", fields: [trainerId], references: [id], onDelete: Restrict)
+  category                 PayoutCategory
+  mode                     PayoutCalculationMode?
+  amount                   Int?
+  percentageBasisPoints    Int?
+  effectiveFrom            DateTime
+  createdByUserId          String
+  createdByUser            User                    @relation("TrainerPayoutCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+
+  @@unique([trainerId, category, effectiveFrom])
+  @@index([trainerId, category, effectiveFrom])
+  @@index([effectiveFrom])
+}
+
 model PayrollPeriod {
   id               String              @id @default(cuid())
   dateFrom         DateTime
@@ -1084,9 +1123,15 @@ model PayrollAccrual {
   manualAdjustment Int           @default(0)
   finalAmount      Int
   comment          String?
+  payoutCategory   PayoutCategory?
+  payoutMode       PayoutCalculationMode?
+  payoutAmount     Int?
+  payoutPercentageBasisPoints Int?
+  payoutRuleId     String?
+  payoutRuleEffectiveFrom DateTime?
   createdAt        DateTime      @default(now())
 
-  @@unique([payrollPeriodId, coachId, lessonId, type])
+  @@unique([payrollPeriodId, coachId, lessonId, payoutCategory])
   @@index([payrollPeriodId, coachId])
   @@index([branchId, coachId])
   @@index([lessonId])

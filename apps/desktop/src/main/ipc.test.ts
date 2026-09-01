@@ -20,6 +20,7 @@ import {
 } from '@arava/database';
 import {
   IPC_CHANNELS,
+  PAYOUT_CATEGORIES,
   t,
   type AuthSession,
   type BranchSummary,
@@ -1035,6 +1036,23 @@ describe('Electron IPC boundary', () => {
     )) as TrainerProfileOverview;
     expect(profile.trainer).toMatchObject({ id: trainer.id, fullName: 'Тренер IPC Профиль' });
     expect(profile.permissions.canManageTrainer).toBe(true);
+    const payout = await handlers[IPC_CHANNELS.trainerPayoutProfileSave]?.(owner.token, {
+      effectiveFrom: new Date().toISOString().slice(0, 10),
+      rules: PAYOUT_CATEGORIES.map((category) =>
+        category === 'REGULAR_ATTENDANCE'
+          ? { amount: 15_000, category, mode: 'FIXED_PER_ATTENDANCE' }
+          : { category },
+      ),
+      trainerId: trainer.id,
+    });
+    expect(payout).toMatchObject({ canEdit: true, trainerId: trainer.id });
+    expect(() =>
+      handlers[IPC_CHANNELS.trainerPayoutProfileSave]?.(owner.token, {
+        effectiveFrom: 'not-a-date',
+        rules: [],
+        trainerId: trainer.id,
+      }),
+    ).toThrow();
     const otherTrainer = await service.createUser(owner.token, {
       branchIds: [branch.id],
       email: 'other-trainer-profile-ipc@arava.local',
@@ -1052,6 +1070,9 @@ describe('Electron IPC boundary', () => {
     });
     await expect(
       handlers[IPC_CHANNELS.trainerProfileGet]?.(trainerSession.token, otherTrainer.id, month),
+    ).rejects.toMatchObject({ code: 'AUTHORIZATION' });
+    await expect(
+      handlers[IPC_CHANNELS.trainerPayoutProfileGet]?.(trainerSession.token, trainer.id),
     ).rejects.toMatchObject({ code: 'AUTHORIZATION' });
   });
 
