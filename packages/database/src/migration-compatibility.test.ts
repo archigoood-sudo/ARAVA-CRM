@@ -310,7 +310,8 @@ describe('Prisma and packaged runtime migration compatibility', () => {
           id !== '20260818030000_sprint_4_5a' &&
           id !== '20260822000000_trainer_sync_1' &&
           id !== '20260828010000_student_documents' &&
-          id !== '20260901000000_trainer_payout_policies',
+          id !== '20260901000000_trainer_payout_policies' &&
+          id !== '20260901010000_schedule_exceptions_archive',
       )) {
         await database.$executeRawUnsafe('INSERT INTO "_AppMigration" ("id") VALUES (?)', id);
       }

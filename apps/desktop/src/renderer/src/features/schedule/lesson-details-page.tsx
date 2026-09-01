@@ -38,6 +38,8 @@ export function LessonDetailsPage() {
   const [edit, setEdit] = useState(false);
   const [cancel, setCancel] = useState(false);
   const [reason, setReason] = useState('');
+  const [requiresMakeup, setRequiresMakeup] = useState(false);
+  const [makeup, setMakeup] = useState(false);
   const [substitution, setSubstitution] = useState(false);
   const [substituteId, setSubstituteId] = useState('');
   const lesson = useQuery({
@@ -58,7 +60,23 @@ export function LessonDetailsPage() {
   });
   const update = useMutation({
     mutationFn: (input: LessonInput) =>
-      getDesktopApi().lessons.update(getSessionToken(), lessonId, input),
+      getDesktopApi().lessons.reschedule(getSessionToken(), lessonId, {
+        coachId: input.coachId,
+        endsAt: input.endsAt,
+        room: input.room,
+        roomId: input.roomId,
+        startsAt: input.startsAt,
+      }),
+  });
+  const makeupMutation = useMutation({
+    mutationFn: (input: LessonInput) =>
+      getDesktopApi().lessons.makeup(getSessionToken(), lessonId, {
+        coachId: input.coachId,
+        endsAt: input.endsAt,
+        room: input.room,
+        roomId: input.roomId,
+        startsAt: input.startsAt,
+      }),
   });
   const cancelMutation = useMutation({
     mutationFn: (input: LessonCancelInput) =>
@@ -113,6 +131,30 @@ export function LessonDetailsPage() {
             label={t('lesson.start')}
             value={formatDate(detail.startsAt, { dateStyle: 'long', timeStyle: 'short' })}
           />
+          {detail.originalStartsAt ? (
+            <Info
+              label="Перенесено с"
+              value={formatDate(detail.originalStartsAt, {
+                dateStyle: 'long',
+                timeStyle: 'short',
+              })}
+            />
+          ) : null}
+          {detail.makeupForLessonId ? (
+            <Info label="Тип занятия" value="Отработка отменённого занятия" />
+          ) : null}
+          {detail.makeupRequired ? (
+            <Info
+              label="Отработка"
+              value={
+                detail.makeupState === 'PENDING'
+                  ? 'Ожидает назначения'
+                  : detail.makeupState === 'COMPLETED'
+                    ? 'Проведена'
+                    : 'Назначена'
+              }
+            />
+          ) : null}
           <Info
             label={t('lesson.end')}
             value={formatDate(detail.endsAt, { dateStyle: 'long', timeStyle: 'short' })}
@@ -146,6 +188,12 @@ export function LessonDetailsPage() {
                 </Button>
               </>
             ) : null}
+            {canManage && detail.status === 'CANCELLED' && detail.makeupState === 'PENDING' ? (
+              <Button onClick={() => setMakeup(true)}>
+                <CalendarClock className="size-4" />
+                Назначить отработку
+              </Button>
+            ) : null}
           </div>
         </CardContent>
       </Card>
@@ -161,6 +209,22 @@ export function LessonDetailsPage() {
         open={edit}
         rooms={rooms.data ?? []}
         staff={staff.data ?? []}
+        variant="RESCHEDULE"
+      />
+      <LessonDialog
+        groups={groups.data ?? []}
+        lesson={{ ...detail, payoutCategory: 'MAKEUP' }}
+        onClose={() => setMakeup(false)}
+        onSubmit={async (input) => {
+          const created = await makeupMutation.mutateAsync(input);
+          await refresh();
+          setMakeup(false);
+          await navigate(`/lessons/${created.id}`);
+        }}
+        open={makeup}
+        rooms={rooms.data ?? []}
+        staff={staff.data ?? []}
+        variant="MAKEUP"
       />
       <Dialog
         closeLabel={t('common.closeDialog')}
@@ -171,6 +235,20 @@ export function LessonDetailsPage() {
         <div className="space-y-4">
           <Label>{t('lesson.cancelReason')}</Label>
           <Input onChange={(event) => setReason(event.target.value)} value={reason} />
+          <label className="flex items-start gap-3 rounded-xl border border-border p-3 text-sm">
+            <input
+              checked={requiresMakeup}
+              className="mt-0.5 size-4"
+              onChange={(event) => setRequiresMakeup(event.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              <strong className="block">Отменить с последующей отработкой</strong>
+              <span className="text-muted-foreground">
+                Занятие останется в истории, а отработку можно будет назначить отдельно.
+              </span>
+            </span>
+          </label>
           <div className="flex justify-end gap-3">
             <Button onClick={() => setCancel(false)} variant="outline">
               {t('common.cancel')}
@@ -178,7 +256,10 @@ export function LessonDetailsPage() {
             <Button
               disabled={reason.trim().length < 2}
               onClick={async () => {
-                await cancelMutation.mutateAsync({ cancellationReason: reason });
+                await cancelMutation.mutateAsync({
+                  cancellationReason: reason,
+                  requiresMakeup,
+                });
                 await refresh();
                 setCancel(false);
               }}

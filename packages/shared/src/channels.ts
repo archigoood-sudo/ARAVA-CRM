@@ -193,6 +193,9 @@ export type TrialOutcome = (typeof TRIAL_OUTCOMES)[number];
 
 export const IPC_CHANNELS = {
   activityList: 'activity:list',
+  archiveDelete: 'archive:delete',
+  archiveList: 'archive:list',
+  archiveRestore: 'archive:restore',
   auditList: 'audit:list',
   authChangePassword: 'auth:change-password',
   authCompletePasswordChange: 'auth:complete-password-change',
@@ -246,6 +249,8 @@ export const IPC_CHANNELS = {
   customerDisplayStateChanged: 'customer-display:state-changed',
   customerDisplayUpdateSettings: 'customer-display:update-settings',
   lessonCopyDay: 'lesson:copy-day',
+  lessonMakeup: 'lesson:makeup',
+  lessonReschedule: 'lesson:reschedule',
   substitutionAssign: 'substitution:assign',
   contactCreate: 'student-contact:create',
   contactRemove: 'student-contact:remove',
@@ -2232,7 +2237,15 @@ export interface LessonSummary {
   groupId: string;
   groupName: string;
   id: string;
+  makeupForLessonId?: string | undefined;
+  makeupLessonId?: string | undefined;
+  makeupRequired?: boolean | undefined;
+  makeupState?: 'NOT_REQUIRED' | 'PENDING' | 'SCHEDULED' | 'COMPLETED' | undefined;
   notes?: string | undefined;
+  originalEndsAt?: string | undefined;
+  originalStartsAt?: string | undefined;
+  rescheduledFromCoachId?: string | undefined;
+  rescheduledFromRoomId?: string | undefined;
   payoutCategory?: PayoutCategory | undefined;
   room?: string | undefined;
   roomId?: string | undefined;
@@ -2244,6 +2257,16 @@ export interface LessonSummary {
   startsAt: string;
   status: LessonStatus;
 }
+
+export interface LessonMakeupInput {
+  coachId?: string | undefined;
+  endsAt: string;
+  room?: string | undefined;
+  roomId?: string | undefined;
+  startsAt: string;
+}
+
+export type LessonRescheduleInput = LessonMakeupInput;
 
 export interface RoomInput {
   areaSquareMeters?: number | undefined;
@@ -2389,6 +2412,44 @@ export interface LessonGenerationResult {
 
 export interface LessonCancelInput {
   cancellationReason: string;
+  requiresMakeup?: boolean | undefined;
+}
+
+export const ARCHIVE_ENTITY_TYPES = [
+  'STUDENT',
+  'TRAINER',
+  'GROUP',
+  'BRANCH',
+  'ROOM',
+  'TARIFF',
+  'CARD',
+  'EXPENSE_CATEGORY',
+  'PUBLICATION',
+] as const;
+export type ArchiveEntityType = (typeof ARCHIVE_ENTITY_TYPES)[number];
+
+export interface ArchiveQuery {
+  search?: string | undefined;
+  type?: ArchiveEntityType | undefined;
+}
+
+export interface ArchiveItem {
+  archivedAt: string;
+  archivedByName?: string | undefined;
+  branchId?: string | undefined;
+  branchName?: string | undefined;
+  canPermanentlyDelete: boolean;
+  context?: string | undefined;
+  deleteBlockedReason?: string | undefined;
+  entityId: string;
+  name: string;
+  type: ArchiveEntityType;
+}
+
+export interface ArchiveListResult {
+  counts: Partial<Record<ArchiveEntityType, number>>;
+  items: ArchiveItem[];
+  total: number;
 }
 
 export interface AttendanceEntryInput {
@@ -3277,6 +3338,11 @@ export interface SettingUpdate {
 }
 
 export interface AravaDesktopApi {
+  archive: {
+    deletePermanently: (token: string, type: ArchiveEntityType, id: string) => Promise<void>;
+    list: (token: string, query: ArchiveQuery) => Promise<ArchiveListResult>;
+    restore: (token: string, type: ArchiveEntityType, id: string) => Promise<void>;
+  };
   audit: {
     list: (token: string) => Promise<AuditLogSummary[]>;
   };
@@ -3568,6 +3634,8 @@ export interface AravaDesktopApi {
     generate: (token: string, input: LessonGenerateInput) => Promise<LessonGenerationResult>;
     get: (token: string, id: string) => Promise<LessonSummary>;
     list: (token: string, query: LessonListQuery) => Promise<LessonSummary[]>;
+    makeup: (token: string, id: string, input: LessonMakeupInput) => Promise<LessonSummary>;
+    reschedule: (token: string, id: string, input: LessonRescheduleInput) => Promise<LessonSummary>;
     update: (token: string, id: string, input: LessonInput) => Promise<LessonSummary>;
     copyDay: (token: string, input: CopyDayInput) => Promise<CopyDayResult>;
     assignSubstitution: (

@@ -23,6 +23,15 @@ const invoke = async <Result>(channel: string, ...arguments_: unknown[]): Promis
 };
 
 const desktopApi: AravaDesktopApi = {
+  archive: {
+    deletePermanently: async (token, type, id) => {
+      await invoke(IPC_CHANNELS.archiveDelete, token, type, id);
+    },
+    list: (token, query) => invoke(IPC_CHANNELS.archiveList, token, query),
+    restore: async (token, type, id) => {
+      await invoke(IPC_CHANNELS.archiveRestore, token, type, id);
+    },
+  },
   audit: { list: (token) => invoke(IPC_CHANNELS.auditList, token) },
   activity: { list: (token) => invoke(IPC_CHANNELS.activityList, token) },
   auth: {
@@ -256,6 +265,8 @@ const desktopApi: AravaDesktopApi = {
     generate: (token, input) => invoke(IPC_CHANNELS.lessonGenerate, token, input),
     get: (token, id) => invoke(IPC_CHANNELS.lessonGet, token, id),
     list: (token, query) => invoke(IPC_CHANNELS.lessonList, token, query),
+    makeup: (token, id, input) => invoke(IPC_CHANNELS.lessonMakeup, token, id, input),
+    reschedule: (token, id, input) => invoke(IPC_CHANNELS.lessonReschedule, token, id, input),
     update: (token, id, input) => invoke(IPC_CHANNELS.lessonUpdate, token, id, input),
     copyDay: (token, input) => invoke(IPC_CHANNELS.lessonCopyDay, token, input),
     assignSubstitution: (token, id, input) =>

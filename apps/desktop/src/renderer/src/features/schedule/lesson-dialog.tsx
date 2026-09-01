@@ -44,6 +44,7 @@ export function LessonDialog({
   open,
   rooms,
   staff,
+  variant = 'DEFAULT',
 }: {
   error?: string | undefined;
   groups: GroupSummary[];
@@ -53,6 +54,7 @@ export function LessonDialog({
   open: boolean;
   rooms: RoomSummary[];
   staff: StaffOption[];
+  variant?: 'DEFAULT' | 'MAKEUP' | 'RESCHEDULE';
 }) {
   const {
     formState: { isSubmitting },
@@ -102,7 +104,15 @@ export function LessonDialog({
       closeLabel={t('common.closeDialog')}
       onClose={onClose}
       open={open}
-      title={lesson ? t('lesson.action.move') : t('lesson.createTitle')}
+      title={
+        variant === 'MAKEUP'
+          ? 'Назначить отработку'
+          : variant === 'RESCHEDULE'
+            ? 'Перенести занятие'
+            : lesson
+              ? t('lesson.action.move')
+              : t('lesson.createTitle')
+      }
       wide
     >
       <form
@@ -120,7 +130,7 @@ export function LessonDialog({
         )}
       >
         <Field label={t('schedule.group')}>
-          <Select required {...register('groupId')}>
+          <Select disabled={variant !== 'DEFAULT'} required {...register('groupId')}>
             {groups.map((group) => (
               <option key={group.id} value={group.id}>
                 {group.name}
@@ -157,7 +167,7 @@ export function LessonDialog({
           </Select>
         </Field>
         <Field label="Категория выплаты">
-          <Select {...register('payoutCategory')}>
+          <Select disabled={variant === 'MAKEUP'} {...register('payoutCategory')}>
             <option value="REGULAR_ATTENDANCE">Обычное занятие</option>
             <option value="MAKEUP">Отработка</option>
             <option value="PROMOTIONAL_FREE">Промо / бесплатное</option>

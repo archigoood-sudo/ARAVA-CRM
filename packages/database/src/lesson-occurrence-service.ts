@@ -84,7 +84,10 @@ export class LessonOccurrenceService {
       this.database.lesson.findMany({
         include: materializedLessonInclude,
         where: {
-          startsAt: { gte: dayStart, lte: dayEnd },
+          OR: [
+            { startsAt: { gte: dayStart, lte: dayEnd } },
+            { originalStartsAt: { gte: dayStart, lte: dayEnd } },
+          ],
           ...(branchIds ? { branchId: { in: branchIds } } : {}),
           ...coachScope,
         },
@@ -120,10 +123,14 @@ export class LessonOccurrenceService {
         })
       : [];
     const materializedKeys = new Set(
-      materialized.map(({ groupId, startsAt }) => occurrenceKey(groupId, startsAt)),
+      materialized.flatMap(({ groupId, originalStartsAt, startsAt }) => [
+        occurrenceKey(groupId, startsAt),
+        ...(originalStartsAt ? [occurrenceKey(groupId, originalStartsAt)] : []),
+      ]),
     );
     const unresolved = [
       ...materialized
+        .filter(({ startsAt }) => startsAt >= dayStart && startsAt <= dayEnd)
         .filter(({ status }) => status !== 'CANCELLED')
         .map((lesson) => this.fromLesson(lesson)),
       ...schedules.flatMap((schedule): ResolvedDailyLesson[] => {

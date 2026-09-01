@@ -16,6 +16,8 @@ import type {
   LessonGenerationResult,
   LessonInput,
   LessonListQuery,
+  LessonMakeupInput,
+  LessonRescheduleInput,
   LessonSummary,
   StaffOption,
   WeeklyScheduleInput,
@@ -85,6 +87,7 @@ const lessonInclude = {
     },
   },
   roomEntity: { select: { name: true } },
+  makeupLesson: { select: { id: true, status: true } },
   substitution: {
     include: {
       originalTrainer: { select: { fullName: true } },
@@ -198,6 +201,13 @@ function scheduleSummary(schedule: ScheduleRecord): WeeklyScheduleSummary {
 }
 
 function lessonSummary(lesson: LessonRecord): LessonSummary {
+  const makeupState = !lesson.makeupRequired
+    ? 'NOT_REQUIRED'
+    : !lesson.makeupLesson
+      ? 'PENDING'
+      : lesson.makeupLesson.status === 'COMPLETED'
+        ? 'COMPLETED'
+        : 'SCHEDULED';
   return {
     attendanceExpected: lesson.group._count.enrollments,
     attendanceMarked: lesson._count.attendance,
@@ -210,7 +220,15 @@ function lessonSummary(lesson: LessonRecord): LessonSummary {
     groupId: lesson.groupId,
     groupName: lesson.group.name,
     id: lesson.id,
+    makeupForLessonId: lesson.makeupForLessonId ?? undefined,
+    makeupLessonId: lesson.makeupLesson?.id,
+    makeupRequired: lesson.makeupRequired,
+    makeupState,
     notes: lesson.notes ?? undefined,
+    originalEndsAt: lesson.originalEndsAt?.toISOString(),
+    originalStartsAt: lesson.originalStartsAt?.toISOString(),
+    rescheduledFromCoachId: lesson.rescheduledFromCoachId ?? undefined,
+    rescheduledFromRoomId: lesson.rescheduledFromRoomId ?? undefined,
     payoutCategory: lesson.payoutCategory,
     room: lesson.room ?? undefined,
     roomId: lesson.roomId ?? undefined,
@@ -730,17 +748,129 @@ export class StudioService {
         );
       const reversedWriteOffs = await reverseLessonWriteOffs(transaction, id, actor.id);
       const cancelled = await transaction.lesson.update({
-        data: { cancellationReason: input.cancellationReason.trim(), status: 'CANCELLED' },
+        data: {
+          cancellationReason: input.cancellationReason.trim(),
+          makeupRequired: input.requiresMakeup ?? false,
+          status: 'CANCELLED',
+        },
         include: lessonInclude,
         where: { id },
       });
       await this.audit(transaction, actor.id, 'LESSON_CANCELLED', 'Lesson', id, {
         reason: input.cancellationReason,
+        requiresMakeup: input.requiresMakeup ?? false,
         reversedWriteOffs,
       });
       return cancelled;
     });
     return lessonSummary(lesson);
+  }
+
+  async rescheduleLesson(
+    token: string,
+    id: string,
+    input: LessonRescheduleInput,
+  ): Promise<LessonSummary> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'lessons:manage');
+    const current = await this.requireLesson(id);
+    assertBranchAccess(actor, current.branchId);
+    if (current.status !== 'PLANNED')
+      throw new DomainError('VALIDATION', 'Перенести можно только запланированное занятие.');
+    if ((await this.database.attendance.count({ where: { lessonId: id } })) > 0)
+      throw new DomainError('CONFLICT', 'Нельзя перенести занятие с отмеченными посещениями.');
+    await this.validateCoachForBranch(input.coachId, current.branchId);
+    await this.validateRoomForBranch(input.roomId, current.branchId);
+    await this.assertLessonNoConflict(
+      {
+        ...input,
+        groupId: current.groupId,
+        notes: current.notes ?? undefined,
+      },
+      id,
+    );
+    const lesson = await this.database.$transaction(async (transaction) => {
+      const updated = await transaction.lesson.update({
+        data: {
+          coachId: input.coachId ?? null,
+          endsAt: new Date(input.endsAt),
+          rescheduledFromCoachId: current.rescheduledFromCoachId ?? current.coachId,
+          originalEndsAt: current.originalEndsAt ?? current.endsAt,
+          rescheduledFromRoomId: current.rescheduledFromRoomId ?? current.roomId,
+          originalStartsAt: current.originalStartsAt ?? current.startsAt,
+          rescheduledAt: new Date(),
+          room: input.room?.trim() ? input.room.trim() : null,
+          roomId: input.roomId ?? null,
+          startsAt: new Date(input.startsAt),
+        },
+        include: lessonInclude,
+        where: { id },
+      });
+      await this.audit(transaction, actor.id, 'LESSON_RESCHEDULED', 'Lesson', id, {
+        fromEndsAt: current.endsAt.toISOString(),
+        fromStartsAt: current.startsAt.toISOString(),
+        toEndsAt: input.endsAt,
+        toStartsAt: input.startsAt,
+      });
+      return updated;
+    });
+    return lessonSummary(lesson);
+  }
+
+  async scheduleMakeupLesson(
+    token: string,
+    id: string,
+    input: LessonMakeupInput,
+  ): Promise<LessonSummary> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'lessons:manage');
+    const original = await this.requireLesson(id);
+    assertBranchAccess(actor, original.branchId);
+    if (original.status !== 'CANCELLED' || !original.makeupRequired)
+      throw new DomainError('VALIDATION', 'Для этого занятия отработка не требуется.');
+    const existing = await this.database.lesson.findUnique({
+      include: lessonInclude,
+      where: { makeupForLessonId: id },
+    });
+    if (existing) return lessonSummary(existing);
+    await this.validateCoachForBranch(input.coachId, original.branchId);
+    await this.validateRoomForBranch(input.roomId, original.branchId);
+    const lessonInput: LessonInput = {
+      ...input,
+      groupId: original.groupId,
+      notes: `Отработка отменённого занятия ${original.startsAt.toISOString()}`,
+      payoutCategory: 'MAKEUP',
+    };
+    await this.assertLessonNoConflict(lessonInput);
+    try {
+      const lesson = await this.database.$transaction(async (transaction) => {
+        const created = await transaction.lesson.create({
+          data: {
+            ...this.lessonData(lessonInput, original.branchId),
+            makeupForLessonId: id,
+            scheduleTemplateId: null,
+          },
+          include: lessonInclude,
+        });
+        await this.audit(transaction, actor.id, 'LESSON_MAKEUP_SCHEDULED', 'Lesson', created.id, {
+          originalLessonId: id,
+        });
+        await this.audit(transaction, actor.id, 'LESSON_MAKEUP_LINKED', 'Lesson', id, {
+          makeupLessonId: created.id,
+        });
+        return created;
+      });
+      return lessonSummary(lesson);
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002')
+        throw error;
+      const duplicate = await this.database.lesson.findUnique({
+        include: lessonInclude,
+        where: { makeupForLessonId: id },
+      });
+      if (!duplicate) throw error;
+      return lessonSummary(duplicate);
+    }
   }
 
   async generateLessons(
@@ -1268,6 +1398,11 @@ export class StudioService {
       where: { groupId_startsAt: { groupId: schedule.groupId, startsAt } },
     });
     if (existing) return { created: false, lesson: existing };
+    const rescheduled = await this.database.lesson.findFirst({
+      include: lessonInclude,
+      where: { groupId: schedule.groupId, originalStartsAt: startsAt },
+    });
+    if (rescheduled) return { created: false, lesson: rescheduled };
     await this.calendar.assertEventAvailable({
       ...(schedule.coachId ? { coachId: schedule.coachId } : {}),
       endAt: endsAt,

@@ -1,5 +1,6 @@
 import {
   BadgeInfo,
+  Archive,
   BellRing,
   Building2,
   CalendarDays,
@@ -83,6 +84,7 @@ export function Sidebar() {
           },
         ]
       : []),
+    ...(!trainer ? [{ icon: Archive, label: 'Архив', to: '/archive' }] : []),
     ...(!trainer
       ? [{ badge: leads.data?.newCount, icon: Inbox, label: 'Заявки', to: '/leads' }]
       : []),

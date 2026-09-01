@@ -600,19 +600,36 @@ export function SchedulePage() {
                   })}{' '}
                   · {lesson.roomName ?? lesson.room ?? 'Зал не указан'}
                 </p>
+                {lesson.originalStartsAt ? (
+                  <p className="mt-1 text-xs font-semibold text-amber-700">
+                    Перенесено с{' '}
+                    {formatDate(lesson.originalStartsAt, {
+                      day: 'numeric',
+                      month: 'long',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </p>
+                ) : lesson.makeupForLessonId ? (
+                  <p className="mt-1 text-xs font-semibold text-blue-700">Отработка</p>
+                ) : lesson.makeupState === 'PENDING' ? (
+                  <p className="mt-1 text-xs font-semibold text-amber-700">Ожидает отработки</p>
+                ) : null}
               </div>
               <div className="flex flex-col items-end gap-2 text-right">
                 <StatusBadge tone={lesson.status === 'CANCELLED' ? 'danger' : 'success'}>
                   {t(`lesson.status.${lesson.status}`)}
                 </StatusBadge>
-                <button
-                  className="mt-2 flex items-center gap-1 text-xs font-semibold"
-                  onClick={() => navigate(`/attendance/${lesson.id}`)}
-                  type="button"
-                >
-                  <UserRoundCheck className="size-3.5" />
-                  {t('lesson.action.attendance')}
-                </button>
+                {lesson.status !== 'CANCELLED' ? (
+                  <button
+                    className="mt-2 flex items-center gap-1 text-xs font-semibold"
+                    onClick={() => navigate(`/attendance/${lesson.id}`)}
+                    type="button"
+                  >
+                    <UserRoundCheck className="size-3.5" />
+                    {t('lesson.action.attendance')}
+                  </button>
+                ) : null}
                 <button
                   className="text-xs font-semibold text-muted-foreground"
                   onClick={() => navigate(`/lessons/${lesson.id}`)}

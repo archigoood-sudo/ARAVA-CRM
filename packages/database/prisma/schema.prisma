@@ -626,6 +626,15 @@ model Lesson {
   cancellationReason    String?
   notes                 String?
   payoutCategory        PayoutCategory       @default(REGULAR_ATTENDANCE)
+  makeupRequired        Boolean              @default(false)
+  makeupForLessonId     String?              @unique
+  makeupForLesson       Lesson?              @relation("LessonMakeup", fields: [makeupForLessonId], references: [id], onDelete: Restrict)
+  makeupLesson          Lesson?              @relation("LessonMakeup")
+  originalStartsAt      DateTime?
+  originalEndsAt        DateTime?
+  rescheduledFromRoomId String?
+  rescheduledFromCoachId String?
+  rescheduledAt         DateTime?
   attendanceCompletedAt DateTime?
   attendance            Attendance[]
   ledgerEntries         SubscriptionLedger[]
@@ -643,6 +652,7 @@ model Lesson {
   @@index([roomId, startsAt])
   @@index([groupId, startsAt])
   @@index([attendanceCompletedAt])
+  @@index([makeupRequired, status])
 }
 
 model TrialAppointment {

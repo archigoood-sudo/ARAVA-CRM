@@ -16,6 +16,7 @@ const pageTitles: Record<string, { eyebrow: string; title: string }> = {
   '/about': { eyebrow: t('page.about.eyebrow'), title: t('nav.about') },
   '/dashboard': { eyebrow: t('page.dashboard.eyebrow'), title: t('nav.dashboard') },
   '/attention': { eyebrow: 'Операционный центр', title: 'Требует внимания' },
+  '/archive': { eyebrow: 'История CRM', title: 'Архив' },
   '/attendance': { eyebrow: 'Ежедневная работа', title: 'Посещения' },
   '/branches': { eyebrow: t('page.branches.eyebrow'), title: t('nav.branches') },
   '/cards': { eyebrow: 'Доступ клиентов', title: 'Карты' },

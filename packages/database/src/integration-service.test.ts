@@ -1386,6 +1386,65 @@ describe('Sprint 4.5A multi-device integration', () => {
     });
   });
 
+  it('syncs cancelled-to-makeup links and one-off reschedule coordinates', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Schedule exceptions' });
+    const studio = new StudioService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      capacity: 12,
+      direction: 'Контемп',
+      name: 'Schedule exception group',
+      status: 'ACTIVE',
+    });
+    const original = await studio.createLesson(ownerToken, {
+      endsAt: '2030-09-02T16:00:00.000Z',
+      groupId: group.id,
+      startsAt: '2030-09-02T15:00:00.000Z',
+    });
+    await studio.cancelLesson(ownerToken, original.id, {
+      cancellationReason: 'Отработка',
+      requiresMakeup: true,
+    });
+    const makeup = await studio.scheduleMakeupLesson(ownerToken, original.id, {
+      endsAt: '2030-09-03T16:00:00.000Z',
+      startsAt: '2030-09-03T15:00:00.000Z',
+    });
+    const moved = await studio.createLesson(ownerToken, {
+      endsAt: '2030-09-04T16:00:00.000Z',
+      groupId: group.id,
+      startsAt: '2030-09-04T15:00:00.000Z',
+    });
+    await studio.rescheduleLesson(ownerToken, moved.id, {
+      endsAt: '2030-09-05T17:00:00.000Z',
+      startsAt: '2030-09-05T16:00:00.000Z',
+    });
+
+    expect(await integration.safePayload('LESSON', original.id)).toMatchObject({
+      makeupRequired: true,
+      status: 'CANCELLED',
+    });
+    expect(await integration.safePayload('LESSON', makeup.id)).toMatchObject({
+      makeupForLessonId: original.id,
+      payoutCategory: 'MAKEUP',
+    });
+    const movedPayload = await integration.safePayload('LESSON', moved.id);
+    expect(movedPayload).toMatchObject({
+      originalStartsAt: '2030-09-04T15:00:00.000Z',
+      startsAt: '2030-09-05T16:00:00.000Z',
+    });
+    expect(typeof movedPayload.rescheduledAt).toBe('string');
+    for (let attempt = 0; attempt < 5; attempt += 1) await integration.processPending();
+    expect(canonical.get(`LESSON:${original.id}`)?.payload).toMatchObject({
+      makeupRequired: true,
+      status: 'CANCELLED',
+    });
+    expect(canonical.get(`LESSON:${makeup.id}`)?.payload).toMatchObject({
+      makeupForLessonId: original.id,
+      payoutCategory: 'MAKEUP',
+    });
+  });
+
   it('automatically accepts the later server mutation and applies it locally', async () => {
     await pair();
     const branch = await application.createBranch(ownerToken, { name: 'Версия устройства' });

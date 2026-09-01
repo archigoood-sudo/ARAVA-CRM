@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   ATTENDANCE_STATUSES,
+  ARCHIVE_ENTITY_TYPES,
   CASH_REGISTER_TYPES,
   CALENDAR_EXCEPTION_TYPES,
   MEMBERSHIP_CARD_STATUSES,
@@ -41,6 +42,7 @@ import {
   type CopyDayInput,
   type AnalyticsQuery,
   type AttentionFilters,
+  type ArchiveQuery,
   type AttendanceEntryInput,
   type AttendanceScanConfirmationInput,
   type EnrollmentInput,
@@ -59,6 +61,8 @@ import {
   type GroupInput,
   type GroupListQuery,
   type LessonCancelInput,
+  type LessonMakeupInput,
+  type LessonRescheduleInput,
   type LessonGenerateInput,
   type LessonInput,
   type LessonListQuery,
@@ -576,6 +580,29 @@ export const lessonGenerateInputSchema: z.ZodType<LessonGenerateInput> = z
 
 export const lessonCancelInputSchema: z.ZodType<LessonCancelInput> = z.object({
   cancellationReason: z.string().trim().min(2, t('validation.required')).max(500),
+  requiresMakeup: z.boolean().optional(),
+});
+
+const lessonExceptionInputSchema = z
+  .object({
+    coachId: optionalIdentifier,
+    endsAt: isoDateTime,
+    room: optionalText(120),
+    roomId: optionalIdentifier,
+    startsAt: isoDateTime,
+  })
+  .refine((input) => input.startsAt < input.endsAt, {
+    message: t('validation.timeRange'),
+    path: ['endsAt'],
+  });
+
+export const lessonMakeupInputSchema: z.ZodType<LessonMakeupInput> = lessonExceptionInputSchema;
+export const lessonRescheduleInputSchema: z.ZodType<LessonRescheduleInput> =
+  lessonExceptionInputSchema;
+
+export const archiveQuerySchema: z.ZodType<ArchiveQuery> = z.object({
+  search: z.string().trim().max(160).optional(),
+  type: z.enum(ARCHIVE_ENTITY_TYPES).optional(),
 });
 
 export const attendanceEntryInputSchema: z.ZodType<AttendanceEntryInput> = z.object({

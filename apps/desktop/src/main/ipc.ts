@@ -1,5 +1,6 @@
 import {
   ApplicationService,
+  ArchiveService,
   AttendanceWorkspaceService,
   ChatService,
   CalendarService,
@@ -26,6 +27,8 @@ import {
 } from '@arava/database';
 import {
   IPC_CHANNELS,
+  ARCHIVE_ENTITY_TYPES,
+  archiveQuerySchema,
   attendanceEntryInputSchema,
   attendanceEntriesSchema,
   attendanceOccurrenceInputSchema,
@@ -72,6 +75,8 @@ import {
   lessonGenerateInputSchema,
   lessonInputSchema,
   lessonListQuerySchema,
+  lessonMakeupInputSchema,
+  lessonRescheduleInputSchema,
   leadCreateInputSchema,
   leadGroupAssignmentInputSchema,
   leadListQuerySchema,
@@ -218,6 +223,7 @@ export function createIpcHandlers(
   backupDependencies: BackupIpcDependencies = {},
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
+  const archive = new ArchiveService(database, service);
   const groupRoster = new GroupRosterService(database, service);
   const attendanceWorkspace = new AttendanceWorkspaceService(database, service);
   const finance = new FinanceService(database, service);
@@ -343,6 +349,22 @@ export function createIpcHandlers(
     };
   };
   return {
+    [IPC_CHANNELS.archiveDelete]: async (unsafeToken, unsafeType, unsafeId) => {
+      await archive.deletePermanently(
+        sessionTokenSchema.parse(unsafeToken),
+        z.enum(ARCHIVE_ENTITY_TYPES).parse(unsafeType),
+        identifierSchema.parse(unsafeId),
+      );
+    },
+    [IPC_CHANNELS.archiveList]: (unsafeToken, unsafeQuery) =>
+      archive.list(sessionTokenSchema.parse(unsafeToken), archiveQuerySchema.parse(unsafeQuery)),
+    [IPC_CHANNELS.archiveRestore]: async (unsafeToken, unsafeType, unsafeId) => {
+      await archive.restore(
+        sessionTokenSchema.parse(unsafeToken),
+        z.enum(ARCHIVE_ENTITY_TYPES).parse(unsafeType),
+        identifierSchema.parse(unsafeId),
+      );
+    },
     [IPC_CHANNELS.authLogin]: (unsafeCredentials) =>
       service.login(loginCredentialsSchema.parse(unsafeCredentials)),
     [IPC_CHANNELS.authRestore]: (unsafeToken) =>
@@ -979,6 +1001,18 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
         lessonCancelInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.lessonMakeup]: (unsafeToken, unsafeId, unsafeInput) =>
+      studio.scheduleMakeupLesson(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        lessonMakeupInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.lessonReschedule]: (unsafeToken, unsafeId, unsafeInput) =>
+      studio.rescheduleLesson(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        lessonRescheduleInputSchema.parse(unsafeInput),
       ),
     [IPC_CHANNELS.lessonGenerate]: (unsafeToken, unsafeInput) =>
       studio.generateLessons(
