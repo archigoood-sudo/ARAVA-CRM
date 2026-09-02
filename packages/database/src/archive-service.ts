@@ -1,10 +1,15 @@
 import type {
+  ArchiveDeleteInput,
+  ArchiveDeletePreview,
+  ArchiveDeleteResult,
+  ArchiveDependencySummary,
   ArchiveEntityType,
   ArchiveItem,
   ArchiveListResult,
   ArchiveQuery,
   AuthenticatedUser,
 } from '@arava/shared';
+import type { Prisma } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
 import { accessibleBranchIds, assertBranchAccess } from './permissions';
@@ -21,6 +26,37 @@ const labels: Record<ArchiveEntityType, string> = {
   STUDENT: 'Ученик',
   TARIFF: 'Тариф',
   TRAINER: 'Тренер',
+};
+
+type DeleteClient = DatabaseClient | Prisma.TransactionClient;
+
+interface DeletePlan extends ArchiveDeletePreview {
+  documentMediaIds: string[];
+  expenseMediaReferences: string[];
+  publicationMediaPaths: string[];
+}
+
+const dependencyLabels: Record<string, string> = {
+  attendance: 'Посещения',
+  auditRecords: 'Записи аудита',
+  cardEvents: 'События карт и сканирования',
+  cards: 'Карты',
+  checkInEvents: 'Check-in события',
+  cashRecords: 'Кассовые записи',
+  contacts: 'Контакты',
+  documents: 'Документы',
+  enrollments: 'Участия в группах',
+  expenses: 'Расходы',
+  lessons: 'Занятия',
+  notes: 'Заметки',
+  paymentOperations: 'Платёжные операции',
+  payments: 'Платежи и возвраты',
+  payrollRecords: 'Начисления и правила выплат',
+  roomEvents: 'Аренды и закрытия зала',
+  schedules: 'Шаблоны расписания',
+  subscriptions: 'Абонементы и движения',
+  syncRecords: 'Записи синхронизации и check-in',
+  trials: 'Пробные записи',
 };
 
 export class ArchiveService {
@@ -307,58 +343,85 @@ export class ArchiveService {
     });
   }
 
-  async deletePermanently(token: string, type: ArchiveEntityType, id: string): Promise<void> {
-    const actor = await this.actor(token);
-    if (actor.role !== 'OWNER')
-      throw new DomainError('AUTHORIZATION', 'Удаление навсегда доступно только владельцу.');
+  async previewPermanentlyDelete(
+    token: string,
+    type: ArchiveEntityType,
+    id: string,
+  ): Promise<ArchiveDeletePreview> {
+    const actor = await this.owner(token);
     await this.assertEntityScope(actor, type, id);
     await this.assertArchived(type, id);
-    const reason = await this.deleteBlockReason(type, id);
-    if (reason) throw new DomainError('CONFLICT', reason);
-    await this.database.$transaction(async (transaction) => {
+    const {
+      documentMediaIds: _documents,
+      expenseMediaReferences: _expenses,
+      publicationMediaPaths: _publications,
+      ...preview
+    } = await this.deletePlan(this.database, type, id);
+    return preview;
+  }
+
+  async deletePermanently(
+    token: string,
+    type: ArchiveEntityType,
+    id: string,
+    input: ArchiveDeleteInput,
+  ): Promise<
+    ArchiveDeleteResult &
+      Pick<DeletePlan, 'documentMediaIds' | 'expenseMediaReferences' | 'publicationMediaPaths'>
+  > {
+    const actor = await this.owner(token);
+    await this.assertEntityScope(actor, type, id);
+    await this.assertArchived(type, id);
+    return this.database.$transaction(async (transaction) => {
+      const plan = await this.deletePlan(transaction, type, id);
+      if (input.confirmationName.trim() !== plan.name)
+        throw new DomainError('VALIDATION', 'Введите точное название объекта для подтверждения.');
+      await this.executeDelete(transaction, actor.id, type, id);
       await transaction.auditLog.create({
         data: {
           action: `${type}_PERMANENTLY_DELETED`,
           actorUserId: actor.id,
+          detail: JSON.stringify({
+            deleted: Object.fromEntries(plan.dependencies.map(({ count, key }) => [key, count])),
+            totalDependentRecords: plan.totalDependentRecords,
+          }),
           entityId: id,
           entityType: labels[type],
         },
       });
-      switch (type) {
-        case 'STUDENT':
-          await transaction.student.delete({ where: { id } });
-          break;
-        case 'TRAINER':
-          await transaction.user.delete({ where: { id } });
-          break;
-        case 'GROUP':
-          await transaction.danceGroup.delete({ where: { id } });
-          break;
-        case 'BRANCH':
-          await transaction.branch.delete({ where: { id } });
-          break;
-        case 'ROOM':
-          await transaction.room.delete({ where: { id } });
-          break;
-        case 'TARIFF':
-          await transaction.tariff.delete({ where: { id } });
-          break;
-        case 'CARD':
-          await transaction.membershipCard.delete({ where: { id } });
-          break;
-        case 'EXPENSE_CATEGORY':
-          await transaction.expenseCategory.delete({ where: { id } });
-          break;
-        case 'PUBLICATION':
-          await transaction.publication.delete({ where: { id } });
-          break;
-      }
+      const documentMediaIds = await this.unreferencedDocumentMedia(
+        transaction,
+        plan.documentMediaIds,
+      );
+      const expenseMediaReferences = await this.unreferencedExpenseMedia(
+        transaction,
+        plan.expenseMediaReferences,
+      );
+      const publicationMediaPaths = await this.unreferencedPublicationMedia(
+        transaction,
+        plan.publicationMediaPaths,
+      );
+      return {
+        deleted: plan.dependencies,
+        documentMediaIds,
+        entityId: id,
+        expenseMediaReferences,
+        publicationMediaPaths,
+        type,
+      };
     });
   }
 
   private async actor(token: string): Promise<AuthenticatedUser> {
     const actor = await this.application.authenticate(token);
     if (actor.role === 'COACH') throw new DomainError('AUTHORIZATION', 'Доступ к архиву запрещён.');
+    return actor;
+  }
+
+  private async owner(token: string): Promise<AuthenticatedUser> {
+    const actor = await this.actor(token);
+    if (actor.role !== 'OWNER')
+      throw new DomainError('AUTHORIZATION', 'Удаление навсегда доступно только владельцу.');
     return actor;
   }
 
@@ -442,84 +505,674 @@ export class ArchiveService {
     for (const branchId of branchIds) assertBranchAccess(actor, branchId);
   }
 
-  private async deleteBlockReason(
+  private summaries(counts: Record<string, number>): ArchiveDependencySummary[] {
+    return Object.entries(counts)
+      .filter(([, count]) => count > 0)
+      .map(([key, count]) => ({ count, key, label: dependencyLabels[key] ?? key }));
+  }
+
+  private async deletePlan(
+    client: DeleteClient,
     type: ArchiveEntityType,
     id: string,
-  ): Promise<string | undefined> {
-    let dependencies = 0;
+  ): Promise<DeletePlan> {
+    const name = await this.entityName(client, type, id);
+    const documentMediaIds: string[] = [];
+    const expenseMediaReferences: string[] = [];
+    const publicationMediaPaths: string[] = [];
+    const preservedSharedRecords: string[] = [];
+    const counts: Record<string, number> = {};
+    if (type === 'STUDENT') {
+      const [documents, paymentIds, cards] = await Promise.all([
+        client.studentDocument.findMany({
+          select: { attachmentMediaId: true },
+          where: { studentId: id },
+        }),
+        client.payment.findMany({ select: { id: true }, where: { studentId: id } }),
+        client.membershipCard.findMany({ select: { id: true }, where: { studentId: id } }),
+      ]);
+      documentMediaIds.push(
+        ...documents.flatMap(({ attachmentMediaId }) => attachmentMediaId ?? []),
+      );
+      const cardIds = cards.map(({ id: cardId }) => cardId);
+      const ids = paymentIds.map(({ id: paymentId }) => paymentId);
+      const values = await Promise.all([
+        client.attendance.count({ where: { studentId: id } }),
+        client.subscription.count({ where: { studentId: id } }),
+        client.studentDocument.count({ where: { studentId: id } }),
+        client.enrollment.count({ where: { studentId: id } }),
+        client.payment.count({ where: { studentId: id } }),
+        client.refund.count({ where: { paymentId: { in: ids } } }),
+        client.paymentOperation.count({ where: { studentId: id } }),
+        client.studentContact.count({ where: { studentId: id } }),
+        client.studentNote.count({ where: { studentId: id } }),
+        client.membershipCard.count({ where: { studentId: id } }),
+        client.cardEvent.count({
+          where: {
+            OR: [
+              { studentId: id },
+              { cardId: { in: cardIds } },
+              { relatedCardId: { in: cardIds } },
+            ],
+          },
+        }),
+        client.cardScanEvent.count({
+          where: { OR: [{ studentId: id }, { cardId: { in: cardIds } }] },
+        }),
+        client.trialAppointment.count({ where: { studentId: id } }),
+        client.subscriptionLedger.count({ where: { studentId: id } }),
+        client.syncOutbox.count({
+          where: { entityType: 'ATTENDANCE_CHECKIN', idempotencyKey: { endsWith: `:${id}` } },
+        }),
+        client.syncOutbox.count({ where: { entityId: id } }),
+        client.auditLog.count({ where: { entityId: id } }),
+      ]);
+      counts.attendance = values[0];
+      counts.subscriptions = values[1] + values[13];
+      counts.documents = values[2];
+      counts.enrollments = values[3];
+      counts.payments = values[4] + values[5];
+      counts.paymentOperations = values[6];
+      counts.contacts = values[7];
+      counts.notes = values[8];
+      counts.cards = values[9];
+      counts.cardEvents = values[10] + values[11];
+      counts.trials = values[12];
+      counts.checkInEvents = values[14];
+      counts.syncRecords = values[15];
+      counts.auditRecords = values[16];
+    } else if (type === 'TRAINER') {
+      const values = await Promise.all([
+        client.payrollRule.count({ where: { coachId: id } }),
+        client.trainerPayoutRule.count({ where: { trainerId: id } }),
+        client.payrollAccrual.count({ where: { coachId: id } }),
+        client.userBranch.count({ where: { userId: id } }),
+        client.auditLog.count({ where: { OR: [{ actorUserId: id }, { entityId: id }] } }),
+      ]);
+      counts.payrollRecords = values[0] + values[1] + values[2];
+      counts.enrollments = values[3];
+      counts.auditRecords = values[4];
+      const [lessons, schedules, groups] = await Promise.all([
+        client.lesson.count({ where: { coachId: id } }),
+        client.weeklySchedule.count({ where: { coachId: id } }),
+        client.danceGroup.count({ where: { OR: [{ coachId: id }, { assistantCoachId: id }] } }),
+      ]);
+      if (lessons + schedules + groups > 0)
+        preservedSharedRecords.push(
+          `Занятия, расписания и группы сохранятся; будет удалена только связь с тренером (${String(lessons + schedules + groups)}).`,
+        );
+    } else if (type === 'GROUP') {
+      const [lessonIds, enrollments, schedules, trials, payroll] = await Promise.all([
+        client.lesson.findMany({ select: { id: true }, where: { groupId: id } }),
+        client.enrollment.count({ where: { groupId: id } }),
+        client.weeklySchedule.count({ where: { groupId: id } }),
+        client.trialAppointment.count({ where: { groupId: id } }),
+        client.payrollRule.count({ where: { groupId: id } }),
+      ]);
+      const ids = lessonIds.map(({ id: lessonId }) => lessonId);
+      counts.enrollments = enrollments;
+      counts.schedules = schedules;
+      counts.trials = trials;
+      counts.lessons = ids.length;
+      counts.attendance = await client.attendance.count({ where: { lessonId: { in: ids } } });
+      counts.payrollRecords =
+        payroll + (await client.payrollAccrual.count({ where: { lessonId: { in: ids } } }));
+      preservedSharedRecords.push('Платежи сохранятся; ссылки на удалённые занятия будут очищены.');
+    } else if (type === 'ROOM') {
+      counts.roomEvents =
+        (await client.roomRental.count({ where: { roomId: id } })) +
+        (await client.roomClosure.count({ where: { roomId: id } }));
+      const links =
+        (await client.lesson.count({ where: { roomId: id } })) +
+        (await client.weeklySchedule.count({ where: { roomId: id } }));
+      if (links)
+        preservedSharedRecords.push(
+          `Занятия и расписания сохранятся без ссылки на зал (${String(links)}).`,
+        );
+    } else if (type === 'TARIFF') {
+      counts.subscriptions = await client.subscription.count({ where: { tariffId: id } });
+      const links =
+        (await client.payment.count({ where: { attendanceTariffId: id } })) +
+        (await client.paymentOperation.count({
+          where: { OR: [{ attendanceTariffId: id }, { saleTariffId: id }] },
+        }));
+      if (links)
+        preservedSharedRecords.push(
+          `Финансовые записи сохранятся без ссылки на тариф (${String(links)}).`,
+        );
+    } else if (type === 'CARD') {
+      counts.cardEvents =
+        (await client.cardEvent.count({ where: { OR: [{ cardId: id }, { relatedCardId: id }] } })) +
+        (await client.cardScanEvent.count({ where: { cardId: id } }));
+      preservedSharedRecords.push('Ученик и его посещения сохранятся.');
+    } else if (type === 'EXPENSE_CATEGORY') {
+      const expenses = await client.expense.findMany({
+        select: { attachmentPath: true },
+        where: { categoryId: id },
+      });
+      counts.expenses = expenses.length;
+      expenseMediaReferences.push(
+        ...expenses.flatMap(({ attachmentPath }) => attachmentPath ?? []),
+      );
+    } else if (type === 'PUBLICATION') {
+      const publication = await client.publication.findUniqueOrThrow({ where: { id } });
+      counts.syncRecords = await client.syncOutbox.count({
+        where: { entityId: id, entityType: 'PUBLICATION' },
+      });
+      if (publication.mediaLocalPath) publicationMediaPaths.push(publication.mediaLocalPath);
+    } else {
+      const values = await Promise.all([
+        client.student.count({ where: { branchId: id } }),
+        client.danceGroup.count({ where: { branchId: id } }),
+        client.lesson.count({ where: { branchId: id } }),
+        client.payment.count({ where: { branchId: id } }),
+        client.expense.count({ where: { branchId: id } }),
+      ]);
+      counts.enrollments = values[0];
+      counts.lessons = values[1] + values[2];
+      counts.payments = values[3];
+      counts.expenses = values[4];
+      preservedSharedRecords.push(
+        'Пользователи сохранятся; будут удалены только назначения в филиал.',
+      );
+    }
+    const dependencies = this.summaries(counts);
+    return {
+      dependencies,
+      documentMediaIds,
+      entityId: id,
+      expenseMediaReferences,
+      name,
+      preservedSharedRecords,
+      publicationMediaPaths,
+      totalDependentRecords: dependencies.reduce((sum, item) => sum + item.count, 0),
+      type,
+    };
+  }
+
+  private async entityName(
+    client: DeleteClient,
+    type: ArchiveEntityType,
+    id: string,
+  ): Promise<string> {
+    switch (type) {
+      case 'STUDENT': {
+        const row = await client.student.findUniqueOrThrow({ where: { id } });
+        return `${row.lastName} ${row.firstName}`;
+      }
+      case 'TRAINER':
+        return (await client.user.findUniqueOrThrow({ where: { id } })).fullName;
+      case 'GROUP':
+        return (await client.danceGroup.findUniqueOrThrow({ where: { id } })).name;
+      case 'BRANCH':
+        return (await client.branch.findUniqueOrThrow({ where: { id } })).name;
+      case 'ROOM':
+        return (await client.room.findUniqueOrThrow({ where: { id } })).name;
+      case 'TARIFF':
+        return (await client.tariff.findUniqueOrThrow({ where: { id } })).name;
+      case 'CARD':
+        return (await client.membershipCard.findUniqueOrThrow({ where: { id } })).barcode;
+      case 'EXPENSE_CATEGORY':
+        return (await client.expenseCategory.findUniqueOrThrow({ where: { id } })).name;
+      case 'PUBLICATION':
+        return (await client.publication.findUniqueOrThrow({ where: { id } })).title;
+    }
+  }
+
+  private async executeDelete(
+    transaction: Prisma.TransactionClient,
+    actorId: string,
+    type: ArchiveEntityType,
+    id: string,
+  ): Promise<void> {
     switch (type) {
       case 'STUDENT':
-        dependencies = await this.database.$transaction(
-          async (tx) =>
-            (await tx.attendance.count({ where: { studentId: id } })) +
-            (await tx.subscription.count({ where: { studentId: id } })) +
-            (await tx.payment.count({ where: { studentId: id } })) +
-            (await tx.paymentOperation.count({ where: { studentId: id } })) +
-            (await tx.enrollment.count({ where: { studentId: id } })) +
-            (await tx.studentDocument.count({ where: { studentId: id } })) +
-            (await tx.trialAppointment.count({ where: { studentId: id } })) +
-            (await tx.membershipCard.count({ where: { studentId: id } })),
-        );
+        await this.deleteStudent(transaction, id);
         break;
       case 'TRAINER':
-        dependencies =
-          (await this.database.lesson.count({ where: { coachId: id } })) +
-          (await this.database.weeklySchedule.count({ where: { coachId: id } })) +
-          (await this.database.danceGroup.count({
-            where: { OR: [{ coachId: id }, { assistantCoachId: id }] },
-          })) +
-          (await this.database.payrollAccrual.count({ where: { coachId: id } })) +
-          (await this.database.trainerPayoutRule.count({ where: { trainerId: id } })) +
-          (await this.database.auditLog.count({ where: { actorUserId: id } }));
+        await this.deleteTrainer(transaction, actorId, id);
         break;
       case 'GROUP':
-        dependencies =
-          (await this.database.enrollment.count({ where: { groupId: id } })) +
-          (await this.database.lesson.count({ where: { groupId: id } })) +
-          (await this.database.weeklySchedule.count({ where: { groupId: id } })) +
-          (await this.database.trialAppointment.count({ where: { groupId: id } }));
+        await this.deleteGroup(transaction, id);
         break;
       case 'BRANCH':
-        dependencies =
-          (await this.database.student.count({ where: { branchId: id } })) +
-          (await this.database.danceGroup.count({ where: { branchId: id } })) +
-          (await this.database.lesson.count({ where: { branchId: id } })) +
-          (await this.database.payment.count({ where: { branchId: id } })) +
-          (await this.database.expense.count({ where: { branchId: id } }));
+        await this.deleteBranch(transaction, actorId, id);
         break;
       case 'ROOM':
-        dependencies =
-          (await this.database.lesson.count({ where: { roomId: id } })) +
-          (await this.database.weeklySchedule.count({ where: { roomId: id } })) +
-          (await this.database.roomRental.count({ where: { roomId: id } })) +
-          (await this.database.roomClosure.count({ where: { roomId: id } }));
+        await this.deleteRoom(transaction, id);
         break;
       case 'TARIFF':
-        dependencies =
-          (await this.database.subscription.count({ where: { tariffId: id } })) +
-          (await this.database.payment.count({ where: { attendanceTariffId: id } })) +
-          (await this.database.paymentOperation.count({
-            where: { OR: [{ attendanceTariffId: id }, { saleTariffId: id }] },
-          }));
+        await this.deleteTariff(transaction, id);
         break;
       case 'CARD':
-        dependencies =
-          (await this.database.cardEvent.count({
-            where: { OR: [{ cardId: id }, { relatedCardId: id }] },
-          })) + (await this.database.cardScanEvent.count({ where: { cardId: id } }));
+        await this.deleteCard(transaction, id);
         break;
       case 'EXPENSE_CATEGORY':
-        dependencies = await this.database.expense.count({ where: { categoryId: id } });
+        await this.deleteExpenseCategory(transaction, id);
         break;
       case 'PUBLICATION':
-        dependencies = await this.database.auditLog.count({
-          where: { action: 'PUBLICATION_PUBLISHED', entityId: id },
-        });
+        await this.deletePublication(transaction, id);
         break;
     }
-    return dependencies > 0
-      ? `Нельзя удалить ${labels[type].toLocaleLowerCase('ru-RU')}: с объектом связана значимая история.`
-      : undefined;
+  }
+
+  private async deleteStudent(transaction: Prisma.TransactionClient, id: string): Promise<void> {
+    const [payments, cards, ledgers] = await Promise.all([
+      transaction.payment.findMany({ select: { id: true }, where: { studentId: id } }),
+      transaction.membershipCard.findMany({ select: { id: true }, where: { studentId: id } }),
+      transaction.subscriptionLedger.findMany({ select: { id: true }, where: { studentId: id } }),
+    ]);
+    const paymentIds = payments.map(({ id: paymentId }) => paymentId);
+    const cardIds = cards.map(({ id: cardId }) => cardId);
+    const ledgerIds = ledgers.map(({ id: ledgerId }) => ledgerId);
+    const refunds = await transaction.refund.findMany({
+      select: { id: true },
+      where: { paymentId: { in: paymentIds } },
+    });
+    await transaction.attendance.deleteMany({ where: { studentId: id } });
+    await transaction.subscriptionLedger.updateMany({
+      data: { reversesLedgerId: null },
+      where: { reversesLedgerId: { in: ledgerIds } },
+    });
+    await transaction.subscriptionLedger.deleteMany({ where: { studentId: id } });
+    await transaction.cardEvent.deleteMany({
+      where: {
+        OR: [{ studentId: id }, { cardId: { in: cardIds } }, { relatedCardId: { in: cardIds } }],
+      },
+    });
+    await transaction.cardScanEvent.deleteMany({
+      where: { OR: [{ studentId: id }, { cardId: { in: cardIds } }] },
+    });
+    await transaction.membershipCard.deleteMany({ where: { studentId: id } });
+    await transaction.cashTransaction.deleteMany({
+      where: { sourceId: { in: [...paymentIds, ...refunds.map(({ id: refundId }) => refundId)] } },
+    });
+    await transaction.paymentOperation.deleteMany({ where: { studentId: id } });
+    await transaction.refund.deleteMany({ where: { paymentId: { in: paymentIds } } });
+    await transaction.payment.deleteMany({ where: { studentId: id } });
+    await transaction.subscription.deleteMany({ where: { studentId: id } });
+    await transaction.studentDocument.deleteMany({ where: { studentId: id } });
+    await transaction.studentContact.deleteMany({ where: { studentId: id } });
+    await transaction.studentNote.deleteMany({ where: { studentId: id } });
+    await transaction.trialAppointment.deleteMany({ where: { studentId: id } });
+    await transaction.enrollment.deleteMany({ where: { studentId: id } });
+    await transaction.webAction.deleteMany({ where: { crmStudentId: id } });
+    await transaction.syncOutbox.deleteMany({
+      where: {
+        OR: [
+          { entityId: id },
+          { entityType: 'ATTENDANCE_CHECKIN', idempotencyKey: { endsWith: `:${id}` } },
+        ],
+      },
+    });
+    await transaction.syncEntityState.deleteMany({
+      where: { OR: [{ entityId: id }, { entityId: { endsWith: `:${id}` } }] },
+    });
+    await transaction.syncConflict.deleteMany({
+      where: { OR: [{ entityId: id }, { entityId: { endsWith: `:${id}` } }] },
+    });
+    await transaction.syncLog.deleteMany({
+      where: { OR: [{ entityId: id }, { entityId: { endsWith: `:${id}` } }] },
+    });
+    await this.deleteSyncRecords(transaction, id);
+    await transaction.auditLog.deleteMany({ where: { entityId: id } });
+    await transaction.student.delete({ where: { id } });
+  }
+
+  private async deleteTrainer(
+    transaction: Prisma.TransactionClient,
+    actorId: string,
+    id: string,
+  ): Promise<void> {
+    await transaction.payrollAccrual.deleteMany({ where: { coachId: id } });
+    await transaction.payrollRule.deleteMany({ where: { coachId: id } });
+    await transaction.trainerPayoutRule.deleteMany({ where: { trainerId: id } });
+    await transaction.trainerSubstitution.deleteMany({
+      where: { OR: [{ substituteTrainerId: id }, { createdByUserId: id }] },
+    });
+    await transaction.danceGroup.updateMany({ data: { coachId: null }, where: { coachId: id } });
+    await transaction.danceGroup.updateMany({
+      data: { assistantCoachId: null },
+      where: { assistantCoachId: id },
+    });
+    await transaction.weeklySchedule.updateMany({
+      data: { coachId: null },
+      where: { coachId: id },
+    });
+    await transaction.lesson.updateMany({ data: { coachId: null }, where: { coachId: id } });
+    await transaction.trainerSubstitution.updateMany({
+      data: { originalTrainerId: null },
+      where: { originalTrainerId: id },
+    });
+    await transaction.attendance.updateMany({
+      data: { markedByUserId: actorId },
+      where: { markedByUserId: id },
+    });
+    await transaction.subscription.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.payment.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.paymentOperation.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.refund.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.expense.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.expense.updateMany({
+      data: { confirmedByUserId: actorId },
+      where: { confirmedByUserId: id },
+    });
+    await transaction.cashTransaction.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.payrollPeriod.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.payrollPeriod.updateMany({
+      data: { approvedByUserId: actorId },
+      where: { approvedByUserId: id },
+    });
+    await transaction.roomRental.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.roomClosure.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.trialAppointment.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.membershipCard.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.publication.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.studentNote.updateMany({
+      data: { authorUserId: actorId },
+      where: { authorUserId: id },
+    });
+    await transaction.cardEvent.updateMany({
+      data: { performedByUserId: null },
+      where: { performedByUserId: id },
+    });
+    await transaction.cardScanEvent.updateMany({
+      data: { performedByUserId: null },
+      where: { performedByUserId: id },
+    });
+    await transaction.trainerPayoutRule.updateMany({
+      data: { createdByUserId: actorId },
+      where: { createdByUserId: id },
+    });
+    await transaction.subscriptionLedger.updateMany({
+      data: { createdByUserId: null },
+      where: { createdByUserId: id },
+    });
+    await transaction.userBranch.deleteMany({ where: { userId: id } });
+    await transaction.session.deleteMany({ where: { userId: id } });
+    await transaction.auditLog.deleteMany({
+      where: { OR: [{ actorUserId: id }, { entityId: id }] },
+    });
+    await this.deleteSyncRecords(transaction, id);
+    await transaction.user.delete({ where: { id } });
+  }
+
+  private async deleteGroup(transaction: Prisma.TransactionClient, id: string): Promise<void> {
+    const lessons = await transaction.lesson.findMany({
+      select: { id: true },
+      where: { groupId: id },
+    });
+    const lessonIds = lessons.map(({ id: lessonId }) => lessonId);
+    await transaction.payment.updateMany({
+      data: { attendanceLessonId: null },
+      where: { attendanceLessonId: { in: lessonIds } },
+    });
+    await transaction.paymentOperation.updateMany({
+      data: { attendanceLessonId: null },
+      where: { attendanceLessonId: { in: lessonIds } },
+    });
+    await transaction.subscriptionLedger.updateMany({
+      data: { reversesLedgerId: null },
+      where: { lessonId: { in: lessonIds } },
+    });
+    await transaction.subscriptionLedger.deleteMany({ where: { lessonId: { in: lessonIds } } });
+    await transaction.payrollAccrual.deleteMany({ where: { lessonId: { in: lessonIds } } });
+    await transaction.trainerSubstitution.deleteMany({ where: { lessonId: { in: lessonIds } } });
+    await transaction.trialAppointment.deleteMany({ where: { groupId: id } });
+    await transaction.lesson.updateMany({
+      data: { makeupForLessonId: null },
+      where: { makeupForLessonId: { in: lessonIds } },
+    });
+    await transaction.attendance.deleteMany({ where: { lessonId: { in: lessonIds } } });
+    await transaction.lesson.deleteMany({ where: { groupId: id } });
+    await transaction.weeklySchedule.deleteMany({ where: { groupId: id } });
+    await transaction.enrollment.deleteMany({ where: { groupId: id } });
+    await transaction.payrollRule.deleteMany({ where: { groupId: id } });
+    await transaction.publicationAudienceTarget.deleteMany({
+      where: { targetId: id, type: 'GROUP' },
+    });
+    for (const lessonId of lessonIds) await this.deleteSyncRecords(transaction, lessonId);
+    await this.deleteSyncRecords(transaction, id);
+    await transaction.auditLog.deleteMany({ where: { entityId: { in: [id, ...lessonIds] } } });
+    await transaction.danceGroup.delete({ where: { id } });
+  }
+
+  private async deleteRoom(transaction: Prisma.TransactionClient, id: string): Promise<void> {
+    const room = await transaction.room.findUniqueOrThrow({ where: { id } });
+    await transaction.roomRental.deleteMany({ where: { roomId: id } });
+    await transaction.roomClosure.deleteMany({ where: { roomId: id } });
+    await transaction.lesson.updateMany({
+      data: { room: room.name, roomId: null },
+      where: { roomId: id },
+    });
+    await transaction.weeklySchedule.updateMany({
+      data: { room: room.name, roomId: null },
+      where: { roomId: id },
+    });
+    await transaction.auditLog.deleteMany({ where: { entityId: id } });
+    await this.deleteSyncRecords(transaction, id);
+    await transaction.room.delete({ where: { id } });
+  }
+
+  private async deleteTariff(transaction: Prisma.TransactionClient, id: string): Promise<void> {
+    const subscriptions = await transaction.subscription.findMany({
+      select: { id: true },
+      where: { tariffId: id },
+    });
+    const subscriptionIds = subscriptions.map(({ id: subscriptionId }) => subscriptionId);
+    const ledgers = await transaction.subscriptionLedger.findMany({
+      select: { id: true },
+      where: { subscriptionId: { in: subscriptionIds } },
+    });
+    await transaction.subscriptionLedger.updateMany({
+      data: { reversesLedgerId: null },
+      where: { reversesLedgerId: { in: ledgers.map(({ id: ledgerId }) => ledgerId) } },
+    });
+    await transaction.subscriptionLedger.deleteMany({
+      where: { subscriptionId: { in: subscriptionIds } },
+    });
+    await transaction.payment.updateMany({
+      data: { subscriptionId: null },
+      where: { subscriptionId: { in: subscriptionIds } },
+    });
+    await transaction.payment.updateMany({
+      data: { attendanceTariffId: null },
+      where: { attendanceTariffId: id },
+    });
+    await transaction.paymentOperation.updateMany({
+      data: { subscriptionId: null },
+      where: { subscriptionId: { in: subscriptionIds } },
+    });
+    await transaction.paymentOperation.updateMany({
+      data: { attendanceTariffId: null, saleTariffId: null },
+      where: { OR: [{ attendanceTariffId: id }, { saleTariffId: id }] },
+    });
+    await transaction.subscription.deleteMany({ where: { tariffId: id } });
+    await transaction.auditLog.deleteMany({ where: { entityId: id } });
+    await this.deleteSyncRecords(transaction, id);
+    await transaction.tariff.delete({ where: { id } });
+  }
+
+  private async deleteCard(transaction: Prisma.TransactionClient, id: string): Promise<void> {
+    await transaction.cardEvent.deleteMany({
+      where: { OR: [{ cardId: id }, { relatedCardId: id }] },
+    });
+    await transaction.cardScanEvent.deleteMany({ where: { cardId: id } });
+    await transaction.auditLog.deleteMany({ where: { entityId: id } });
+    await this.deleteSyncRecords(transaction, id);
+    await transaction.membershipCard.delete({ where: { id } });
+  }
+
+  private async deleteExpenseCategory(
+    transaction: Prisma.TransactionClient,
+    id: string,
+  ): Promise<void> {
+    const expenses = await transaction.expense.findMany({
+      select: { id: true },
+      where: { categoryId: id },
+    });
+    const expenseIds = expenses.map(({ id: expenseId }) => expenseId);
+    await transaction.cashTransaction.deleteMany({ where: { sourceId: { in: expenseIds } } });
+    await transaction.expense.deleteMany({ where: { categoryId: id } });
+    await transaction.auditLog.deleteMany({ where: { entityId: { in: [id, ...expenseIds] } } });
+    await this.deleteSyncRecords(transaction, id);
+    await transaction.expenseCategory.delete({ where: { id } });
+  }
+
+  private async deletePublication(
+    transaction: Prisma.TransactionClient,
+    id: string,
+  ): Promise<void> {
+    await transaction.syncOutbox.deleteMany({ where: { entityId: id, entityType: 'PUBLICATION' } });
+    await this.deleteSyncRecords(transaction, id);
+    await transaction.auditLog.deleteMany({ where: { entityId: id } });
+    await transaction.publication.delete({ where: { id } });
+  }
+
+  private async deleteBranch(
+    transaction: Prisma.TransactionClient,
+    actorId: string,
+    id: string,
+  ): Promise<void> {
+    const students = await transaction.student.findMany({
+      select: { id: true },
+      where: { branchId: id },
+    });
+    for (const student of students) await this.deleteStudent(transaction, student.id);
+    const groups = await transaction.danceGroup.findMany({
+      select: { id: true },
+      where: { branchId: id },
+    });
+    for (const group of groups) await this.deleteGroup(transaction, group.id);
+    await transaction.payrollAccrual.deleteMany({ where: { branchId: id } });
+    await transaction.payrollRule.deleteMany({ where: { branchId: id } });
+    const periods = await transaction.payrollPeriod.findMany({
+      select: { id: true },
+      where: { branchId: id },
+    });
+    await transaction.payrollAccrual.deleteMany({
+      where: { payrollPeriodId: { in: periods.map(({ id: periodId }) => periodId) } },
+    });
+    await transaction.payrollPeriod.deleteMany({ where: { branchId: id } });
+    await transaction.cashTransaction.deleteMany({ where: { branchId: id } });
+    await transaction.cashRegister.deleteMany({ where: { branchId: id } });
+    const categories = await transaction.expenseCategory.findMany({
+      select: { id: true },
+      where: { branchId: id },
+    });
+    for (const category of categories) await this.deleteExpenseCategory(transaction, category.id);
+    const tariffs = await transaction.tariff.findMany({
+      select: { id: true },
+      where: { branchId: id },
+    });
+    for (const tariff of tariffs) await this.deleteTariff(transaction, tariff.id);
+    const rooms = await transaction.room.findMany({
+      select: { id: true },
+      where: { branchId: id },
+    });
+    for (const room of rooms) await this.deleteRoom(transaction, room.id);
+    await transaction.calendarException.deleteMany({ where: { branchId: id } });
+    await transaction.userBranch.deleteMany({ where: { branchId: id } });
+    await transaction.publicationAudienceTarget.deleteMany({
+      where: { targetId: id, type: 'BRANCH' },
+    });
+    await transaction.auditLog.deleteMany({ where: { entityId: id } });
+    await this.deleteSyncRecords(transaction, id);
+    await transaction.branch.delete({ where: { id } });
+    void actorId;
+  }
+
+  private async deleteSyncRecords(
+    transaction: Prisma.TransactionClient,
+    entityId: string,
+  ): Promise<void> {
+    await transaction.syncOutbox.deleteMany({ where: { entityId } });
+    await transaction.syncEntityState.deleteMany({ where: { entityId } });
+    await transaction.syncConflict.deleteMany({ where: { entityId } });
+    await transaction.syncLog.deleteMany({ where: { entityId } });
+  }
+
+  private async unreferencedDocumentMedia(
+    transaction: Prisma.TransactionClient,
+    mediaIds: string[],
+  ): Promise<string[]> {
+    const unique = [...new Set(mediaIds)];
+    const referenced = await transaction.studentDocument.findMany({
+      select: { attachmentMediaId: true },
+      where: { attachmentMediaId: { in: unique } },
+    });
+    const retained = new Set(
+      referenced.flatMap(({ attachmentMediaId }) => attachmentMediaId ?? []),
+    );
+    return unique.filter((mediaId) => !retained.has(mediaId));
+  }
+
+  private async unreferencedExpenseMedia(
+    transaction: Prisma.TransactionClient,
+    references: string[],
+  ): Promise<string[]> {
+    const unique = [...new Set(references)];
+    const retained = new Set(
+      (
+        await transaction.expense.findMany({
+          select: { attachmentPath: true },
+          where: { attachmentPath: { in: unique } },
+        })
+      ).flatMap(({ attachmentPath }) => attachmentPath ?? []),
+    );
+    return unique.filter((reference) => !retained.has(reference));
+  }
+
+  private async unreferencedPublicationMedia(
+    transaction: Prisma.TransactionClient,
+    paths: string[],
+  ): Promise<string[]> {
+    const unique = [...new Set(paths)];
+    const retained = new Set(
+      (
+        await transaction.publication.findMany({
+          select: { mediaLocalPath: true },
+          where: { mediaLocalPath: { in: unique } },
+        })
+      ).flatMap(({ mediaLocalPath }) => mediaLocalPath ?? []),
+    );
+    return unique.filter((path) => !retained.has(path));
   }
 
   private async assertArchived(type: ArchiveEntityType, id: string): Promise<void> {

@@ -12,6 +12,7 @@ export {
   attendanceStatusSchema,
   attendanceWorkspaceDateSchema,
   analyticsQuerySchema,
+  archiveDeleteInputSchema,
   archiveQuerySchema,
   attentionFiltersSchema,
   calendarExceptionInputSchema,

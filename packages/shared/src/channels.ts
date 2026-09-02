@@ -195,6 +195,7 @@ export const IPC_CHANNELS = {
   activityList: 'activity:list',
   archiveDelete: 'archive:delete',
   archiveList: 'archive:list',
+  archivePreviewDelete: 'archive:preview-delete',
   archiveRestore: 'archive:restore',
   auditList: 'audit:list',
   authChangePassword: 'auth:change-password',
@@ -2452,6 +2453,31 @@ export interface ArchiveListResult {
   total: number;
 }
 
+export interface ArchiveDependencySummary {
+  count: number;
+  key: string;
+  label: string;
+}
+
+export interface ArchiveDeletePreview {
+  dependencies: ArchiveDependencySummary[];
+  entityId: string;
+  name: string;
+  preservedSharedRecords: string[];
+  totalDependentRecords: number;
+  type: ArchiveEntityType;
+}
+
+export interface ArchiveDeleteInput {
+  confirmationName: string;
+}
+
+export interface ArchiveDeleteResult {
+  deleted: ArchiveDependencySummary[];
+  entityId: string;
+  type: ArchiveEntityType;
+}
+
 export interface AttendanceEntryInput {
   comment?: string | undefined;
   status: AttendanceStatus;
@@ -3339,8 +3365,18 @@ export interface SettingUpdate {
 
 export interface AravaDesktopApi {
   archive: {
-    deletePermanently: (token: string, type: ArchiveEntityType, id: string) => Promise<void>;
+    deletePermanently: (
+      token: string,
+      type: ArchiveEntityType,
+      id: string,
+      input: ArchiveDeleteInput,
+    ) => Promise<ArchiveDeleteResult>;
     list: (token: string, query: ArchiveQuery) => Promise<ArchiveListResult>;
+    previewDelete: (
+      token: string,
+      type: ArchiveEntityType,
+      id: string,
+    ) => Promise<ArchiveDeletePreview>;
     restore: (token: string, type: ArchiveEntityType, id: string) => Promise<void>;
   };
   audit: {

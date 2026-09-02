@@ -47,6 +47,18 @@ test('отмена с отработкой, единоразовый перен�
         lastName: 'Архивная E2E',
         status: 'ACTIVE',
       });
+      const deletedStudent = await api.students.create(token, {
+        branchId: branch.id,
+        firstName: 'Иван',
+        lastName: 'Удаляемый E2E',
+        status: 'ACTIVE',
+      });
+      await api.groups.addEnrollment(token, group.id, {
+        joinedAt: '2030-09-01',
+        overrideCapacity: false,
+        status: 'ACTIVE',
+        studentId: deletedStudent.id,
+      });
       const original = await api.lessons.create(token, {
         endsAt: '2030-09-10T16:00:00.000Z',
         groupId: group.id,
@@ -58,7 +70,13 @@ test('отмена с отработкой, единоразовый перен�
         startsAt: '2030-09-11T15:00:00.000Z',
       });
       await api.students.archive(token, student.id);
-      return { movingId: moving.id, originalId: original.id, studentId: student.id };
+      await api.students.archive(token, deletedStudent.id);
+      return {
+        deletedStudentId: deletedStudent.id,
+        movingId: moving.id,
+        originalId: original.id,
+        studentId: student.id,
+      };
     });
 
     await page.evaluate((lessonId) => {
@@ -112,6 +130,35 @@ test('отмена с отработкой, единоразовый перен�
         }, fixture.studentId),
       )
       .toBe('ACTIVE');
+
+    await page.getByPlaceholder('Поиск по имени, названию или филиалу').fill('Удаляемый E2E');
+    const deleting = page.locator('[data-testid="global-archive-list"] > div').filter({
+      hasText: 'Удаляемый E2E Иван',
+    });
+    await deleting.getByRole('button', { name: 'Удалить навсегда' }).click();
+    const deleteDialog = page.getByRole('dialog');
+    await expect(deleteDialog.getByText('Будет удалено вместе с объектом:')).toBeVisible();
+    await expect(deleteDialog.getByText('Участия в группах')).toBeVisible();
+    await deleteDialog.getByRole('textbox').fill('Удаляемый E2E Иван');
+    page.once('dialog', async (dialog) => dialog.accept());
+    await deleteDialog.getByRole('button', { name: 'Удалить навсегда' }).click();
+    await expect(deleting).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(async (studentId) => {
+          const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+            state?: { token?: string };
+          };
+          const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+          try {
+            await api.students.get(persisted.state?.token ?? '', studentId);
+            return false;
+          } catch {
+            return true;
+          }
+        }, fixture.deletedStudentId),
+      )
+      .toBe(true);
   } finally {
     await application.close();
   }

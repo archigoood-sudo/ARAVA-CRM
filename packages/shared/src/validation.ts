@@ -605,6 +605,10 @@ export const archiveQuerySchema: z.ZodType<ArchiveQuery> = z.object({
   type: z.enum(ARCHIVE_ENTITY_TYPES).optional(),
 });
 
+export const archiveDeleteInputSchema = z.object({
+  confirmationName: z.string().trim().min(1).max(240),
+});
+
 export const attendanceEntryInputSchema: z.ZodType<AttendanceEntryInput> = z.object({
   comment: optionalText(500),
   status: attendanceStatusSchema,

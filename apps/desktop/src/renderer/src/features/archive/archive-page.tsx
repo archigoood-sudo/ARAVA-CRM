@@ -1,10 +1,20 @@
 import {
   ARCHIVE_ENTITY_TYPES,
   formatDate,
+  type ArchiveDeletePreview,
   type ArchiveEntityType,
   type ArchiveItem,
 } from '@arava/shared';
-import { Button, Card, EmptyState, Input, LoadingState, PageHeader, Select } from '@arava/ui';
+import {
+  Button,
+  Card,
+  Dialog,
+  EmptyState,
+  Input,
+  LoadingState,
+  PageHeader,
+  Select,
+} from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArchiveRestore, ExternalLink, Search, Trash2 } from 'lucide-react';
 import { useState } from 'react';
@@ -40,6 +50,8 @@ export function ArchivePage() {
   const [search, setSearch] = useState('');
   const [type, setType] = useState<ArchiveEntityType | ''>('');
   const [error, setError] = useState<string>();
+  const [deletePreview, setDeletePreview] = useState<ArchiveDeletePreview>();
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const query = useQuery({
     queryFn: () =>
       getDesktopApi().archive.list(getSessionToken(), {
@@ -66,10 +78,30 @@ export function ArchivePage() {
     onSuccess: refresh,
   });
   const remove = useMutation({
-    mutationFn: (item: ArchiveItem) =>
-      getDesktopApi().archive.deletePermanently(getSessionToken(), item.type, item.entityId),
-    onSuccess: refresh,
+    mutationFn: (preview: ArchiveDeletePreview) =>
+      getDesktopApi().archive.deletePermanently(getSessionToken(), preview.type, preview.entityId, {
+        confirmationName: deleteConfirmation,
+      }),
+    onSuccess: async () => {
+      setDeletePreview(undefined);
+      setDeleteConfirmation('');
+      await refresh();
+    },
   });
+  const openDelete = async (item: ArchiveItem) => {
+    setError(undefined);
+    try {
+      const preview = await getDesktopApi().archive.previewDelete(
+        getSessionToken(),
+        item.type,
+        item.entityId,
+      );
+      setDeleteConfirmation('');
+      setDeletePreview(preview);
+    } catch (caught) {
+      setError(getErrorMessage(caught, 'Не удалось подготовить удаление.'));
+    }
+  };
   const run = async (action: () => Promise<unknown>, fallback: string) => {
     setError(undefined);
     try {
@@ -173,18 +205,7 @@ export function ArchivePage() {
                   {role === 'OWNER' ? (
                     <Button
                       disabled={restore.isPending || remove.isPending}
-                      onClick={() => {
-                        if (
-                          !window.confirm(
-                            `Удалить «${item.name}» навсегда? Отменить это действие нельзя.`,
-                          )
-                        )
-                          return;
-                        void run(
-                          () => remove.mutateAsync(item),
-                          'Удаление невозможно: проверьте связанные данные.',
-                        );
-                      }}
+                      onClick={() => void openDelete(item)}
                       size="small"
                       variant="ghost"
                     >
@@ -198,6 +219,90 @@ export function ArchivePage() {
           })}
         </div>
       )}
+      <Dialog
+        closeLabel="Отменить удаление"
+        description="Архивирование сохраняет данные. Это действие необратимо удалит объект и принадлежащие ему записи."
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              disabled={remove.isPending}
+              onClick={() => {
+                setDeletePreview(undefined);
+                setDeleteConfirmation('');
+              }}
+              variant="ghost"
+            >
+              Отмена
+            </Button>
+            <Button
+              className="border-destructive text-destructive hover:bg-destructive/10"
+              disabled={remove.isPending || deleteConfirmation !== deletePreview?.name}
+              onClick={() => {
+                if (!deletePreview) return;
+                if (
+                  !window.confirm(
+                    `Последнее подтверждение: удалить «${deletePreview.name}» и ${String(deletePreview.totalDependentRecords)} связанных записей навсегда?`,
+                  )
+                )
+                  return;
+                void run(
+                  () => remove.mutateAsync(deletePreview),
+                  'Не удалось удалить объект. Изменения отменены.',
+                );
+              }}
+              variant="outline"
+            >
+              {remove.isPending ? 'Удаляем...' : 'Удалить навсегда'}
+            </Button>
+          </div>
+        }
+        onClose={() => {
+          if (remove.isPending) return;
+          setDeletePreview(undefined);
+          setDeleteConfirmation('');
+        }}
+        open={Boolean(deletePreview)}
+        title="Удалить навсегда"
+      >
+        {deletePreview ? (
+          <div className="space-y-5" data-testid="archive-delete-preview">
+            <div>
+              <p className="text-sm font-semibold">Будет удалено вместе с объектом:</p>
+              {deletePreview.dependencies.length ? (
+                <ul className="mt-3 space-y-2 text-sm">
+                  {deletePreview.dependencies.map((dependency) => (
+                    <li className="flex justify-between gap-4" key={dependency.key}>
+                      <span>{dependency.label}</span>
+                      <strong>{dependency.count}</strong>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-muted-foreground">Связанных записей нет.</p>
+              )}
+            </div>
+            {deletePreview.preservedSharedRecords.length ? (
+              <div className="rounded-xl border border-border bg-muted/40 p-3 text-sm">
+                <p className="font-medium">Общие данные будут сохранены:</p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+                  {deletePreview.preservedSharedRecords.map((message) => (
+                    <li key={message}>{message}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <label className="block text-sm font-medium">
+              Для подтверждения введите: <strong>{deletePreview.name}</strong>
+              <Input
+                autoComplete="off"
+                className="mt-2"
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                value={deleteConfirmation}
+              />
+            </label>
+          </div>
+        ) : null}
+      </Dialog>
     </main>
   );
 }

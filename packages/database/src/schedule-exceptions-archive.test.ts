@@ -302,13 +302,25 @@ describe('Sprint 6.1 schedule exceptions and global archive', () => {
     );
     expect((await archive.list(ownerToken, { search: 'Пустая' })).items).toHaveLength(1);
     expect((await archive.list(ownerToken, { type: 'TRAINER' })).items).toHaveLength(1);
-    await expect(archive.deletePermanently(ownerToken, 'STUDENT', student.id)).rejects.toThrow(
-      'связана значимая история',
+    const studentDeletePreview = await archive.previewPermanentlyDelete(
+      ownerToken,
+      'STUDENT',
+      student.id,
     );
+    expect(studentDeletePreview.name).toBe('Петрова Мила');
+    expect(studentDeletePreview.dependencies).toContainEqual({
+      count: 1,
+      key: 'enrollments',
+      label: 'Участия в группах',
+    });
     await expect(
-      archive.deletePermanently(ownerToken, 'GROUP', activeEmptyGroup.id),
+      archive.deletePermanently(ownerToken, 'GROUP', activeEmptyGroup.id, {
+        confirmationName: activeEmptyGroup.name,
+      }),
     ).rejects.toThrow('не находится в архиве');
-    await archive.deletePermanently(ownerToken, 'GROUP', safeGroup.id);
+    await archive.deletePermanently(ownerToken, 'GROUP', safeGroup.id, {
+      confirmationName: safeGroup.name,
+    });
     expect(await database.danceGroup.findUnique({ where: { id: safeGroup.id } })).toBeNull();
     await archive.restore(ownerToken, 'STUDENT', student.id);
     await archive.restore(ownerToken, 'TRAINER', coach.id);
@@ -397,5 +409,202 @@ describe('Sprint 6.1 schedule exceptions and global archive', () => {
     ).toEqual(
       expect.arrayContaining([{ action: 'LESSON_RESCHEDULED' }, { action: 'LESSON_CANCELLED' }]),
     );
+  });
+
+  it('permanently deletes an archived student and owned records but retains shared media', async () => {
+    const { branch, coach, group, student } = await foundation();
+    const otherStudent = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Лев',
+      lastName: 'Смирнов',
+      status: 'ACTIVE',
+    });
+    const lesson = await studio.createLesson(ownerToken, {
+      coachId: coach.id,
+      endsAt: '2026-08-27T19:00:00+03:00',
+      groupId: group.id,
+      startsAt: '2026-08-27T18:00:00+03:00',
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 4,
+      name: 'Удаляемый абонемент',
+      price: 40_000,
+      type: 'LESSON_PACK',
+    });
+    await finance.createSubscription(ownerToken, {
+      initialPayment: {
+        amount: 40_000,
+        paidAt: '2026-08-01T09:00:00+03:00',
+        paymentMethod: 'CASH',
+      },
+      salePrice: 40_000,
+      startsAt: '2026-08-01',
+      studentId: student.id,
+      tariffId: tariff.id,
+    });
+    const sharedMediaId = '11111111-1111-1111-1111-111111111111.pdf';
+    const privateMediaId = '22222222-2222-2222-2222-222222222222.pdf';
+    await database.studentDocument.createMany({
+      data: [
+        {
+          attachmentFileName: 'shared.pdf',
+          attachmentMediaId: sharedMediaId,
+          attachmentMimeType: 'application/pdf',
+          documentDate: new Date('2026-08-01T00:00:00+03:00'),
+          documentType: 'CONTRACT',
+          source: 'EXISTING',
+          status: 'SIGNED',
+          studentId: student.id,
+        },
+        {
+          attachmentFileName: 'private.pdf',
+          attachmentMediaId: privateMediaId,
+          attachmentMimeType: 'application/pdf',
+          documentDate: new Date('2026-08-02T00:00:00+03:00'),
+          documentType: 'MEDIA_CONSENT',
+          source: 'EXISTING',
+          status: 'SIGNED',
+          studentId: student.id,
+        },
+        {
+          attachmentFileName: 'shared.pdf',
+          attachmentMediaId: sharedMediaId,
+          attachmentMimeType: 'application/pdf',
+          documentDate: new Date('2026-08-01T00:00:00+03:00'),
+          documentType: 'CONTRACT',
+          source: 'EXISTING',
+          status: 'SIGNED',
+          studentId: otherStudent.id,
+        },
+      ],
+    });
+    await application.archiveStudent(ownerToken, student.id);
+    const preview = await archive.previewPermanentlyDelete(ownerToken, 'STUDENT', student.id);
+    expect(preview.dependencies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ count: 1, key: 'attendance' }),
+        expect.objectContaining({ count: 2, key: 'documents' }),
+        expect.objectContaining({ key: 'payments' }),
+        expect.objectContaining({ key: 'subscriptions' }),
+      ]),
+    );
+    const result = await archive.deletePermanently(ownerToken, 'STUDENT', student.id, {
+      confirmationName: preview.name,
+    });
+    expect(result.documentMediaIds).toEqual([privateMediaId]);
+    expect(await database.student.findUnique({ where: { id: student.id } })).toBeNull();
+    expect(await database.attendance.count({ where: { studentId: student.id } })).toBe(0);
+    expect(await database.subscription.count({ where: { studentId: student.id } })).toBe(0);
+    expect(await database.payment.count({ where: { studentId: student.id } })).toBe(0);
+    expect(await database.studentDocument.count({ where: { studentId: student.id } })).toBe(0);
+    expect(
+      await database.studentDocument.count({ where: { attachmentMediaId: sharedMediaId } }),
+    ).toBe(1);
+    const deletionAudit = await database.auditLog.findFirst({
+      where: { action: 'STUDENT_PERMANENTLY_DELETED', entityId: student.id },
+    });
+    expect(deletionAudit?.detail).toContain('documents');
+  });
+
+  it('deletes trainer-owned payroll data and detaches shared schedule records', async () => {
+    const { branch, coach, group } = await foundation();
+    const lesson = await studio.createLesson(ownerToken, {
+      coachId: coach.id,
+      endsAt: '2026-08-28T19:00:00+03:00',
+      groupId: group.id,
+      startsAt: '2026-08-28T18:00:00+03:00',
+    });
+    await management.saveTrainerPayoutProfile(ownerToken, {
+      effectiveFrom: '2026-08-01',
+      rules: PAYOUT_CATEGORIES.map((category) =>
+        category === 'REGULAR_ATTENDANCE'
+          ? { amount: 1_000, category, mode: 'FIXED_PER_LESSON' as const }
+          : { category },
+      ),
+      trainerId: coach.id,
+    });
+    const period = await management.createPayrollPeriod(ownerToken, {
+      branchId: branch.id,
+      dateFrom: '2026-08-28',
+      dateTo: '2026-08-28',
+    });
+    await management.calculatePayrollPeriod(ownerToken, period.id);
+    const coachRow = await database.user.findUniqueOrThrow({ where: { id: coach.id } });
+    await application.updateUser(ownerToken, coach.id, {
+      branchIds: [branch.id],
+      fullName: coachRow.fullName,
+      isActive: false,
+      role: 'COACH',
+    });
+    const preview = await archive.previewPermanentlyDelete(ownerToken, 'TRAINER', coach.id);
+    expect(preview.preservedSharedRecords.join(' ')).toContain('Занятия');
+    await archive.deletePermanently(ownerToken, 'TRAINER', coach.id, {
+      confirmationName: preview.name,
+    });
+    expect(await database.user.findUnique({ where: { id: coach.id } })).toBeNull();
+    expect(await database.trainerPayoutRule.count({ where: { trainerId: coach.id } })).toBe(0);
+    expect(await database.payrollAccrual.count({ where: { coachId: coach.id } })).toBe(0);
+    expect(await database.lesson.findUnique({ where: { id: lesson.id } })).toEqual(
+      expect.objectContaining({ coachId: null }),
+    );
+    expect(await database.danceGroup.findUnique({ where: { id: group.id } })).toEqual(
+      expect.objectContaining({ coachId: null }),
+    );
+  });
+
+  it('rolls the entire permanent deletion back on a database error', async () => {
+    const { student } = await foundation();
+    await application.archiveStudent(ownerToken, student.id);
+    await database.$executeRawUnsafe(`
+      CREATE TRIGGER fail_student_delete
+      BEFORE DELETE ON Student
+      WHEN OLD.id = '${student.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced rollback');
+      END;
+    `);
+    await expect(
+      archive.deletePermanently(ownerToken, 'STUDENT', student.id, {
+        confirmationName: `${student.lastName} ${student.firstName}`,
+      }),
+    ).rejects.toThrow();
+    expect(await database.student.findUnique({ where: { id: student.id } })).not.toBeNull();
+    expect(await database.enrollment.count({ where: { studentId: student.id } })).toBe(1);
+    expect(
+      await database.auditLog.count({
+        where: { action: 'STUDENT_PERMANENTLY_DELETED', entityId: student.id },
+      }),
+    ).toBe(0);
+  });
+
+  it('keeps archive non-destructive and restricts permanent deletion to OWNER', async () => {
+    const { branch, student } = await foundation();
+    await application.archiveStudent(ownerToken, student.id);
+    expect(await database.enrollment.count({ where: { studentId: student.id } })).toBe(1);
+    const admin = await application.createUser(ownerToken, {
+      branchIds: [branch.id],
+      email: 'archive-admin@arava.local',
+      fullName: 'Администратор архива',
+      password: 'Admin!Archive61',
+      role: 'ADMIN',
+    });
+    const adminSession = await application.login({
+      email: admin.email,
+      password: 'Admin!Archive61',
+    });
+    await application.changePassword(adminSession.token, {
+      currentPassword: 'Admin!Archive61',
+      newPassword: 'Admin!ArchiveChanged61',
+    });
+    await expect(
+      archive.previewPermanentlyDelete(adminSession.token, 'STUDENT', student.id),
+    ).rejects.toThrow('только владельцу');
+    expect(await database.student.findUnique({ where: { id: student.id } })).not.toBeNull();
   });
 });

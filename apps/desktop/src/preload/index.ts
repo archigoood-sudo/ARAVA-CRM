@@ -24,10 +24,10 @@ const invoke = async <Result>(channel: string, ...arguments_: unknown[]): Promis
 
 const desktopApi: AravaDesktopApi = {
   archive: {
-    deletePermanently: async (token, type, id) => {
-      await invoke(IPC_CHANNELS.archiveDelete, token, type, id);
-    },
+    deletePermanently: (token, type, id, input) =>
+      invoke(IPC_CHANNELS.archiveDelete, token, type, id, input),
     list: (token, query) => invoke(IPC_CHANNELS.archiveList, token, query),
+    previewDelete: (token, type, id) => invoke(IPC_CHANNELS.archivePreviewDelete, token, type, id),
     restore: async (token, type, id) => {
       await invoke(IPC_CHANNELS.archiveRestore, token, type, id);
     },

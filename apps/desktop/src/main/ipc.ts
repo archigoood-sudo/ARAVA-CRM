@@ -28,6 +28,7 @@ import {
 import {
   IPC_CHANNELS,
   ARCHIVE_ENTITY_TYPES,
+  archiveDeleteInputSchema,
   archiveQuerySchema,
   attendanceEntryInputSchema,
   attendanceEntriesSchema,
@@ -349,15 +350,34 @@ export function createIpcHandlers(
     };
   };
   return {
-    [IPC_CHANNELS.archiveDelete]: async (unsafeToken, unsafeType, unsafeId) => {
-      await archive.deletePermanently(
+    [IPC_CHANNELS.archiveDelete]: async (unsafeToken, unsafeType, unsafeId, unsafeInput) => {
+      const result = await archive.deletePermanently(
         sessionTokenSchema.parse(unsafeToken),
         z.enum(ARCHIVE_ENTITY_TYPES).parse(unsafeType),
         identifierSchema.parse(unsafeId),
+        archiveDeleteInputSchema.parse(unsafeInput),
       );
+      await Promise.allSettled([
+        ...result.documentMediaIds
+          .filter((mediaId) => /^[\da-f-]+\.(?:pdf|jpe?g|png)$/iu.test(mediaId))
+          .map((mediaId) => rm(join(documentMediaDirectory, mediaId), { force: true })),
+        ...result.expenseMediaReferences
+          .filter((reference) => expenseAttachments.isManaged(reference))
+          .map((reference) => rm(expenseAttachments.resolve(reference), { force: true })),
+        ...result.publicationMediaPaths
+          .filter((path) => dirname(path) === publicationMediaDirectory)
+          .map((path) => rm(path, { force: true })),
+      ]);
+      return { deleted: result.deleted, entityId: result.entityId, type: result.type };
     },
     [IPC_CHANNELS.archiveList]: (unsafeToken, unsafeQuery) =>
       archive.list(sessionTokenSchema.parse(unsafeToken), archiveQuerySchema.parse(unsafeQuery)),
+    [IPC_CHANNELS.archivePreviewDelete]: (unsafeToken, unsafeType, unsafeId) =>
+      archive.previewPermanentlyDelete(
+        sessionTokenSchema.parse(unsafeToken),
+        z.enum(ARCHIVE_ENTITY_TYPES).parse(unsafeType),
+        identifierSchema.parse(unsafeId),
+      ),
     [IPC_CHANNELS.archiveRestore]: async (unsafeToken, unsafeType, unsafeId) => {
       await archive.restore(
         sessionTokenSchema.parse(unsafeToken),

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -49,6 +49,8 @@ import {
   type BackupRestoreSelection,
   type BackupStatus,
   type BrandingLogo,
+  type ArchiveDeletePreview,
+  type ArchiveDeleteResult,
   type TrialAppointmentSummary,
 } from '@arava/shared';
 
@@ -1251,6 +1253,89 @@ describe('Electron IPC boundary', () => {
     });
     await handlers[IPC_CHANNELS.expenseAttachmentOpen]?.(owner.token, expense.id);
     expect(opened.at(-1)).toBe(historical);
+  });
+
+  it('previews permanent deletion without paths and removes only unreferenced document media', async () => {
+    const owner = await service.login({
+      email: INITIAL_OWNER_EMAIL,
+      password: INITIAL_OWNER_PASSWORD,
+    });
+    await service.changePassword(owner.token, {
+      currentPassword: INITIAL_OWNER_PASSWORD,
+      newPassword: 'Owner!ArchiveMedia2026',
+    });
+    const branch = await service.createBranch(owner.token, { name: 'Архив media' });
+    const deletedStudent = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Иван',
+      lastName: 'Удаляемый',
+      status: 'ACTIVE',
+    });
+    const retainedStudent = await service.createStudent(owner.token, {
+      branchId: branch.id,
+      firstName: 'Лев',
+      lastName: 'Сохранённый',
+      status: 'ACTIVE',
+    });
+    const privateMediaId = '33333333-3333-3333-3333-333333333333.pdf';
+    const sharedMediaId = '44444444-4444-4444-4444-444444444444.pdf';
+    const mediaDirectory = join(directory, 'media', 'documents');
+    await mkdir(mediaDirectory, { recursive: true });
+    await writeFile(join(mediaDirectory, privateMediaId), 'private');
+    await writeFile(join(mediaDirectory, sharedMediaId), 'shared');
+    await database.studentDocument.createMany({
+      data: [
+        {
+          attachmentFileName: 'private.pdf',
+          attachmentMediaId: privateMediaId,
+          attachmentMimeType: 'application/pdf',
+          documentDate: new Date(),
+          documentType: 'CONTRACT',
+          source: 'EXISTING',
+          status: 'SIGNED',
+          studentId: deletedStudent.id,
+        },
+        {
+          attachmentFileName: 'shared.pdf',
+          attachmentMediaId: sharedMediaId,
+          attachmentMimeType: 'application/pdf',
+          documentDate: new Date(),
+          documentType: 'MEDIA_CONSENT',
+          source: 'EXISTING',
+          status: 'SIGNED',
+          studentId: deletedStudent.id,
+        },
+        {
+          attachmentFileName: 'shared.pdf',
+          attachmentMediaId: sharedMediaId,
+          attachmentMimeType: 'application/pdf',
+          documentDate: new Date(),
+          documentType: 'MEDIA_CONSENT',
+          source: 'EXISTING',
+          status: 'SIGNED',
+          studentId: retainedStudent.id,
+        },
+      ],
+    });
+    await service.archiveStudent(owner.token, deletedStudent.id);
+    const handlers = createIpcHandlers(database, service, join(directory, 'ipc.db'));
+    const preview = (await handlers[IPC_CHANNELS.archivePreviewDelete]?.(
+      owner.token,
+      'STUDENT',
+      deletedStudent.id,
+    )) as ArchiveDeletePreview;
+    expect(preview.name).toBe('Удаляемый Иван');
+    expect(preview).not.toHaveProperty('documentMediaIds');
+    const result = (await handlers[IPC_CHANNELS.archiveDelete]?.(
+      owner.token,
+      'STUDENT',
+      deletedStudent.id,
+      { confirmationName: preview.name },
+    )) as ArchiveDeleteResult;
+    expect(result.deleted).toContainEqual({ count: 2, key: 'documents', label: 'Документы' });
+    await expect(access(join(mediaDirectory, privateMediaId))).rejects.toThrow();
+    await expect(access(join(mediaDirectory, sharedMediaId))).resolves.toBeUndefined();
+    expect(result).not.toHaveProperty('documentMediaIds');
   });
 
   it('validates and executes global search through the typed IPC boundary', async () => {
