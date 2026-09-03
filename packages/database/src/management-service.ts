@@ -33,9 +33,12 @@ import type {
   ReportQuery,
 } from '@arava/shared';
 import type { Prisma } from '@prisma/client';
+import { createHash } from 'node:crypto';
 
 import type { DatabaseClient } from './index';
+import { LessonOccurrenceService } from './lesson-occurrence-service';
 import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
+import { endOfLocalDay, startOfLocalDay } from './schedule';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
 
@@ -87,11 +90,18 @@ function requireResult<Result>(value: Result | undefined, message: string): Resu
 }
 
 function dateOnly(value: string): Date {
-  return new Date(`${value}T00:00:00.000Z`);
+  return startOfLocalDay(new Date(`${value}T12:00:00`));
 }
 
 function endDate(value: string): Date {
-  return new Date(`${value}T23:59:59.999Z`);
+  return endOfLocalDay(new Date(`${value}T12:00:00`));
+}
+
+function localDateValue(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${String(year)}-${month}-${day}`;
 }
 
 function dateRangeScope(dateFrom: string, dateTo: string) {
@@ -145,8 +155,8 @@ function ruleSummary(rule: PayrollRuleRecord): PayrollRuleSummary {
     percent: rule.percent ?? undefined,
     type: rule.type,
     updatedAt: rule.updatedAt.toISOString(),
-    validFrom: rule.validFrom.toISOString().slice(0, 10),
-    validTo: rule.validTo?.toISOString().slice(0, 10),
+    validFrom: localDateValue(rule.validFrom),
+    validTo: rule.validTo ? localDateValue(rule.validTo) : undefined,
   };
 }
 
@@ -185,8 +195,8 @@ function periodSummary(period: PayrollPeriodRecord): PayrollPeriodSummary {
     branchId: period.branchId ?? undefined,
     createdAt: period.createdAt.toISOString(),
     createdByName: period.createdByUser.fullName,
-    dateFrom: period.dateFrom.toISOString().slice(0, 10),
-    dateTo: period.dateTo.toISOString().slice(0, 10),
+    dateFrom: localDateValue(period.dateFrom),
+    dateTo: localDateValue(period.dateTo),
     id: period.id,
     status: period.status,
     totalAmount: period.accruals.reduce((sum, accrual) => sum + accrual.finalAmount, 0),
@@ -727,7 +737,7 @@ export class ManagementService {
       amount: rule.amount ?? undefined,
       category: rule.category,
       createdAt: rule.createdAt.toISOString(),
-      effectiveFrom: rule.effectiveFrom.toISOString().slice(0, 10),
+      effectiveFrom: localDateValue(rule.effectiveFrom),
       id: rule.id,
       mode: rule.mode ?? undefined,
       percentage:
@@ -770,7 +780,7 @@ export class ManagementService {
       new Set(input.rules.map(({ category }) => category)).size !== PAYOUT_CATEGORIES.length
     )
       throw new DomainError('VALIDATION', 'Укажите правило для каждой категории.');
-    const effectiveFrom = new Date(`${input.effectiveFrom}T00:00:00`);
+    const effectiveFrom = dateOnly(input.effectiveFrom);
     if (Number.isNaN(effectiveFrom.getTime()))
       throw new DomainError('VALIDATION', 'Укажите корректную дату начала действия.');
     for (const rule of input.rules) this.assertTrainerPayoutRule(rule);
@@ -901,7 +911,7 @@ export class ManagementService {
     assertPermission(actor, 'payroll:read');
     const period = await this.requirePayrollPeriod(id);
     if (period.branchId) assertBranchAccess(actor, period.branchId);
-    const pendingAttendance = await this.pendingPayrollAttendance(period);
+    const pendingAttendance = await this.pendingPayrollAttendance(period, actor);
     if (
       actor.role === 'COACH' &&
       !period.accruals.some(({ coachId }) => coachId === actor.id) &&
@@ -936,10 +946,21 @@ export class ManagementService {
       where: {
         ...(period.branchId ? { branchId: period.branchId } : {}),
         startsAt: { gte: period.dateFrom, lte: period.dateTo },
-        status: 'COMPLETED',
+        attendanceCompletedAt: { not: null },
+        status: { not: 'CANCELLED' },
+        OR: [{ status: 'COMPLETED' }, { endsAt: { lte: new Date() } }],
       },
     });
-    const coachIds = [...new Set(lessons.flatMap(({ coachId }) => (coachId ? [coachId] : [])))];
+    const actualTrainerId = (lesson: (typeof lessons)[number]) =>
+      lesson.substitution?.substituteTrainerId ?? lesson.coachId;
+    const coachIds = [
+      ...new Set(
+        lessons.flatMap((lesson) => {
+          const trainerId = actualTrainerId(lesson);
+          return trainerId ? [trainerId] : [];
+        }),
+      ),
+    ];
     const [rules, payoutRules] = await Promise.all([
       this.database.payrollRule.findMany({
         where: {
@@ -957,10 +978,13 @@ export class ManagementService {
     ]);
     const accruals: Prisma.PayrollAccrualCreateManyInput[] = [];
     for (const lesson of lessons) {
-      if (!lesson.coachId) continue;
-      if (!lesson.attendanceCompletedAt) continue;
-      const trainerPolicies = payoutRules.filter(({ trainerId }) => trainerId === lesson.coachId);
-      if (trainerPolicies.length > 0) {
+      const trainerId = actualTrainerId(lesson);
+      if (!trainerId || !lesson.attendanceCompletedAt) continue;
+      const trainerPolicies = payoutRules.filter(({ trainerId: id }) => id === trainerId);
+      const hasEffectiveProfile = trainerPolicies.some(
+        ({ effectiveFrom }) => effectiveFrom <= lesson.startsAt,
+      );
+      if (hasEffectiveProfile) {
         const effectiveRule = (category: PayoutCategory) =>
           trainerPolicies.find(
             (rule) => rule.category === category && rule.effectiveFrom <= lesson.startsAt,
@@ -977,7 +1001,7 @@ export class ManagementService {
           ),
         );
         const eligible = lesson.attendance.filter(
-          ({ status }) => status === 'PRESENT' || status === 'TRIAL',
+          ({ status }) => status === 'PRESENT' || status === 'LATE' || status === 'TRIAL',
         );
         const categorized = new Map<PayoutCategory, string[]>();
         for (const attendance of eligible) {
@@ -1014,7 +1038,7 @@ export class ManagementService {
             baseAmount: rule?.amount ?? 0,
             branchId: lesson.branchId,
             calculatedAmount,
-            coachId: lesson.coachId,
+            coachId: trainerId,
             finalAmount: calculatedAmount,
             groupId: lesson.groupId,
             lessonId: lesson.id,
@@ -1034,7 +1058,7 @@ export class ManagementService {
       const rule = rules
         .filter(
           (item) =>
-            item.coachId === lesson.coachId &&
+            item.coachId === trainerId &&
             item.branchId === lesson.branchId &&
             (!item.groupId || item.groupId === lesson.groupId) &&
             item.validFrom <= lesson.startsAt &&
@@ -1042,7 +1066,9 @@ export class ManagementService {
         )
         .sort((a, b) => Number(Boolean(b.groupId)) - Number(Boolean(a.groupId)))[0];
       if (!rule || rule.type === 'FIXED_MONTHLY') continue;
-      const attendeeCount = lesson.attendance.filter(({ status }) => status === 'PRESENT').length;
+      const attendeeCount = lesson.attendance.filter(
+        ({ status }) => status === 'PRESENT' || status === 'LATE',
+      ).length;
       const revenueBase =
         rule.type === 'PERCENT_OF_REVENUE' ? await this.lessonRevenueBase(lesson.id) : null;
       const calculatedAmount = this.calculateAccrual(rule, attendeeCount, revenueBase ?? 0);
@@ -1051,7 +1077,7 @@ export class ManagementService {
         attendeeCount,
         branchId: lesson.branchId,
         calculatedAmount,
-        coachId: lesson.coachId,
+        coachId: trainerId,
         finalAmount: calculatedAmount,
         groupId: lesson.groupId,
         lessonId: lesson.id,
@@ -1060,7 +1086,11 @@ export class ManagementService {
         type: rule.type,
       });
     }
-    const trainersWithProfiles = new Set(payoutRules.map(({ trainerId }) => trainerId));
+    const trainersWithProfiles = new Set(
+      payoutRules
+        .filter(({ effectiveFrom }) => effectiveFrom <= period.dateTo)
+        .map(({ trainerId }) => trainerId),
+    );
     for (const rule of rules.filter(
       ({ coachId, type }) => type === 'FIXED_MONTHLY' && !trainersWithProfiles.has(coachId),
     )) {
@@ -1077,12 +1107,14 @@ export class ManagementService {
         type: rule.type,
       });
     }
+    const calculationFingerprint = await this.payrollCalculationFingerprint(period);
     await this.database.$transaction(async (transaction) => {
       await transaction.payrollAccrual.deleteMany({ where: { payrollPeriodId: id } });
       if (accruals.length) await transaction.payrollAccrual.createMany({ data: accruals });
       await transaction.payrollPeriod.update({ data: { status: 'CALCULATED' }, where: { id } });
       await this.audit(transaction, actor.id, 'PAYROLL_CALCULATED', 'PayrollPeriod', id, {
         accrualCount: accruals.length,
+        calculationFingerprint,
       });
     });
     return this.getPayrollPeriod(token, id);
@@ -1120,7 +1152,23 @@ export class ManagementService {
     const period = await this.requirePayrollPeriod(id);
     if (period.status !== 'CALCULATED')
       throw new DomainError('VALIDATION', 'Сначала выполните расчёт зарплаты.');
-    if ((await this.pendingPayrollAttendance(period)).length > 0)
+    const calculationAudit = await this.database.auditLog.findFirst({
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      where: { action: 'PAYROLL_CALCULATED', entityId: id, entityType: 'PayrollPeriod' },
+    });
+    const calculatedFingerprint = calculationAudit?.detail
+      ? (JSON.parse(calculationAudit.detail) as { calculationFingerprint?: string })
+          .calculationFingerprint
+      : undefined;
+    if (
+      !calculatedFingerprint ||
+      calculatedFingerprint !== (await this.payrollCalculationFingerprint(period))
+    )
+      throw new DomainError(
+        'CONFLICT',
+        'Расчёт устарел после изменения занятий, посещаемости или правил. Рассчитайте период заново.',
+      );
+    if ((await this.pendingPayrollAttendance(period, actor)).length > 0)
       throw new DomainError(
         'VALIDATION',
         'Посещаемость заполнена не для всех занятий — расчёт нельзя утвердить.',
@@ -1214,8 +1262,8 @@ export class ManagementService {
       where: {
         ...(actor.role === 'COACH' ? { coachId: actor.id } : {}),
         payrollPeriod: {
-          dateFrom: { gte: dateOnly(dateFrom) },
-          dateTo: { lte: endDate(dateTo) },
+          dateFrom: { lte: endDate(dateTo) },
+          dateTo: { gte: dateOnly(dateFrom) },
           status: { in: ['CALCULATED', 'APPROVED', 'PAID'] },
         },
       },
@@ -1546,22 +1594,44 @@ export class ManagementService {
 
   private async pendingPayrollAttendance(
     period: PayrollPeriodRecord,
+    actor: AuthenticatedUser,
   ): Promise<PayrollPendingLessonSummary[]> {
     if (period.status === 'APPROVED' || period.status === 'PAID') return [];
-    const [lessons, rules, payoutRules] = await Promise.all([
+    const occurrenceService = new LessonOccurrenceService(this.database);
+    const occurrences = [];
+    for (
+      const day = new Date(period.dateFrom);
+      day <= period.dateTo;
+      day.setDate(day.getDate() + 1)
+    ) {
+      occurrences.push(...(await occurrenceService.resolveDay(actor, day)));
+    }
+    const inScope = occurrences.filter(
+      ({ branchId, endsAt }) =>
+        (!period.branchId || branchId === period.branchId) && endsAt <= new Date(),
+    );
+    const lessonIds = inScope.flatMap(({ lessonId }) => (lessonId ? [lessonId] : []));
+    const scheduleIds = inScope.flatMap(({ scheduleTemplateId }) =>
+      scheduleTemplateId ? [scheduleTemplateId] : [],
+    );
+    const groupIds = [...new Set(inScope.map(({ groupId }) => groupId))];
+    const [lessons, schedules, groups, branches, coaches, rules, payoutRules] = await Promise.all([
       this.database.lesson.findMany({
-        include: {
-          branch: { select: { name: true } },
-          coach: { select: { fullName: true } },
-          group: { select: { name: true } },
-        },
-        where: {
-          ...(period.branchId ? { branchId: period.branchId } : {}),
-          attendanceCompletedAt: null,
-          coachId: { not: null },
-          startsAt: { gte: period.dateFrom, lte: period.dateTo },
-          status: 'COMPLETED',
-        },
+        include: { substitution: true },
+        where: { id: { in: lessonIds } },
+      }),
+      this.database.weeklySchedule.findMany({ where: { id: { in: scheduleIds } } }),
+      this.database.danceGroup.findMany({
+        select: { coachId: true, id: true, name: true },
+        where: { id: { in: groupIds } },
+      }),
+      this.database.branch.findMany({
+        select: { id: true, name: true },
+        where: { id: { in: [...new Set(inScope.map(({ branchId }) => branchId))] } },
+      }),
+      this.database.user.findMany({
+        select: { fullName: true, id: true },
+        where: { role: 'COACH' },
       }),
       this.database.payrollRule.findMany({
         where: {
@@ -1572,35 +1642,56 @@ export class ManagementService {
         },
       }),
       this.database.trainerPayoutRule.findMany({
-        select: { trainerId: true },
+        select: { effectiveFrom: true, trainerId: true },
         where: { effectiveFrom: { lte: period.dateTo } },
       }),
     ]);
-    return lessons.flatMap((lesson) => {
-      if (!lesson.coachId || !lesson.coach) return [];
-      const hasPayoutProfile = payoutRules.some(({ trainerId }) => trainerId === lesson.coachId);
+    const lessonById = new Map(lessons.map((lesson) => [lesson.id, lesson]));
+    const scheduleById = new Map(schedules.map((schedule) => [schedule.id, schedule]));
+    const groupById = new Map(groups.map((group) => [group.id, group]));
+    const branchById = new Map(branches.map((branch) => [branch.id, branch]));
+    const coachById = new Map(coaches.map((coach) => [coach.id, coach]));
+    return inScope.flatMap((occurrence) => {
+      const lesson = occurrence.lessonId ? lessonById.get(occurrence.lessonId) : undefined;
+      if (lesson?.attendanceCompletedAt) return [];
+      const schedule = occurrence.scheduleTemplateId
+        ? scheduleById.get(occurrence.scheduleTemplateId)
+        : undefined;
+      const group = groupById.get(occurrence.groupId);
+      const coachId =
+        lesson?.substitution?.substituteTrainerId ??
+        lesson?.coachId ??
+        schedule?.coachId ??
+        group?.coachId;
+      const coach = coachId ? coachById.get(coachId) : undefined;
+      if (!coachId || !coach || !group) return [];
+      const hasPayoutProfile = payoutRules.some(
+        ({ effectiveFrom, trainerId }) =>
+          trainerId === coachId && effectiveFrom <= occurrence.startsAt,
+      );
       const rule = rules
         .filter(
           (item) =>
             item.type !== 'FIXED_MONTHLY' &&
-            item.coachId === lesson.coachId &&
-            item.branchId === lesson.branchId &&
-            (!item.groupId || item.groupId === lesson.groupId) &&
-            item.validFrom <= lesson.startsAt &&
-            (!item.validTo || item.validTo >= lesson.startsAt),
+            item.coachId === coachId &&
+            item.branchId === occurrence.branchId &&
+            (!item.groupId || item.groupId === occurrence.groupId) &&
+            item.validFrom <= occurrence.startsAt &&
+            (!item.validTo || item.validTo >= occurrence.startsAt),
         )
         .sort((a, b) => Number(Boolean(b.groupId)) - Number(Boolean(a.groupId)))[0];
       if (!rule && !hasPayoutProfile) return [];
       return [
         {
-          branchId: lesson.branchId,
-          branchName: lesson.branch.name,
-          coachId: lesson.coachId,
-          coachName: lesson.coach.fullName,
-          groupId: lesson.groupId,
-          groupName: lesson.group.name,
-          lessonId: lesson.id,
-          startsAt: lesson.startsAt.toISOString(),
+          branchId: occurrence.branchId,
+          branchName: branchById.get(occurrence.branchId)?.name ?? 'Филиал',
+          coachId,
+          coachName: coach.fullName,
+          groupId: occurrence.groupId,
+          groupName: group.name,
+          ...(occurrence.lessonId ? { lessonId: occurrence.lessonId } : {}),
+          occurrenceKey: `${occurrence.groupId}:${String(occurrence.startsAt.getTime())}`,
+          startsAt: occurrence.startsAt.toISOString(),
         },
       ];
     });
@@ -1649,6 +1740,95 @@ export class ManagementService {
         0,
       )
     );
+  }
+
+  private async payrollCalculationFingerprint(period: PayrollPeriodRecord): Promise<string> {
+    const lessonWhere: Prisma.LessonWhereInput = {
+      ...(period.branchId ? { branchId: period.branchId } : {}),
+      startsAt: { gte: period.dateFrom, lte: period.dateTo },
+    };
+    const lessons = await this.database.lesson.findMany({
+      include: {
+        attendance: { orderBy: { studentId: 'asc' } },
+        substitution: true,
+      },
+      orderBy: { id: 'asc' },
+      where: lessonWhere,
+    });
+    const lessonIds = lessons.map(({ id }) => id);
+    const [legacyRules, payoutRules, schedules, exceptions, closures, ledger, payments] =
+      await Promise.all([
+        this.database.payrollRule.findMany({
+          orderBy: { id: 'asc' },
+          where: {
+            ...(period.branchId ? { branchId: period.branchId } : {}),
+            validFrom: { lte: period.dateTo },
+            OR: [{ validTo: null }, { validTo: { gte: period.dateFrom } }],
+          },
+        }),
+        this.database.trainerPayoutRule.findMany({
+          orderBy: { id: 'asc' },
+          where: { effectiveFrom: { lte: period.dateTo } },
+        }),
+        this.database.weeklySchedule.findMany({
+          orderBy: { id: 'asc' },
+          where: {
+            ...(period.branchId ? { branchId: period.branchId } : {}),
+            validFrom: { lte: period.dateTo },
+            OR: [{ validTo: null }, { validTo: { gte: period.dateFrom } }],
+          },
+        }),
+        this.database.calendarException.findMany({
+          orderBy: { id: 'asc' },
+          where: {
+            ...(period.branchId ? { OR: [{ branchId: null }, { branchId: period.branchId }] } : {}),
+            endAt: { gte: period.dateFrom },
+            startAt: { lte: period.dateTo },
+          },
+        }),
+        this.database.roomClosure.findMany({
+          orderBy: { id: 'asc' },
+          where: { endAt: { gte: period.dateFrom }, startAt: { lte: period.dateTo } },
+        }),
+        this.database.subscriptionLedger.findMany({
+          orderBy: { id: 'asc' },
+          where: { lessonId: { in: lessonIds } },
+        }),
+        this.database.payment.findMany({
+          include: { refunds: { orderBy: { id: 'asc' } } },
+          orderBy: { id: 'asc' },
+          where: { attendanceLessonId: { in: lessonIds } },
+        }),
+      ]);
+    const scheduleGroups = await this.database.danceGroup.findMany({
+      select: { coachId: true, id: true },
+      where: { id: { in: schedules.map(({ groupId }) => groupId) } },
+    });
+    const groupCoachById = new Map(scheduleGroups.map((group) => [group.id, group.coachId]));
+    const relevantTrainerIds = new Set([
+      ...lessons.flatMap((lesson) => {
+        const trainerId = lesson.substitution?.substituteTrainerId ?? lesson.coachId;
+        return trainerId ? [trainerId] : [];
+      }),
+      ...schedules.flatMap((schedule) => {
+        const trainerId = schedule.coachId ?? groupCoachById.get(schedule.groupId);
+        return trainerId ? [trainerId] : [];
+      }),
+    ]);
+    return createHash('sha256')
+      .update(
+        JSON.stringify({
+          closures,
+          exceptions,
+          ledger,
+          legacyRules: legacyRules.filter(({ coachId }) => relevantTrainerIds.has(coachId)),
+          lessons,
+          payments,
+          payoutRules: payoutRules.filter(({ trainerId }) => relevantTrainerIds.has(trainerId)),
+          schedules,
+        }),
+      )
+      .digest('hex');
   }
 
   private async analyticsPeriod(

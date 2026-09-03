@@ -1403,8 +1403,13 @@ export class StudioService {
       where: { groupId: schedule.groupId, originalStartsAt: startsAt },
     });
     if (rescheduled) return { created: false, lesson: rescheduled };
+    const group = await this.database.danceGroup.findUnique({
+      select: { coachId: true },
+      where: { id: schedule.groupId },
+    });
+    const coachId = schedule.coachId ?? group?.coachId ?? null;
     await this.calendar.assertEventAvailable({
-      ...(schedule.coachId ? { coachId: schedule.coachId } : {}),
+      ...(coachId ? { coachId } : {}),
       endAt: endsAt,
       groupId: schedule.groupId,
       ...(schedule.roomId ? { roomId: schedule.roomId } : {}),
@@ -1414,7 +1419,7 @@ export class StudioService {
       const lesson = await this.database.lesson.create({
         data: {
           branchId: schedule.branchId,
-          coachId: schedule.coachId,
+          coachId,
           endsAt,
           groupId: schedule.groupId,
           room: schedule.room,

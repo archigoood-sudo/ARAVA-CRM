@@ -1792,7 +1792,8 @@ export interface PayrollPendingLessonSummary {
   coachName: string;
   groupId: string;
   groupName: string;
-  lessonId: string;
+  lessonId?: string | undefined;
+  occurrenceKey: string;
   startsAt: string;
 }
 

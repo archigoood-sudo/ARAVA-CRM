@@ -51,6 +51,7 @@ test('профиль тренера открывается из сотрудни
         role: 'COACH',
       });
       return {
+        branchId: branch.id,
         temporaryPassword: trainerA.temporaryPassword,
         trainerA: trainerA.user,
         trainerB: trainerB.user,
@@ -71,14 +72,83 @@ test('профиль тренера открывается из сотрудни
     const payoutDialog = page.getByRole('dialog', { name: 'Выплаты тренеру' });
     await payoutDialog.getByLabel('Расчёт').first().selectOption('FIXED_PER_ATTENDANCE');
     await payoutDialog.getByLabel('Сумма, ₽').fill('150');
+    const payoutStart = new Date();
+    payoutStart.setDate(payoutStart.getDate() - 1);
+    await payoutDialog
+      .getByLabel('Дата начала действия')
+      .fill(
+        `${String(payoutStart.getFullYear())}-${String(payoutStart.getMonth() + 1).padStart(2, '0')}-${String(payoutStart.getDate()).padStart(2, '0')}`,
+      );
     await payoutDialog.getByRole('button', { name: 'Сохранить версию' }).click();
     await expect(page.getByText('Фиксировано за посещение')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Сбросить пароль' })).toBeVisible();
 
+    await page.evaluate(
+      async ({ branchId, trainerId }) => {
+        const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+          state?: { token?: string };
+        };
+        const token = persisted.state?.token ?? '';
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        const group = await api.groups.create(token, {
+          branchId,
+          capacity: 12,
+          coachId: trainerId,
+          direction: 'Расчётный лист',
+          name: 'Группа расчётного листа',
+          status: 'ACTIVE',
+        });
+        const student = await api.students.create(token, {
+          branchId,
+          firstName: 'Ученик',
+          lastName: 'Расчётного листа',
+          status: 'ACTIVE',
+        });
+        const now = new Date();
+        const localDay = `${String(now.getFullYear())}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        await api.groups.addEnrollment(token, group.id, {
+          joinedAt: localDay,
+          overrideCapacity: false,
+          status: 'ACTIVE',
+          studentId: student.id,
+        });
+        const startsAt = new Date(now.getTime() - 3 * 60 * 60_000);
+        const lesson = await api.lessons.create(token, {
+          coachId: trainerId,
+          endsAt: new Date(now.getTime() - 2 * 60 * 60_000).toISOString(),
+          groupId: group.id,
+          startsAt: startsAt.toISOString(),
+        });
+        await api.attendance.save(token, lesson.id, [{ status: 'PRESENT', studentId: student.id }]);
+        const period = await api.payroll.createPeriod(token, {
+          branchId,
+          dateFrom: localDay,
+          dateTo: localDay,
+        });
+        await api.payroll.calculatePeriod(token, period.id);
+      },
+      { branchId: created.branchId, trainerId: created.trainerA.id },
+    );
+    await page.evaluate(() => {
+      location.hash = '/payroll';
+    });
+    await page.getByRole('button').filter({ hasText: 'Рассчитан' }).first().click();
+    await page.getByRole('button', { name: /Расчётный лист · Алексей Профильный/u }).click();
+    const calculationSheet = page.getByRole('dialog', { name: 'Расчётный лист тренера' });
+    await expect(
+      calculationSheet.getByRole('heading', { name: 'Алексей Профильный' }),
+    ).toBeVisible();
+    await expect(calculationSheet.getByText('Группа расчётного листа')).toBeVisible();
+    await expect(calculationSheet.getByText('Начислено за период')).toBeVisible();
+    await expect(
+      calculationSheet.getByRole('button', { name: 'Печать / сохранить PDF' }),
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     const search = page.getByRole('region', { name: 'Глобальный поиск' });
     await search.getByLabel('Поиск по приложению').fill('Алексей Профильный');
-    await search.getByText('Алексей Профильный').click();
+    await search.getByRole('button', { name: /Алексей Профильный trainer-a-e2e/u }).click();
     await expect(page).toHaveURL(new RegExp(`/trainers/${created.trainerA.id}$`, 'u'));
 
     await page.getByLabel('Выйти', { exact: true }).click();

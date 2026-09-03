@@ -25,12 +25,13 @@ import {
   TableRow,
 } from '@arava/ui';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Calculator, Check, Clock3, CreditCard, Plus, UsersRound } from 'lucide-react';
-import { useState } from 'react';
+import { Calculator, Check, Clock3, CreditCard, Plus, Printer, UsersRound } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
+import { buildTrainerPayrollSheets } from './payroll-sheet';
 
 const payrollLabels: Record<PayrollType, string> = {
   COMBINED: 'Комбинированная',
@@ -85,6 +86,7 @@ export function PayrollPage() {
   const client = useQueryClient();
   const now = new Date();
   const [dialog, setDialog] = useState<'rule' | 'period'>();
+  const [sheetCoachId, setSheetCoachId] = useState<string>();
   const [error, setError] = useState<string>();
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>();
   const [branchId, setBranchId] = useState('');
@@ -134,9 +136,17 @@ export function PayrollPage() {
     queryFn: () => getDesktopApi().payroll.coachView(getSessionToken(), dateFrom, dateTo),
     queryKey: ['payroll-coach', dateFrom, dateTo],
   });
+  const trainerSheets = useMemo(() => {
+    return buildTrainerPayrollSheets(selected.data?.accruals ?? []);
+  }, [selected.data?.accruals]);
+  const sheetTrainer = trainerSheets.find(({ coachId }) => coachId === sheetCoachId);
+  const sheetAccruals = sheetTrainer?.rows ?? [];
   const refresh = async () => {
     await Promise.all([
-      client.invalidateQueries({ queryKey: ['payroll'] }),
+      client.invalidateQueries({ queryKey: ['payroll-period'] }),
+      client.invalidateQueries({ queryKey: ['payroll-periods'] }),
+      client.invalidateQueries({ queryKey: ['payroll-rules'] }),
+      client.invalidateQueries({ queryKey: ['payroll-coach'] }),
       client.invalidateQueries({ queryKey: ['expenses'] }),
       client.invalidateQueries({ queryKey: ['cash'] }),
     ]);
@@ -376,6 +386,20 @@ export function PayrollPage() {
                   ) : null}
                 </div>
               </div>
+              {trainerSheets.length ? (
+                <div className="flex flex-wrap gap-2 border-b border-border p-4">
+                  {trainerSheets.map((trainer) => (
+                    <Button
+                      key={trainer.coachId}
+                      onClick={() => setSheetCoachId(trainer.coachId)}
+                      size="small"
+                      variant="outline"
+                    >
+                      Расчётный лист · {trainer.coachName} · <Money amount={trainer.total} />
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -431,8 +455,12 @@ export function PayrollPage() {
                     {selected.data.pendingAttendance.map((lesson) => (
                       <Link
                         className="flex items-center justify-between rounded-xl border border-amber-200 bg-surface px-3 py-2 text-sm transition hover:border-amber-400 dark:border-amber-900"
-                        key={lesson.lessonId}
-                        to={`/attendance/${lesson.lessonId}`}
+                        key={lesson.occurrenceKey}
+                        to={
+                          lesson.lessonId
+                            ? `/attendance/${lesson.lessonId}`
+                            : `/attendance?date=${inputDate(new Date(lesson.startsAt))}&groupId=${lesson.groupId}`
+                        }
                       >
                         <span>
                           {formatDate(lesson.startsAt)} · {lesson.groupName}
@@ -605,6 +633,93 @@ export function PayrollPage() {
             Сохранить
           </Button>
         </div>
+      </Dialog>
+      <Dialog
+        closeLabel="Закрыть"
+        description="Детализация canonical начислений выбранного тренера. Утверждённые и выплаченные периоды остаются snapshot."
+        onClose={() => setSheetCoachId(undefined)}
+        open={Boolean(sheetCoachId && selected.data && sheetTrainer)}
+        title="Расчётный лист тренера"
+      >
+        {selected.data && sheetTrainer ? (
+          <section className="payroll-print-sheet space-y-4">
+            <header>
+              <p className="text-sm text-muted-foreground">ARAVA CRM · Расчётный лист</p>
+              <h2 className="text-xl font-semibold">{sheetTrainer.coachName}</h2>
+              <p>
+                {formatDate(selected.data.dateFrom)} — {formatDate(selected.data.dateTo)} ·{' '}
+                {periodLabels[selected.data.status]}
+              </p>
+            </header>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Дата и время</TableHead>
+                    <TableHead>Группа</TableHead>
+                    <TableHead>Категория</TableHead>
+                    <TableHead>Фактический тренер</TableHead>
+                    <TableHead>Посещения</TableHead>
+                    <TableHead>Правило / база</TableHead>
+                    <TableHead className="text-right">Начисление</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sheetAccruals.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>
+                        {item.lessonStartsAt
+                          ? formatDate(item.lessonStartsAt, {
+                              day: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric',
+                            })
+                          : 'За период'}
+                      </TableCell>
+                      <TableCell>{item.groupName ?? 'Все группы'}</TableCell>
+                      <TableCell>
+                        {item.payoutCategory
+                          ? payoutCategoryLabels[item.payoutCategory]
+                          : payrollLabels[item.type]}
+                      </TableCell>
+                      <TableCell>{item.coachName}</TableCell>
+                      <TableCell>{item.attendeeCount ?? '—'}</TableCell>
+                      <TableCell>
+                        {item.payoutMode
+                          ? payoutModeLabels[item.payoutMode]
+                          : item.payoutCategory
+                            ? 'Не настроено'
+                            : payrollLabels[item.type]}
+                        {item.payoutMode === 'FIXED_PER_ATTENDANCE' ||
+                        item.payoutMode === 'FIXED_PER_LESSON'
+                          ? ` · ${String((item.payoutAmount ?? 0) / 100)} ₽`
+                          : ''}
+                        {item.payoutMode === 'PERCENTAGE'
+                          ? ` · ${String(item.payoutPercentage ?? 0).replace('.', ',')}% от ${String((item.revenueBase ?? 0) / 100)} ₽`
+                          : ''}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Money amount={item.finalAmount} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <footer className="flex items-center justify-between border-t border-border pt-4 text-lg font-semibold">
+              <span>Начислено за период</span>
+              <Money amount={sheetTrainer.total} />
+            </footer>
+            <div className="payroll-print-controls flex justify-end">
+              <Button onClick={() => window.print()}>
+                <Printer className="size-4" />
+                Печать / сохранить PDF
+              </Button>
+            </div>
+          </section>
+        ) : null}
       </Dialog>
     </main>
   );

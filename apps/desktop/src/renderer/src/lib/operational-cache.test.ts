@@ -57,7 +57,10 @@ describe('operational cache invalidation', () => {
       ['groups', 'detail', 'group-1'],
       ['groups', 'roster', 'group-1'],
       ['trainers', 'profile', 'coach-1'],
-      ['payroll', 'period'],
+      ['payroll-period', 'period-1'],
+      ['payroll-periods'],
+      ['payroll-rules'],
+      ['payroll-coach', '2026-08-01', '2026-08-31'],
       ['dashboard', 'stats'],
       ['attention', 'summary'],
     ] as const;
@@ -65,7 +68,7 @@ describe('operational cache invalidation', () => {
 
     await invalidateAttendanceCaches(client);
 
-    for (const key of keys) expect(invalidated(client, key)).toBe(true);
+    for (const key of keys) expect(invalidated(client, key), JSON.stringify(key)).toBe(true);
   });
 
   it('refreshes every trial consumer after scheduling, cancellation, or an outcome', async () => {
@@ -101,7 +104,9 @@ describe('operational cache invalidation', () => {
       ['attendance', 'lesson-1'],
       ['groups', 'detail', 'group-1'],
       ['trainers', 'profile', 'coach-1'],
-      ['payroll', 'period'],
+      ['payroll-period', 'period-1'],
+      ['payroll-periods'],
+      ['payroll-coach', '2026-08-01', '2026-08-31'],
       ['dashboard', 'stats'],
     ] as const;
     const client = clientWith([...financeKeys, ...lessonKeys]);
@@ -110,7 +115,7 @@ describe('operational cache invalidation', () => {
     for (const key of financeKeys) expect(invalidated(client, key)).toBe(true);
 
     await invalidateLessonCaches(client);
-    for (const key of lessonKeys) expect(invalidated(client, key)).toBe(true);
+    for (const key of lessonKeys) expect(invalidated(client, key), JSON.stringify(key)).toBe(true);
   });
 
   it('refreshes the open workspace when canonical data arrives from another device', async () => {

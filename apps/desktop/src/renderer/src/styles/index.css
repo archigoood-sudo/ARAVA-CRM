@@ -88,7 +88,7 @@
     color: #111 !important;
   }
 
-  body > #root > * {
+  body > #root:has(.room-week-print-sheet) > * {
     display: none !important;
   }
 
@@ -199,5 +199,48 @@
     padding: 3mm 2mm;
     color: #777;
     font-size: 8pt;
+  }
+}
+
+@media print {
+  body:has(.payroll-print-sheet) * {
+    visibility: hidden !important;
+  }
+
+  body:has(.payroll-print-sheet) .payroll-print-sheet,
+  body:has(.payroll-print-sheet) .payroll-print-sheet * {
+    visibility: visible !important;
+  }
+
+  .payroll-print-sheet {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    background: white !important;
+    color: #111 !important;
+    font-family: Arial, sans-serif;
+    font-size: 8.5pt;
+  }
+
+  .payroll-print-sheet table {
+    width: 100%;
+    table-layout: auto;
+    border-collapse: collapse;
+  }
+
+  .payroll-print-sheet th,
+  .payroll-print-sheet td {
+    border: 1px solid #aaa;
+    padding: 1.8mm;
+    color: #111 !important;
+    white-space: normal;
+  }
+
+  .payroll-print-sheet tr {
+    break-inside: avoid;
+  }
+
+  .payroll-print-controls {
+    display: none !important;
   }
 }

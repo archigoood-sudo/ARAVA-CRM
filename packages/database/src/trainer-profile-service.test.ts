@@ -304,10 +304,10 @@ describe('Sprint 4.3D trainer profile', () => {
     expect(overview.schedule).toHaveLength(1);
     expect(overview.activity).toMatchObject({ conducted: 2, substitutionsConducted: 0 });
     expect(overview.attendance).toEqual({
-      averagePresent: 1,
+      averagePresent: 2,
       completedLessons: 1,
-      percentage: 33,
-      presentTotal: 1,
+      percentage: 67,
+      presentTotal: 2,
     });
     expect(overview.payroll).toMatchObject({
       accruedAmount: 10_000,

@@ -25,6 +25,10 @@ import { StudioService } from './studio-service';
 
 const DAY = 86_400_000;
 const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
+const inputDateForTest = (date: Date) =>
+  `${String(date.getFullYear())}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate(),
+  ).padStart(2, '0')}`;
 
 describe('Sprint 4 management service', () => {
   let application: ApplicationService;
@@ -403,6 +407,10 @@ describe('Sprint 4 management service', () => {
         substituteTrainerId: trainerB.id,
       },
     });
+    await database.lesson.update({
+      data: { coachId: trainerA.id },
+      where: { id: substituted.id },
+    });
     const fallbackSubstitution = await createCompleted(trainerA.id, 10, 'PRESENT');
     await database.trainerSubstitution.create({
       data: {
@@ -596,6 +604,185 @@ describe('Sprint 4 management service', () => {
     await expect(management.approvePayrollPeriod(ownerToken, period.id)).rejects.toThrow(
       'не настроены',
     );
+  });
+
+  it('resolves WeeklySchedule-only payroll pending, falls back to group coach, and pays past LATE attendance', async () => {
+    const { branch, coach, group } = await coachFoundation();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(12, 0, 0, 0);
+    const weekday = yesterday.getDay() === 0 ? 7 : yesterday.getDay();
+    const day = inputDateForTest(yesterday);
+    await management.saveTrainerPayoutProfile(ownerToken, {
+      effectiveFrom: day,
+      rules: payoutRules({
+        REGULAR_ATTENDANCE: { amount: 4_000, mode: 'FIXED_PER_LESSON' },
+      }),
+      trainerId: coach.id,
+    });
+    await studio.createSchedule(ownerToken, {
+      branchId: branch.id,
+      endTime: '11:00',
+      groupId: group.id,
+      isActive: true,
+      startTime: '10:00',
+      validFrom: day,
+      weekday,
+    });
+    const period = await management.createPayrollPeriod(ownerToken, {
+      branchId: branch.id,
+      dateFrom: day,
+      dateTo: day,
+    });
+    const pending = (await management.getPayrollPeriod(ownerToken, period.id)).pendingAttendance;
+    expect(pending).toEqual([expect.objectContaining({ coachId: coach.id, groupId: group.id })]);
+    expect(pending[0]?.lessonId).toBeUndefined();
+    const virtualOnly = await management.calculatePayrollPeriod(ownerToken, period.id);
+    expect(virtualOnly.accruals).toEqual([]);
+    expect(virtualOnly.pendingAttendance).toHaveLength(1);
+    const lesson = await studio.materializeLessonOccurrence(ownerToken, {
+      groupId: group.id,
+      startsAt: pending[0]?.startsAt ?? '',
+    });
+    expect(lesson.coachId).toBe(coach.id);
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Опоздавший',
+      lastName: 'Ученик',
+      status: 'ACTIVE',
+    });
+    await database.attendance.create({
+      data: {
+        lessonId: lesson.id,
+        markedAt: new Date(),
+        markedByUserId: ownerId,
+        status: 'LATE',
+        studentId: student.id,
+      },
+    });
+    await database.lesson.update({
+      data: { attendanceCompletedAt: new Date(), status: 'PLANNED' },
+      where: { id: lesson.id },
+    });
+    const calculated = await management.calculatePayrollPeriod(ownerToken, period.id);
+    expect(calculated.pendingAttendance).toEqual([]);
+    expect(calculated.accruals).toEqual([
+      expect.objectContaining({
+        attendeeCount: 1,
+        calculatedAmount: 4_000,
+        coachId: coach.id,
+        lessonId: lesson.id,
+      }),
+    ]);
+  });
+
+  it('uses legacy rules before the first payout-profile effective date and blocks stale approval', async () => {
+    const { branch, coach, group } = await coachFoundation();
+    const lessonDate = new Date();
+    lessonDate.setDate(lessonDate.getDate() - 2);
+    lessonDate.setHours(18, 0, 0, 0);
+    const future = new Date();
+    future.setDate(future.getDate() + 2);
+    await management.createPayrollRule(ownerToken, {
+      amountPerAttendee: 1_500,
+      branchId: branch.id,
+      coachId: coach.id,
+      groupId: group.id,
+      isActive: true,
+      type: 'PER_ATTENDEE',
+      validFrom: inputDateForTest(new Date(lessonDate.getTime() - DAY)),
+    });
+    await management.saveTrainerPayoutProfile(ownerToken, {
+      effectiveFrom: inputDateForTest(future),
+      rules: payoutRules({
+        REGULAR_ATTENDANCE: { amount: 9_000, mode: 'FIXED_PER_ATTENDANCE' },
+      }),
+      trainerId: coach.id,
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Исторический',
+      lastName: 'Ученик',
+      status: 'ACTIVE',
+    });
+    const lesson = await database.lesson.create({
+      data: {
+        attendanceCompletedAt: lessonDate,
+        branchId: branch.id,
+        coachId: coach.id,
+        endsAt: new Date(lessonDate.getTime() + 60 * 60_000),
+        groupId: group.id,
+        startsAt: lessonDate,
+        status: 'COMPLETED',
+      },
+    });
+    await database.attendance.create({
+      data: {
+        lessonId: lesson.id,
+        markedAt: lessonDate,
+        markedByUserId: ownerId,
+        status: 'PRESENT',
+        studentId: student.id,
+      },
+    });
+    const day = inputDateForTest(lessonDate);
+    const period = await management.createPayrollPeriod(ownerToken, {
+      branchId: branch.id,
+      dateFrom: day,
+      dateTo: day,
+    });
+    expect(await management.calculatePayrollPeriod(ownerToken, period.id)).toMatchObject({
+      totalAmount: 1_500,
+    });
+    await database.attendance.update({
+      data: { status: 'ABSENT' },
+      where: {
+        lessonId_studentId: { lessonId: lesson.id, studentId: student.id },
+      },
+    });
+    await expect(management.approvePayrollPeriod(ownerToken, period.id)).rejects.toThrow(
+      'Расчёт устарел',
+    );
+    expect((await management.calculatePayrollPeriod(ownerToken, period.id)).totalAmount).toBe(0);
+    expect((await management.approvePayrollPeriod(ownerToken, period.id)).status).toBe('APPROVED');
+  });
+
+  it('keeps payroll period dates local and returns accruals from intersecting periods', async () => {
+    const { branch, coach, group } = await coachFoundation();
+    const localStart = new Date();
+    localStart.setDate(localStart.getDate() - 3);
+    localStart.setHours(0, 30, 0, 0);
+    const day = inputDateForTest(localStart);
+    await management.createPayrollRule(ownerToken, {
+      branchId: branch.id,
+      coachId: coach.id,
+      fixedAmount: 2_500,
+      groupId: group.id,
+      isActive: true,
+      type: 'FIXED_PER_LESSON',
+      validFrom: day,
+    });
+    const lesson = await database.lesson.create({
+      data: {
+        attendanceCompletedAt: localStart,
+        branchId: branch.id,
+        coachId: coach.id,
+        endsAt: new Date(localStart.getTime() + 60 * 60_000),
+        groupId: group.id,
+        startsAt: localStart,
+        status: 'COMPLETED',
+      },
+    });
+    const period = await management.createPayrollPeriod(ownerToken, {
+      branchId: branch.id,
+      dateFrom: day,
+      dateTo: day,
+    });
+    expect(period).toMatchObject({ dateFrom: day, dateTo: day });
+    await management.calculatePayrollPeriod(ownerToken, period.id);
+    expect(await management.coachPayroll(ownerToken, day, day)).toEqual([
+      expect.objectContaining({ coachId: coach.id, lessonId: lesson.id }),
+    ]);
   });
 
   it('enforces branch and role permissions and exports UTF-8 Russian CSV', async () => {

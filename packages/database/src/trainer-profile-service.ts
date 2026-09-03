@@ -127,7 +127,11 @@ export class TrainerProfileService {
     const recentFrom = new Date(todayFrom);
     recentFrom.setDate(recentFrom.getDate() - 90);
     const relevantTrainer = {
-      OR: [{ coachId: trainerId }, { substitution: { is: { originalTrainerId: trainerId } } }],
+      OR: [
+        { coachId: trainerId },
+        { substitution: { is: { originalTrainerId: trainerId } } },
+        { substitution: { is: { substituteTrainerId: trainerId } } },
+      ],
     } satisfies Prisma.LessonWhereInput;
 
     const [
@@ -141,6 +145,7 @@ export class TrainerProfileService {
       accruals,
       payrollPeriods,
       payrollRules,
+      payoutRules,
     ] = await Promise.all([
       this.database.danceGroup.findMany({
         include: {
@@ -274,17 +279,23 @@ export class TrainerProfileService {
           OR: [{ validTo: null }, { validTo: { gte: from } }],
         },
       }),
+      this.database.trainerPayoutRule.findMany({
+        select: { effectiveFrom: true },
+        where: { effectiveFrom: { lt: to }, trainerId },
+      }),
     ]);
 
     const actualCompleted = periodLessons.filter(
       (lesson) =>
-        lesson.coachId === trainerId &&
-        lesson.status === 'COMPLETED' &&
+        (lesson.substitution?.substituteTrainerId ?? lesson.coachId) === trainerId &&
+        lesson.status !== 'CANCELLED' &&
         lesson.startsAt < new Date(),
     );
     const attendanceCompleted = actualCompleted.filter((lesson) => lesson.attendanceCompletedAt);
     const presentTotal = attendanceCompleted.reduce(
-      (sum, lesson) => sum + lesson.attendance.filter(({ status }) => status === 'PRESENT').length,
+      (sum, lesson) =>
+        sum +
+        lesson.attendance.filter(({ status }) => status === 'PRESENT' || status === 'LATE').length,
       0,
     );
     const attendanceTotal = attendanceCompleted.reduce(
@@ -300,13 +311,16 @@ export class TrainerProfileService {
           period.dateTo >= lesson.startsAt,
       );
       if (!mutablePeriod) return false;
-      return payrollRules.some(
-        (rule) =>
-          rule.type !== 'FIXED_MONTHLY' &&
-          rule.branchId === lesson.branchId &&
-          (!rule.groupId || rule.groupId === lesson.groupId) &&
-          rule.validFrom <= lesson.startsAt &&
-          (!rule.validTo || rule.validTo >= lesson.startsAt),
+      return (
+        payoutRules.some(({ effectiveFrom }) => effectiveFrom <= lesson.startsAt) ||
+        payrollRules.some(
+          (rule) =>
+            rule.type !== 'FIXED_MONTHLY' &&
+            rule.branchId === lesson.branchId &&
+            (!rule.groupId || rule.groupId === lesson.groupId) &&
+            rule.validFrom <= lesson.startsAt &&
+            (!rule.validTo || rule.validTo >= lesson.startsAt),
+        )
       );
     });
 
