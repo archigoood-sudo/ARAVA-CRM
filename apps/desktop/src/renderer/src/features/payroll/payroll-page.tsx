@@ -230,7 +230,7 @@ export function PayrollPage() {
       setDialog(undefined);
       if (result.status === 'EMPTY') setError('По периоду нет данных для диагностики.');
       else if (result.status === 'CANCELLED') setInfo('Сохранение диагностики отменено.');
-      else setInfo(`Диагностика сохранена: ${result.lessonCount} записей.`);
+      else setInfo(`Диагностика сохранена: ${String(result.lessonCount)} записей.`);
     } catch (caught) {
       setError(getErrorMessage(caught, 'Не удалось сохранить диагностику.'));
     }

@@ -97,7 +97,7 @@ type PayrollPeriodRecord = Prisma.PayrollPeriodGetPayload<{
 type PayrollDiagnosticOutputFormat = PayrollDiagnosticFormat;
 type PayrollDiagnosticRowStatus = 'INCLUDED' | 'MISSING' | 'ZERO' | 'WRONG_TRAINER';
 type PayrollOccurrenceSource = 'LESSON' | 'WEEKLY_SCHEDULE';
-type PayrollDiagnosticExpectation = {
+interface PayrollDiagnosticExpectation {
   payoutCategory: PayoutCategory;
   payoutMode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null;
   payoutAmount: number;
@@ -109,8 +109,8 @@ type PayrollDiagnosticExpectation = {
   expectedAmount: number;
   ruleLabel: string;
   trainerId: string;
-};
-type PayrollDiagnosticRow = {
+}
+interface PayrollDiagnosticRow {
   dateTime: Date;
   groupId: string;
   groupName: string;
@@ -131,8 +131,8 @@ type PayrollDiagnosticRow = {
   actualAccrual: number;
   status: PayrollDiagnosticRowStatus;
   reason: string;
-};
-type PayrollDiagnosticReport = {
+}
+interface PayrollDiagnosticReport {
   period: PayrollPeriodRecord;
   lessonRows: PayrollDiagnosticRow[];
   overlappingPeriodCount: number;
@@ -143,7 +143,7 @@ type PayrollDiagnosticReport = {
   lessonsWithoutActivePolicyCount: number;
   pastPlannedCount: number;
   staleSnapshot: boolean;
-};
+}
 type PayrollDiagnosticExportPayload = PayrollDiagnosticExportResult & {
   filename: string;
   content: string;
@@ -1485,7 +1485,7 @@ export class ManagementService {
             select: { id: true, coachId: true },
             where: { id: { in: scheduleTemplateIds } },
           })
-        : Promise.resolve([] as Array<{ id: string; coachId: string | null }>),
+        : Promise.resolve([] as { id: string; coachId: string | null }[]),
       groupIds.length
         ? this.database.danceGroup.findMany({
             select: {
@@ -1498,20 +1498,20 @@ export class ManagementService {
             where: { id: { in: groupIds } },
           })
         : Promise.resolve(
-            [] as Array<{
+            [] as {
               id: string;
               name: string;
               coachId: string | null;
               branchId: string;
               branch: { name: string };
-            }>,
+            }[],
           ),
       branchIds.length
         ? this.database.branch.findMany({
             where: { id: { in: branchIds } },
             select: { id: true, name: true },
           })
-        : Promise.resolve([] as Array<{ id: string; name: string }>),
+        : Promise.resolve([] as { id: string; name: string }[]),
       this.database.user.findMany({
         where: { role: 'COACH' },
         select: { id: true, fullName: true },
@@ -1539,16 +1539,16 @@ export class ManagementService {
     const branchById = new Map(branches.map((branch) => [branch.id, branch]));
     const coachById = new Map(users.map((coach) => [coach.id, coach]));
     const duplicateAccruals = period.accruals
-      .filter((accrual) => accrual.lessonId)
-      .map(
-        (accrual) =>
-          `${accrual.lessonId ?? ''}::${accrual.coachId ?? 'NO_TRAINER'}::${accrual.payoutCategory ?? 'NO_CATEGORY'}`,
+      .flatMap((accrual) =>
+        accrual.lessonId
+          ? [`${accrual.lessonId}::${accrual.coachId}::${accrual.payoutCategory ?? 'NO_CATEGORY'}`]
+          : [],
       )
       .reduce((acc, item) => {
         acc.set(item, (acc.get(item) ?? 0) + 1);
         return acc;
       }, new Map<string, number>());
-    const payrollAccrualsByLesson = new Map<string, Array<(typeof period.accruals)[number]>>();
+    const payrollAccrualsByLesson = new Map<string, (typeof period.accruals)[number][]>();
     for (const accrual of period.accruals) {
       if (!accrual.lessonId) continue;
       const rows = payrollAccrualsByLesson.get(accrual.lessonId) ?? [];
@@ -1567,8 +1567,12 @@ export class ManagementService {
     let staleSnapshot = false;
     if (calculationAudit?.detail) {
       try {
+        const parsed: unknown = JSON.parse(calculationAudit.detail);
         staleSnapshot =
-          JSON.parse(calculationAudit.detail).calculationFingerprint !== currentFingerprint;
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          !('calculationFingerprint' in parsed) ||
+          parsed.calculationFingerprint !== currentFingerprint;
       } catch {
         staleSnapshot = true;
       }
@@ -1616,7 +1620,7 @@ export class ManagementService {
 
   private collectDiagnosticRows(parameters: {
     period: PayrollPeriodRecord;
-    occurrences: Array<{
+    occurrences: {
       branchId: string;
       endsAt: Date;
       groupId: string;
@@ -1625,7 +1629,7 @@ export class ManagementService {
       source: 'LESSON' | 'WEEKLY_SCHEDULE';
       startsAt: Date;
       status?: string;
-    }>;
+    }[];
     lessonById: Map<string, PayrollDiagnosticLessonRecord>;
     scheduleById: Map<string, { coachId: string | null }>;
     groupById: Map<
@@ -1638,7 +1642,7 @@ export class ManagementService {
     >;
     branchById: Map<string, { id: string; name: string }>;
     rules: PayrollRuleRecord[];
-    payoutRules: Array<{
+    payoutRules: {
       trainerId: string;
       category: PayoutCategory;
       mode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null;
@@ -1646,9 +1650,9 @@ export class ManagementService {
       percentageBasisPoints: number | null;
       effectiveFrom: Date;
       id: string;
-    }>;
+    }[];
     coachById: Map<string, { id: string; fullName: string }>;
-    payrollAccrualsByLesson: Map<string, Array<PayrollPeriodRecord['accruals'][number]>>;
+    payrollAccrualsByLesson: Map<string, PayrollPeriodRecord['accruals'][number][]>;
     duplicateAccruals: Map<string, number>;
   }): PayrollDiagnosticRow[] {
     const {
@@ -1674,9 +1678,21 @@ export class ManagementService {
         : undefined;
       const group = groupById.get(occurrence.groupId);
       const branch = branchById.get(occurrence.branchId);
-      const common = {
+      const common: Pick<
+        PayrollDiagnosticRow,
+        | 'actualTrainerSource'
+        | 'attendanceCompletedAt'
+        | 'branchId'
+        | 'branchName'
+        | 'dateTime'
+        | 'groupId'
+        | 'groupName'
+        | 'lessonId'
+        | 'lessonStatus'
+        | 'source'
+      > = {
         dateTime: occurrence.startsAt,
-        source: (lesson ? 'LESSON' : 'WEEKLY_SCHEDULE') as PayrollOccurrenceSource,
+        source: lesson ? 'LESSON' : 'WEEKLY_SCHEDULE',
         branchId: occurrence.branchId,
         branchName: branch?.name ?? 'Филиал',
         groupId: occurrence.groupId,
@@ -1684,13 +1700,13 @@ export class ManagementService {
         lessonId: lesson?.id,
         lessonStatus: lesson?.status ?? 'PLANNED',
         attendanceCompletedAt: lesson?.attendanceCompletedAt ?? null,
-        actualTrainerSource: (lesson?.substitution?.substituteTrainerId
+        actualTrainerSource: lesson?.substitution?.substituteTrainerId
           ? 'Заменяющий'
           : lesson?.coachId
             ? 'Плановый'
             : schedule?.coachId
               ? 'Шаблон'
-              : 'Группа') as PayrollDiagnosticRow['actualTrainerSource'],
+              : 'Группа',
       };
       if (!lesson) {
         rows.push({
@@ -1751,8 +1767,7 @@ export class ManagementService {
       }
       for (const expected of expectedAccruals) {
         const actualByCategory = accrualRows.filter(
-          ({ payoutCategory }) =>
-            (payoutCategory ?? undefined) === (expected.payoutCategory ?? undefined),
+          ({ payoutCategory }) => payoutCategory === expected.payoutCategory,
         );
         const matched = actualByCategory.find(({ coachId }) => coachId === expected.trainerId);
         const matchedAmount = actualByCategory
@@ -1776,7 +1791,7 @@ export class ManagementService {
           status === 'INCLUDED'
             ? 'Входит в расчёт'
             : status === 'WRONG_TRAINER'
-              ? `Назначено тренеру ${coachName(wrongTrainer?.coachId)} вместо ${coachName(expected.trainerId)}`
+              ? `Назначено тренеру ${coachName(wrongTrainer?.coachId) ?? 'неизвестному тренеру'} вместо ${coachName(expected.trainerId) ?? 'неизвестного тренера'}`
               : lesson.status !== 'COMPLETED' || !lesson.attendanceCompletedAt
                 ? 'Занятие не подтверждено/не завершено'
                 : !actualByCategory.length
@@ -1791,9 +1806,7 @@ export class ManagementService {
           presentCount,
           lateCount,
           payoutCategory: expected.payoutCategory,
-          matchedPolicy:
-            expected.ruleLabel ??
-            `Правило: ${expected.type} / ${String(expected.payoutMode ?? 'NO_PAYOUT')}`,
+          matchedPolicy: expected.ruleLabel,
           expectedAccrual: expected.expectedAmount,
           actualAccrual:
             status === 'WRONG_TRAINER' && matchedAmount === 0
@@ -1842,21 +1855,21 @@ export class ManagementService {
       substitution: { substituteTrainerId: string | null } | null;
       startsAt: Date;
       payoutCategory: PayoutCategory;
-      attendance: Array<{
+      attendance: {
         status: 'PRESENT' | 'ABSENT' | 'EXCUSED' | 'LATE' | 'TRIAL';
         directPaymentId: string | null;
         studentId: string;
-      }>;
-      trialAppointments: Array<{
+      }[];
+      trialAppointments: {
         status: 'BOOKED' | 'MISSED' | 'CANCELLED';
         studentId: string | null;
         supersededAt: Date | null;
-      }>;
+      }[];
       branchId: string;
       groupId: string;
     };
     rules: PayrollRuleRecord[];
-    payoutRules: Array<{
+    payoutRules: {
       category: PayoutCategory;
       mode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null;
       amount: number | null;
@@ -1864,7 +1877,7 @@ export class ManagementService {
       effectiveFrom: Date;
       id: string;
       trainerId: string;
-    }>;
+    }[];
     trainerId?: string | null;
   }): PayrollDiagnosticExpectation[] {
     const { lesson, rules, payoutRules, trainerId } = parameters;
@@ -1979,7 +1992,7 @@ export class ManagementService {
     ).length;
     const amount = this.calculateAccrual(
       {
-        type: relevantRule.type as PayrollDiagnosticExpectation['type'],
+        type: relevantRule.type,
         fixedAmount: relevantRule.fixedAmount,
         amountPerAttendee: relevantRule.amountPerAttendee,
         percent: relevantRule.percent,
@@ -2015,7 +2028,7 @@ export class ManagementService {
       startsAt: Date;
     },
     rules: PayrollRuleRecord[],
-    payoutRules: Array<{
+    payoutRules: {
       trainerId: string;
       category: PayoutCategory;
       mode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null;
@@ -2023,7 +2036,7 @@ export class ManagementService {
       amount: number | null;
       percentageBasisPoints: number | null;
       id: string;
-    }>,
+    }[],
   ): string {
     const coachId = lesson.substitution?.substituteTrainerId ?? lesson.coachId;
     const trainerRules = coachId
@@ -2049,7 +2062,7 @@ export class ManagementService {
   }
 
   private actualPayoutRuleName(rule: PayrollRuleRecord): string {
-    return `Правило (${rule.type}) на группе ${String(rule.groupId ? 'да' : 'все группы')}`;
+    return `Правило (${rule.type}) на группе ${rule.groupId ? 'да' : 'все группы'}`;
   }
 
   private actualPayoutPolicyNameFromRule(
@@ -2061,9 +2074,7 @@ export class ManagementService {
       | undefined,
     category: PayoutCategory,
   ): string {
-    return rule
-      ? `Профиль (${category}): ${String(rule.mode ?? 'NO_PAYOUT')}`
-      : 'Профиль не найден';
+    return rule ? `Профиль (${category}): ${rule.mode ?? 'NO_PAYOUT'}` : 'Профиль не найден';
   }
 
   private renderPayrollDiagnosticReport(
@@ -2156,11 +2167,11 @@ export class ManagementService {
         row.dateTime.toISOString(),
         row.source,
         `${row.groupId} (${row.groupName})`,
-        row.lessonId || '',
+        row.lessonId ?? '',
         row.lessonStatus,
         row.attendanceCompletedAt ? row.attendanceCompletedAt.toISOString() : '',
         row.actualTrainerName ?? '',
-        row.payoutCategory ?? '',
+        row.payoutCategory,
         row.matchedPolicy,
         String(row.presentCount),
         String(row.lateCount),
@@ -2650,7 +2661,7 @@ export class ManagementService {
   private async manualLessonAccruals(
     payrollPeriodId: string,
     lesson: {
-      attendance: Array<{ directPaymentId: string | null; status: string; studentId: string }>;
+      attendance: { directPaymentId: string | null; status: string; studentId: string }[];
       branch: { name: string };
       branchId: string;
       group: { name: string };
@@ -2659,11 +2670,11 @@ export class ManagementService {
       payoutCategory: PayoutCategory;
       startsAt: Date;
       substitution: { substituteTrainerId: string } | null;
-      trialAppointments: Array<{
+      trialAppointments: {
         status: string;
         studentId: string | null;
         supersededAt: Date | null;
-      }>;
+      }[];
     },
     trainerId: string,
     legacyRules: Prisma.PayrollRuleGetPayload<Record<string, never>>[],

@@ -327,7 +327,7 @@ export function TrainerSalaryCard({
     onSuccess: (result) =>
       setMessage(
         result.status === 'SAVED'
-          ? `Диагностика сохранена: ${result.lessonCount} строк.`
+          ? `Диагностика сохранена: ${String(result.lessonCount)} строк.`
           : 'Сохранение диагностики отменено.',
       ),
     onError: (error) => setMessage(getErrorMessage(error, 'Не удалось сохранить диагностику.')),
