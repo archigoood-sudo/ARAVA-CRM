@@ -81,6 +81,8 @@ export {
   paymentMethodSchema,
   paymentStatusSchema,
   payrollAdjustmentInputSchema,
+  payrollDiagnosticFormatSchema,
+  payrollManualLessonInputSchema,
   payrollPaymentInputSchema,
   payrollPeriodInputSchema,
   payrollRuleInputSchema,

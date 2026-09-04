@@ -1,6 +1,7 @@
 import {
   PAYROLL_TYPES,
   formatDate,
+  type PayrollDiagnosticFormat,
   type PayrollRuleInput,
   type PayrollType,
   type PayoutCalculationMode,
@@ -83,11 +84,13 @@ export function PayrollPage() {
   const user = useAuthStore((state) => state.user);
   const coachOnly = user?.role === 'COACH';
   const canApprove = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const isOwner = user?.role === 'OWNER';
   const client = useQueryClient();
   const now = new Date();
-  const [dialog, setDialog] = useState<'rule' | 'period'>();
+  const [dialog, setDialog] = useState<'rule' | 'period' | 'diagnostic'>();
   const [sheetCoachId, setSheetCoachId] = useState<string>();
   const [error, setError] = useState<string>();
+  const [info, setInfo] = useState<string>();
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>();
   const [branchId, setBranchId] = useState('');
   const [coachId, setCoachId] = useState('');
@@ -97,6 +100,7 @@ export function PayrollPage() {
   const [secondRate, setSecondRate] = useState('');
   const [validFrom, setValidFrom] = useState(inputDate(now));
   const [validTo, setValidTo] = useState('');
+  const [diagnosticFormat, setDiagnosticFormat] = useState<PayrollDiagnosticFormat>('json');
   const [dateFrom, setDateFrom] = useState(
     inputDate(new Date(now.getFullYear(), now.getMonth(), 1)),
   );
@@ -213,6 +217,67 @@ export function PayrollPage() {
       setError(getErrorMessage(caught, 'Операция расчёта не выполнена.'));
     }
   };
+
+  const exportDiagnostic = async () => {
+    if (!selected.data) return;
+    setInfo(undefined);
+    try {
+      const result = await getDesktopApi().payroll.exportDiagnostic(
+        getSessionToken(),
+        selected.data.id,
+        diagnosticFormat,
+      );
+      setDialog(undefined);
+      if (result.status === 'EMPTY') setError('По периоду нет данных для диагностики.');
+      else if (result.status === 'CANCELLED') setInfo('Сохранение диагностики отменено.');
+      else setInfo(`Диагностика сохранена: ${result.lessonCount} записей.`);
+    } catch (caught) {
+      setError(getErrorMessage(caught, 'Не удалось сохранить диагностику.'));
+    }
+  };
+
+  const deletePeriod = async () => {
+    if (!selected.data) return;
+    if (!isOwner) return;
+    const period = selected.data;
+    const coachCount = new Map(period.accruals.map((item) => [item.coachId, item.coachName]));
+    const trainerSummary = [...coachCount.values()].join(', ');
+    if (period.status !== 'DRAFT' && period.status !== 'CALCULATED') {
+      setError(
+        `Нельзя удалять период в статусе «${periodLabels[period.status]}». ` +
+          'Удаление доступно только для статусов Черновик / Рассчитан.',
+      );
+      return;
+    }
+    const confirmed = window.confirm(
+      [
+        'Вы точно хотите удалить расчётный период?',
+        `Период: ${formatDate(period.dateFrom)} — ${formatDate(period.dateTo)}`,
+        `Статус: ${periodLabels[period.status]}`,
+        `Тренеры: ${trainerSummary || 'не задействованы'}`,
+        `Начислений: ${String(period.accruals.length)}`,
+        '',
+        'Будут удалены только производные данные расчёта:',
+        '• PayrollPeriod',
+        '• PayrollAccrual',
+        '• snapshot/cached-снимки расчёта',
+        '',
+        'Исходные занятия, посещаемость, платежи и правила не будут изменены.',
+      ].join('\n'),
+    );
+    if (!confirmed) return;
+    setError(undefined);
+    try {
+      const result = await getDesktopApi().payroll.deletePeriod(getSessionToken(), period.id);
+      setInfo(
+        `Расчёт ${result.periodId} удалён (${String(result.deletedAccrualCount)} начислений).`,
+      );
+      setSelectedPeriodId(undefined);
+      await refresh();
+    } catch (caught) {
+      setError(getErrorMessage(caught, 'Не удалось удалить расчёт.'));
+    }
+  };
   if (coachOnly)
     return (
       <main className="mx-auto w-full max-w-[1300px] animate-fade-in p-9 pb-14">
@@ -295,6 +360,7 @@ export function PayrollPage() {
       {error ? (
         <p className="mb-4 rounded-xl bg-destructive/10 p-3 text-sm text-destructive">{error}</p>
       ) : null}
+      {info ? <p className="mb-4 rounded-xl bg-accent/10 p-3 text-sm text-accent">{info}</p> : null}
       <div className="grid grid-cols-[1fr_1.4fr] gap-5">
         <section>
           <h2 className="mb-3 text-lg font-semibold">Расчётные периоды</h2>
@@ -382,6 +448,16 @@ export function PayrollPage() {
                     <Button onClick={() => void periodAction('pay')}>
                       <CreditCard className="size-4" />
                       Выплатить
+                    </Button>
+                  ) : null}
+                  {isOwner ? (
+                    <Button onClick={() => setDialog('diagnostic')} variant="outline">
+                      Диагностика расчёта
+                    </Button>
+                  ) : null}
+                  {isOwner ? (
+                    <Button onClick={() => void deletePeriod()} variant="outline">
+                      Удалить расчёт
                     </Button>
                   ) : null}
                 </div>
@@ -486,11 +562,19 @@ export function PayrollPage() {
         description={
           dialog === 'rule'
             ? 'Правила не должны пересекаться для одного тренера и группы.'
-            : 'Расчёт использует только завершённые занятия.'
+            : dialog === 'diagnostic'
+              ? 'Диагностика не изменяет бизнес-данные и может быть сохранена в файл.'
+              : 'Расчёт использует только завершённые занятия.'
         }
         onClose={() => setDialog(undefined)}
         open={Boolean(dialog)}
-        title={dialog === 'rule' ? 'Новое правило зарплаты' : 'Новый расчётный период'}
+        title={
+          dialog === 'rule'
+            ? 'Новое правило зарплаты'
+            : dialog === 'diagnostic'
+              ? 'Диагностика расчёта'
+              : 'Новый расчётный период'
+        }
       >
         {dialog === 'rule' ? (
           <div className="grid grid-cols-2 gap-4">
@@ -587,6 +671,32 @@ export function PayrollPage() {
               />
             </Label>
           </div>
+        ) : dialog === 'diagnostic' ? (
+          <div className="grid gap-4">
+            <Label>
+              Формат отчёта
+              <Select
+                onChange={(event) =>
+                  setDiagnosticFormat(event.target.value as PayrollDiagnosticFormat)
+                }
+                value={diagnosticFormat}
+              >
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+                <option value="txt">TXT</option>
+              </Select>
+            </Label>
+            <p className="text-sm text-muted-foreground">
+              В отчёте по каждой записи будут отображены статус, причина, тренер, правило и сумма
+              начисления.
+            </p>
+            <div className="mt-1 flex justify-end gap-2">
+              <Button onClick={() => setDialog(undefined)} variant="outline">
+                Отмена
+              </Button>
+              <Button onClick={() => void exportDiagnostic()}>Сохранить диагностику</Button>
+            </div>
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-4">
             <Label>
@@ -619,20 +729,22 @@ export function PayrollPage() {
             </Label>
           </div>
         )}
-        <div className="mt-6 flex justify-end gap-2">
-          <Button onClick={() => setDialog(undefined)} variant="outline">
-            Отмена
-          </Button>
-          <Button
-            disabled={
-              dialog === 'rule' &&
-              (!branchId || !coachId || !rate || (type === 'COMBINED' && !secondRate))
-            }
-            onClick={() => void (dialog === 'rule' ? createRule() : createPeriod())}
-          >
-            Сохранить
-          </Button>
-        </div>
+        {dialog !== 'diagnostic' ? (
+          <div className="mt-6 flex justify-end gap-2">
+            <Button onClick={() => setDialog(undefined)} variant="outline">
+              Отмена
+            </Button>
+            <Button
+              disabled={
+                dialog === 'rule' &&
+                (!branchId || !coachId || !rate || (type === 'COMBINED' && !secondRate))
+              }
+              onClick={() => void (dialog === 'rule' ? createRule() : createPeriod())}
+            >
+              Сохранить
+            </Button>
+          </div>
+        ) : null}
       </Dialog>
       <Dialog
         closeLabel="Закрыть"

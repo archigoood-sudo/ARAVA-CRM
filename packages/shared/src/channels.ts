@@ -429,6 +429,10 @@ export const IPC_CHANNELS = {
   payrollPeriodGet: 'payroll-period:get',
   payrollPeriodList: 'payroll-period:list',
   payrollPeriodPay: 'payroll-period:pay',
+  payrollPeriodDelete: 'payroll-period:delete',
+  payrollPeriodDiagnosticExport: 'payroll-period:diagnostic-export',
+  payrollPeriodCandidates: 'payroll-period:candidates',
+  payrollPeriodLessonAdd: 'payroll-period:lesson-add',
   payrollAccrualAdjust: 'payroll-accrual:adjust',
   payrollCoachView: 'payroll:coach-view',
   analyticsGet: 'analytics:get',
@@ -1749,6 +1753,12 @@ export interface PayrollPeriodInput {
   branchId?: string | undefined;
   dateFrom: string;
   dateTo: string;
+  trainerId?: string | undefined;
+}
+
+export interface PayrollManualLessonInput {
+  lessonId: string;
+  reason: string;
 }
 
 export interface PayrollAdjustmentInput {
@@ -1776,6 +1786,8 @@ export interface PayrollAccrualSummary {
   id: string;
   lessonId?: string | undefined;
   lessonStartsAt?: string | undefined;
+  manualAddedAt?: string | undefined;
+  manualAdditionReason?: string | undefined;
   manualAdjustment: number;
   payoutAmount?: number | undefined;
   payoutCategory?: PayoutCategory | undefined;
@@ -1802,7 +1814,9 @@ export interface PayrollPeriodSummary extends PayrollPeriodInput {
   createdAt: string;
   createdByName: string;
   id: string;
+  sheetNumber?: string | undefined;
   status: PayrollPeriodStatus;
+  trainerName?: string | undefined;
   totalAmount: number;
   updatedAt: string;
 }
@@ -1811,6 +1825,34 @@ export interface PayrollPeriodDetail extends PayrollPeriodSummary {
   accruals: PayrollAccrualSummary[];
   pendingAttendance: PayrollPendingLessonSummary[];
   unconfiguredPayoutCount: number;
+}
+
+export interface PayrollLessonCandidate {
+  attendanceCount: number;
+  attendanceCompletedAt?: string | undefined;
+  canAdd: boolean;
+  category: PayoutCategory;
+  exclusionReason: string;
+  groupName: string;
+  id: string;
+  startsAt: string;
+  status: LessonStatus;
+}
+
+export type PayrollDiagnosticFormat = 'json' | 'csv' | 'txt';
+
+export interface PayrollDiagnosticExportResult {
+  status: 'CANCELLED' | 'EMPTY' | 'SAVED';
+  lessonCount: number;
+  overlappingPeriodCount: number;
+  duplicateAccrualCount: number;
+}
+
+export interface PayrollPeriodDeleteResult {
+  deletedAccrualCount: number;
+  periodId: string;
+  periodStatus: PayrollPeriodStatus;
+  status: 'DELETED';
 }
 
 export interface GlobalSearchResult {
@@ -3835,15 +3877,27 @@ export interface AravaDesktopApi {
       dateTo: string,
     ) => Promise<PayrollAccrualSummary[]>;
     createPeriod: (token: string, input: PayrollPeriodInput) => Promise<PayrollPeriodDetail>;
+    addLesson: (
+      token: string,
+      periodId: string,
+      input: PayrollManualLessonInput,
+    ) => Promise<PayrollPeriodDetail>;
     createRule: (token: string, input: PayrollRuleInput) => Promise<PayrollRuleSummary>;
     getPeriod: (token: string, id: string) => Promise<PayrollPeriodDetail>;
     listPeriods: (token: string, branchId?: string) => Promise<PayrollPeriodSummary[]>;
+    listCandidates: (token: string, periodId: string) => Promise<PayrollLessonCandidate[]>;
     listRules: (token: string, branchId?: string) => Promise<PayrollRuleSummary[]>;
     payPeriod: (
       token: string,
       id: string,
       input: PayrollPaymentInput,
     ) => Promise<PayrollPeriodDetail>;
+    deletePeriod: (token: string, id: string) => Promise<PayrollPeriodDeleteResult>;
+    exportDiagnostic: (
+      token: string,
+      id: string,
+      format?: PayrollDiagnosticFormat,
+    ) => Promise<PayrollDiagnosticExportResult>;
     updateRule: (token: string, id: string, input: PayrollRuleInput) => Promise<PayrollRuleSummary>;
     getTrainerPayoutProfile: (token: string, trainerId: string) => Promise<TrainerPayoutProfile>;
     saveTrainerPayoutProfile: (

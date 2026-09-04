@@ -18,7 +18,6 @@ import { CardsPage } from './features/cards/cards-page';
 import { ChatsPage } from './features/chats/chats-page';
 import { PublicationsPage } from './features/publications/publications-page';
 import { LeadsPage } from './features/leads/leads-page';
-import { PayrollPage } from './features/payroll/payroll-page';
 import { AnalyticsPage } from './features/analytics/analytics-page';
 import { ReportsPage } from './features/reports/reports-page';
 import { OnboardingPage } from './features/onboarding/onboarding-page';
@@ -83,7 +82,6 @@ export const router = createHashRouter([
           { element: <ExpensesPage />, path: '/expenses' },
           { element: <ExpenseCategoriesPage />, path: '/expense-categories' },
           { element: <CashPage />, path: '/cash' },
-          { element: <PayrollPage />, path: '/payroll' },
           { element: <AnalyticsPage />, path: '/analytics' },
           { element: <ReportsPage />, path: '/reports' },
           { element: <UsersPage />, path: '/users' },

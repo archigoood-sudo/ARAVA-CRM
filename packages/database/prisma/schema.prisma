@@ -1101,6 +1101,9 @@ model PayrollPeriod {
   branchId         String?
   branch           Branch?             @relation(fields: [branchId], references: [id], onDelete: Restrict)
   status           PayrollPeriodStatus @default(DRAFT)
+  trainerId        String?
+  trainerName      String?
+  sheetNumber      String?             @unique
   createdByUserId  String
   createdByUser    User                @relation("PayrollCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   approvedByUserId String?
@@ -1139,12 +1142,24 @@ model PayrollAccrual {
   payoutPercentageBasisPoints Int?
   payoutRuleId     String?
   payoutRuleEffectiveFrom DateTime?
+  lessonStartsAtSnapshot DateTime?
+  groupNameSnapshot      String?
+  branchNameSnapshot     String?
+  manualAddedAt          DateTime?
+  manualAddedByUserId    String?
+  manualAdditionReason   String?
   createdAt        DateTime      @default(now())
 
   @@unique([payrollPeriodId, coachId, lessonId, payoutCategory])
   @@index([payrollPeriodId, coachId])
   @@index([branchId, coachId])
   @@index([lessonId])
+}
+
+model PayrollSheetSequence {
+  year       Int      @id
+  nextNumber Int
+  updatedAt  DateTime @updatedAt
 }
 
 model StudentContact {

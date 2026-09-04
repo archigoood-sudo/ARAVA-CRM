@@ -48,6 +48,7 @@ import { getErrorMessage } from '../../lib/errors';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { TrainerPayoutProfileCard } from './trainer-payout-profile-card';
+import { TrainerSalaryCard } from './trainer-salary-card';
 
 const groupStatuses: Record<GroupStatus, string> = {
   ACTIVE: 'Активна',
@@ -275,9 +276,6 @@ export function TrainerProfilePage() {
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <Button onClick={() => window.location.assign('#/groups')} variant="outline">
             <UsersRound className="size-4" /> Открыть группы
-          </Button>
-          <Button onClick={() => window.location.assign('#/payroll')} variant="outline">
-            <WalletCards className="size-4" /> Открыть зарплату
           </Button>
           {nextLesson ? (
             <Link
@@ -569,13 +567,10 @@ export function TrainerProfilePage() {
                 </div>
               </div>
               {data.payroll.pendingAttendanceCount ? (
-                <Link
-                  className="mt-5 flex items-center gap-2 rounded-xl bg-amber-400/10 px-4 py-3 text-sm font-medium text-amber-300"
-                  to="/payroll"
-                >
+                <div className="mt-5 flex items-center gap-2 rounded-xl bg-amber-400/10 px-4 py-3 text-sm font-medium text-amber-300">
                   <CircleAlert className="size-4" /> Ожидает посещаемость ·{' '}
                   {data.payroll.pendingAttendanceCount}
-                </Link>
+                </div>
               ) : null}
               {data.payroll.statuses.length ? (
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -592,6 +587,9 @@ export function TrainerProfilePage() {
       </div>
 
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
+        {actor?.role === 'OWNER' ? (
+          <TrainerSalaryCard isOwner trainerId={trainerId} trainerName={data.trainer.fullName} />
+        ) : null}
         {actor?.role !== 'COACH' ? <TrainerPayoutProfileCard trainerId={trainerId} /> : null}
         <Card>
           <CardHeader>

@@ -19,6 +19,11 @@ import type {
   ManagementAnalytics,
   PayrollAccrualSummary,
   PayrollAdjustmentInput,
+  PayrollDiagnosticFormat,
+  PayrollDiagnosticExportResult,
+  PayrollLessonCandidate,
+  PayrollManualLessonInput,
+  PayrollPeriodDeleteResult,
   PayrollPaymentInput,
   PayrollPeriodDetail,
   PayrollPeriodInput,
@@ -71,12 +76,78 @@ const payrollPeriodInclude = {
     orderBy: [{ coach: { fullName: 'asc' } }, { createdAt: 'asc' }],
   },
 } satisfies Prisma.PayrollPeriodInclude;
+const payrollDiagnosticLessonInclude = {
+  attendance: { select: { status: true, studentId: true, directPaymentId: true } },
+  substitution: { select: { substituteTrainerId: true } },
+  trialAppointments: {
+    select: { status: true, studentId: true, supersededAt: true },
+  },
+  group: { select: { coachId: true, name: true } },
+} satisfies Prisma.LessonInclude;
 
 type ExpenseRecord = Prisma.ExpenseGetPayload<{ include: typeof expenseInclude }>;
 type PayrollRuleRecord = Prisma.PayrollRuleGetPayload<{ include: typeof payrollRuleInclude }>;
+type PayrollDiagnosticLessonRecord = Prisma.LessonGetPayload<{
+  include: typeof payrollDiagnosticLessonInclude;
+}>;
 type PayrollPeriodRecord = Prisma.PayrollPeriodGetPayload<{
   include: typeof payrollPeriodInclude;
 }>;
+
+type PayrollDiagnosticOutputFormat = PayrollDiagnosticFormat;
+type PayrollDiagnosticRowStatus = 'INCLUDED' | 'MISSING' | 'ZERO' | 'WRONG_TRAINER';
+type PayrollOccurrenceSource = 'LESSON' | 'WEEKLY_SCHEDULE';
+type PayrollDiagnosticExpectation = {
+  payoutCategory: PayoutCategory;
+  payoutMode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null;
+  payoutAmount: number;
+  payoutPercentageBasisPoints: number | null;
+  payoutRuleId: string | null;
+  payoutRuleEffectiveFrom: Date | null;
+  type: 'FIXED_PER_LESSON' | 'PER_ATTENDEE' | 'PERCENT_OF_REVENUE';
+  attendeeCount: number;
+  expectedAmount: number;
+  ruleLabel: string;
+  trainerId: string;
+};
+type PayrollDiagnosticRow = {
+  dateTime: Date;
+  groupId: string;
+  groupName: string;
+  branchId: string;
+  branchName: string;
+  source: PayrollOccurrenceSource;
+  lessonId?: string | undefined;
+  lessonStatus: 'PLANNED' | 'COMPLETED' | 'CANCELLED';
+  attendanceCompletedAt: Date | null;
+  actualTrainerId?: string | undefined;
+  actualTrainerName?: string | undefined;
+  actualTrainerSource: 'Заменяющий' | 'Плановый' | 'Шаблон' | 'Группа';
+  presentCount: number;
+  lateCount: number;
+  payoutCategory: PayoutCategory;
+  matchedPolicy: string;
+  expectedAccrual: number;
+  actualAccrual: number;
+  status: PayrollDiagnosticRowStatus;
+  reason: string;
+};
+type PayrollDiagnosticReport = {
+  period: PayrollPeriodRecord;
+  lessonRows: PayrollDiagnosticRow[];
+  overlappingPeriodCount: number;
+  overlappingPeriods: PayrollPeriodRecord[];
+  duplicateAccrualCount: number;
+  weeklyScheduleOnlyCount: number;
+  lessonsWithoutTrainerCount: number;
+  lessonsWithoutActivePolicyCount: number;
+  pastPlannedCount: number;
+  staleSnapshot: boolean;
+};
+type PayrollDiagnosticExportPayload = PayrollDiagnosticExportResult & {
+  filename: string;
+  content: string;
+};
 
 function optionalText(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -165,17 +236,19 @@ function accrualSummary(accrual: PayrollPeriodRecord['accruals'][number]): Payro
     attendeeCount: accrual.attendeeCount ?? undefined,
     baseAmount: accrual.baseAmount,
     branchId: accrual.branchId,
-    branchName: accrual.branch.name,
+    branchName: accrual.branchNameSnapshot ?? accrual.branch.name,
     calculatedAmount: accrual.calculatedAmount,
     coachId: accrual.coachId,
     coachName: accrual.coach.fullName,
     comment: accrual.comment ?? undefined,
     finalAmount: accrual.finalAmount,
     groupId: accrual.groupId ?? undefined,
-    groupName: accrual.group?.name,
+    groupName: accrual.groupNameSnapshot ?? accrual.group?.name,
     id: accrual.id,
     lessonId: accrual.lessonId ?? undefined,
-    lessonStartsAt: accrual.lesson?.startsAt.toISOString(),
+    lessonStartsAt: (accrual.lessonStartsAtSnapshot ?? accrual.lesson?.startsAt)?.toISOString(),
+    manualAddedAt: accrual.manualAddedAt?.toISOString(),
+    manualAdditionReason: accrual.manualAdditionReason ?? undefined,
     manualAdjustment: accrual.manualAdjustment,
     payoutAmount: accrual.payoutAmount ?? undefined,
     payoutCategory: accrual.payoutCategory ?? undefined,
@@ -198,7 +271,10 @@ function periodSummary(period: PayrollPeriodRecord): PayrollPeriodSummary {
     dateFrom: localDateValue(period.dateFrom),
     dateTo: localDateValue(period.dateTo),
     id: period.id,
+    sheetNumber: period.sheetNumber ?? undefined,
     status: period.status,
+    trainerId: period.trainerId ?? undefined,
+    trainerName: period.trainerName ?? undefined,
     totalAmount: period.accruals.reduce((sum, accrual) => sum + accrual.finalAmount, 0),
     updatedAt: period.updatedAt.toISOString(),
   };
@@ -879,12 +955,44 @@ export class ManagementService {
     if (input.branchId) assertBranchAccess(actor, input.branchId);
     if (actor.role === 'ADMIN' && actor.branchIds.length > 0 && !input.branchId)
       throw new DomainError('AUTHORIZATION', 'Для расчёта выберите доступный филиал.');
+    const dateFrom = dateOnly(input.dateFrom);
+    const dateTo = endDate(input.dateTo);
+    const trainer = input.trainerId
+      ? await this.database.user.findUnique({
+          select: { fullName: true, role: true },
+          where: { id: input.trainerId },
+        })
+      : undefined;
+    if (input.trainerId && trainer?.role !== 'COACH')
+      throw new DomainError('VALIDATION', 'Выберите действующего тренера.');
+    const duplicate = await this.database.payrollPeriod.findFirst({
+      where: {
+        status: { not: 'CANCELLED' },
+        AND: [
+          input.branchId
+            ? { OR: [{ branchId: input.branchId }, { branchId: null }] }
+            : { branchId: null },
+          input.trainerId
+            ? { OR: [{ trainerId: input.trainerId }, { trainerId: null }] }
+            : { trainerId: null },
+        ],
+        dateFrom: { lte: dateTo },
+        dateTo: { gte: dateFrom },
+      },
+    });
+    if (duplicate)
+      throw new DomainError(
+        'CONFLICT',
+        'На этот период уже существует активный расчёт. Удалите или закройте его перед созданием нового.',
+      );
     const period = await this.database.payrollPeriod.create({
       data: {
         branchId: input.branchId ?? null,
         createdByUserId: actor.id,
-        dateFrom: dateOnly(input.dateFrom),
-        dateTo: endDate(input.dateTo),
+        dateFrom,
+        dateTo,
+        trainerId: input.trainerId ?? null,
+        trainerName: trainer?.fullName ?? null,
       },
     });
     return this.getPayrollPeriod(token, period.id);
@@ -938,6 +1046,8 @@ export class ManagementService {
     const lessons = await this.database.lesson.findMany({
       include: {
         attendance: true,
+        branch: { select: { name: true } },
+        group: { select: { name: true } },
         substitution: true,
         trialAppointments: {
           select: { status: true, studentId: true, supersededAt: true },
@@ -953,9 +1063,12 @@ export class ManagementService {
     });
     const actualTrainerId = (lesson: (typeof lessons)[number]) =>
       lesson.substitution?.substituteTrainerId ?? lesson.coachId;
+    const eligibleLessons = period.trainerId
+      ? lessons.filter((lesson) => actualTrainerId(lesson) === period.trainerId)
+      : lessons;
     const coachIds = [
       ...new Set(
-        lessons.flatMap((lesson) => {
+        eligibleLessons.flatMap((lesson) => {
           const trainerId = actualTrainerId(lesson);
           return trainerId ? [trainerId] : [];
         }),
@@ -977,7 +1090,7 @@ export class ManagementService {
       }),
     ]);
     const accruals: Prisma.PayrollAccrualCreateManyInput[] = [];
-    for (const lesson of lessons) {
+    for (const lesson of eligibleLessons) {
       const trainerId = actualTrainerId(lesson);
       if (!trainerId || !lesson.attendanceCompletedAt) continue;
       const trainerPolicies = payoutRules.filter(({ trainerId: id }) => id === trainerId);
@@ -1034,6 +1147,7 @@ export class ManagementService {
           );
           const type = this.payoutModeToPayrollType(mode);
           accruals.push({
+            ...this.payrollLessonSnapshot(lesson),
             attendeeCount: studentIds.length,
             baseAmount: rule?.amount ?? 0,
             branchId: lesson.branchId,
@@ -1073,6 +1187,7 @@ export class ManagementService {
         rule.type === 'PERCENT_OF_REVENUE' ? await this.lessonRevenueBase(lesson.id) : null;
       const calculatedAmount = this.calculateAccrual(rule, attendeeCount, revenueBase ?? 0);
       accruals.push({
+        ...this.payrollLessonSnapshot(lesson),
         baseAmount: rule.fixedAmount ?? rule.amountPerAttendee ?? 0,
         attendeeCount,
         branchId: lesson.branchId,
@@ -1094,6 +1209,7 @@ export class ManagementService {
     for (const rule of rules.filter(
       ({ coachId, type }) => type === 'FIXED_MONTHLY' && !trainersWithProfiles.has(coachId),
     )) {
+      if (period.trainerId && rule.coachId !== period.trainerId) continue;
       const calculatedAmount = rule.monthlyAmount ?? 0;
       accruals.push({
         baseAmount: calculatedAmount,
@@ -1111,13 +1227,958 @@ export class ManagementService {
     await this.database.$transaction(async (transaction) => {
       await transaction.payrollAccrual.deleteMany({ where: { payrollPeriodId: id } });
       if (accruals.length) await transaction.payrollAccrual.createMany({ data: accruals });
-      await transaction.payrollPeriod.update({ data: { status: 'CALCULATED' }, where: { id } });
+      const sheetNumber =
+        period.sheetNumber ?? (await this.nextPayrollSheetNumber(transaction, period.dateFrom));
+      await transaction.payrollPeriod.update({
+        data: { sheetNumber, status: 'CALCULATED' },
+        where: { id },
+      });
       await this.audit(transaction, actor.id, 'PAYROLL_CALCULATED', 'PayrollPeriod', id, {
         accrualCount: accruals.length,
         calculationFingerprint,
       });
     });
     return this.getPayrollPeriod(token, id);
+  }
+
+  async deletePayrollPeriod(token: string, id: string): Promise<PayrollPeriodDeleteResult> {
+    const actor = await this.financeActor(token, 'payroll:calculate');
+    if (actor.role !== 'OWNER')
+      throw new DomainError('AUTHORIZATION', 'Удаление расчёта доступно только владельцу.');
+    const period = await this.requirePayrollPeriod(id);
+    if (period.branchId) assertBranchAccess(actor, period.branchId);
+    if (!['DRAFT', 'CALCULATED'].includes(period.status)) {
+      const hasPaidSnapshot = await this.database.cashTransaction.findFirst({
+        where: { sourceId: period.id, sourceType: 'PAYROLL' },
+      });
+      if (hasPaidSnapshot)
+        throw new DomainError(
+          'CONFLICT',
+          'Удаление невозможно: к расчёту уже привязана зафиксированная выплата.',
+        );
+      throw new DomainError(
+        'CONFLICT',
+        'Удаление разрешено только для статусов DRAFT или CALCULATED.',
+      );
+    }
+    const deletedAccruals = await this.database.payrollAccrual.count({
+      where: { payrollPeriodId: id },
+    });
+    await this.database.$transaction(async (transaction) => {
+      await transaction.payrollAccrual.deleteMany({ where: { payrollPeriodId: id } });
+      await transaction.payrollPeriod.delete({ where: { id } });
+      await this.audit(transaction, actor.id, 'PAYROLL_PERIOD_DELETED', 'PayrollPeriod', id, {
+        accrualCount: deletedAccruals,
+        status: period.status,
+      });
+    });
+    return {
+      deletedAccrualCount: deletedAccruals,
+      periodId: id,
+      periodStatus: period.status,
+      status: 'DELETED',
+    };
+  }
+
+  async listPayrollLessonCandidates(token: string, id: string): Promise<PayrollLessonCandidate[]> {
+    const actor = await this.financeActor(token, 'payroll:read');
+    if (actor.role !== 'OWNER')
+      throw new DomainError('AUTHORIZATION', 'Добавление занятий доступно только владельцу.');
+    const period = await this.requirePayrollPeriod(id);
+    if (!period.trainerId)
+      throw new DomainError('VALIDATION', 'Этот расчёт не привязан к карточке тренера.');
+    const lessons = await this.database.lesson.findMany({
+      include: {
+        attendance: { select: { status: true } },
+        substitution: { select: { substituteTrainerId: true } },
+        group: { select: { name: true } },
+      },
+      orderBy: { startsAt: 'asc' },
+      where: {
+        ...(period.branchId ? { branchId: period.branchId } : {}),
+        startsAt: { gte: period.dateFrom, lte: period.dateTo },
+        OR: [
+          { coachId: period.trainerId },
+          { substitution: { is: { substituteTrainerId: period.trainerId } } },
+        ],
+      },
+    });
+    const included = new Set(
+      period.accruals.flatMap(({ lessonId }) => (lessonId ? [lessonId] : [])),
+    );
+    return lessons
+      .filter(
+        (lesson) =>
+          (lesson.substitution?.substituteTrainerId ?? lesson.coachId) === period.trainerId,
+      )
+      .filter((lesson) => !included.has(lesson.id))
+      .map((lesson) => {
+        const attendanceCount = lesson.attendance.filter(
+          ({ status }) => status === 'PRESENT' || status === 'LATE',
+        ).length;
+        const canAdd =
+          lesson.status !== 'CANCELLED' &&
+          (lesson.status === 'COMPLETED' || lesson.attendanceCompletedAt !== null);
+        return {
+          attendanceCompletedAt: lesson.attendanceCompletedAt?.toISOString(),
+          attendanceCount,
+          canAdd,
+          category: lesson.payoutCategory,
+          exclusionReason:
+            lesson.status === 'CANCELLED'
+              ? 'Отменённое занятие нельзя добавить в выплату.'
+              : !lesson.attendanceCompletedAt && lesson.status !== 'COMPLETED'
+                ? 'Занятие ещё не проведено или посещаемость не завершена.'
+                : 'Занятие не вошло автоматически; его можно добавить с причиной.',
+          groupName: lesson.group.name,
+          id: lesson.id,
+          startsAt: lesson.startsAt.toISOString(),
+          status: lesson.status,
+        };
+      });
+  }
+
+  async addPayrollLesson(
+    token: string,
+    id: string,
+    input: PayrollManualLessonInput,
+  ): Promise<PayrollPeriodDetail> {
+    const actor = await this.financeActor(token, 'payroll:calculate');
+    if (actor.role !== 'OWNER')
+      throw new DomainError('AUTHORIZATION', 'Добавление занятий доступно только владельцу.');
+    const period = await this.requirePayrollPeriod(id);
+    if (period.status !== 'CALCULATED')
+      throw new DomainError('VALIDATION', 'Добавлять занятия можно только в рассчитанный лист.');
+    if (!period.trainerId)
+      throw new DomainError('VALIDATION', 'Этот расчёт не привязан к карточке тренера.');
+    const lesson = await this.database.lesson.findUnique({
+      include: {
+        attendance: true,
+        branch: { select: { name: true } },
+        group: { select: { name: true } },
+        substitution: true,
+        trialAppointments: { select: { status: true, studentId: true, supersededAt: true } },
+      },
+      where: { id: input.lessonId },
+    });
+    if (!lesson) throw new DomainError('NOT_FOUND', 'Занятие не найдено.');
+    const actualTrainerId = lesson.substitution?.substituteTrainerId ?? lesson.coachId;
+    if (actualTrainerId !== period.trainerId)
+      throw new DomainError(
+        'AUTHORIZATION',
+        'В расчёт можно добавить только занятие фактического тренера.',
+      );
+    if (lesson.branchId !== period.branchId && period.branchId)
+      throw new DomainError('VALIDATION', 'Занятие относится к другому филиалу.');
+    if (lesson.startsAt < period.dateFrom || lesson.startsAt > period.dateTo)
+      throw new DomainError('VALIDATION', 'Занятие не входит в выбранный период.');
+    if (
+      lesson.status === 'CANCELLED' ||
+      (lesson.status !== 'COMPLETED' && !lesson.attendanceCompletedAt)
+    )
+      throw new DomainError('VALIDATION', 'Добавлять можно только фактически проведённое занятие.');
+    if (period.accruals.some(({ lessonId }) => lessonId === lesson.id))
+      throw new DomainError('CONFLICT', 'Это занятие уже есть в расчётном листе.');
+
+    const [legacyRules, payoutRules] = await Promise.all([
+      this.database.payrollRule.findMany({
+        where: { coachId: period.trainerId, isActive: true, branchId: lesson.branchId },
+      }),
+      this.database.trainerPayoutRule.findMany({
+        orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+        where: { trainerId: period.trainerId },
+      }),
+    ]);
+    const metadata = {
+      manualAddedAt: new Date(),
+      manualAddedByUserId: actor.id,
+      manualAdditionReason: input.reason.trim(),
+    };
+    const accruals = await this.manualLessonAccruals(
+      id,
+      lesson,
+      period.trainerId,
+      legacyRules,
+      payoutRules,
+      metadata,
+    );
+    await this.database.$transaction(async (transaction) => {
+      await transaction.payrollAccrual.createMany({ data: accruals });
+      await this.audit(
+        transaction,
+        actor.id,
+        'PAYROLL_LESSON_MANUALLY_ADDED',
+        'PayrollPeriod',
+        id,
+        {
+          lessonId: lesson.id,
+          reason: metadata.manualAdditionReason,
+        },
+      );
+    });
+    return this.getPayrollPeriod(token, id);
+  }
+
+  async payrollPeriodDiagnosticExport(
+    token: string,
+    id: string,
+    format: PayrollDiagnosticOutputFormat = 'json',
+  ): Promise<PayrollDiagnosticExportPayload> {
+    const actor = await this.financeActor(token, 'payroll:read');
+    if (actor.role !== 'OWNER')
+      throw new DomainError('AUTHORIZATION', 'Диагностика расчёта доступна только владельцу.');
+    const period = await this.requirePayrollPeriod(id);
+    if (period.branchId) assertBranchAccess(actor, period.branchId);
+    const report = await this.payrollDiagnosticReport(actor, period);
+    return {
+      ...this.renderPayrollDiagnosticReport(report, format),
+      status: report.lessonRows.length ? 'SAVED' : 'EMPTY',
+      lessonCount: report.lessonRows.length,
+      overlappingPeriodCount: report.overlappingPeriodCount,
+      duplicateAccrualCount: report.duplicateAccrualCount,
+    };
+  }
+
+  private async payrollDiagnosticReport(
+    actor: AuthenticatedUser,
+    period: PayrollPeriodRecord,
+  ): Promise<PayrollDiagnosticReport> {
+    const overlapScope = period.branchId
+      ? { OR: [{ branchId: period.branchId }, { branchId: null }] }
+      : { branchId: null };
+    const overlappingPeriods = await this.database.payrollPeriod.findMany({
+      include: payrollPeriodInclude,
+      where: {
+        ...overlapScope,
+        id: { not: period.id },
+        status: { not: 'CANCELLED' },
+        dateFrom: { lte: period.dateTo },
+        dateTo: { gte: period.dateFrom },
+      },
+      orderBy: [{ branchId: 'asc' }, { dateFrom: 'asc' }, { dateTo: 'asc' }],
+    });
+    const occurrenceService = new LessonOccurrenceService(this.database);
+    const occurrences = await occurrenceService.resolveRange(actor, {
+      dateFrom: period.dateFrom,
+      dateTo: period.dateTo,
+    });
+    const lessonIds = [
+      ...new Set(occurrences.flatMap((item) => (item.lessonId ? [item.lessonId] : []))),
+    ];
+    const scheduleTemplateIds = [
+      ...new Set(
+        occurrences.flatMap((item) => (item.scheduleTemplateId ? [item.scheduleTemplateId] : [])),
+      ),
+    ];
+    const groupIds = [...new Set(occurrences.map((item) => item.groupId))];
+    const branchIds = [...new Set(occurrences.map((item) => item.branchId))];
+
+    const [lessons, schedules, groups, branches, users, rules, payoutRules] = await Promise.all([
+      lessonIds.length
+        ? this.database.lesson.findMany({
+            include: payrollDiagnosticLessonInclude,
+            where: { id: { in: lessonIds } },
+          })
+        : Promise.resolve([] as PayrollDiagnosticLessonRecord[]),
+      scheduleTemplateIds.length
+        ? this.database.weeklySchedule.findMany({
+            select: { id: true, coachId: true },
+            where: { id: { in: scheduleTemplateIds } },
+          })
+        : Promise.resolve([] as Array<{ id: string; coachId: string | null }>),
+      groupIds.length
+        ? this.database.danceGroup.findMany({
+            select: {
+              id: true,
+              name: true,
+              coachId: true,
+              branchId: true,
+              branch: { select: { name: true } },
+            },
+            where: { id: { in: groupIds } },
+          })
+        : Promise.resolve(
+            [] as Array<{
+              id: string;
+              name: string;
+              coachId: string | null;
+              branchId: string;
+              branch: { name: string };
+            }>,
+          ),
+      branchIds.length
+        ? this.database.branch.findMany({
+            where: { id: { in: branchIds } },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve([] as Array<{ id: string; name: string }>),
+      this.database.user.findMany({
+        where: { role: 'COACH' },
+        select: { id: true, fullName: true },
+      }),
+      this.database.payrollRule.findMany({
+        include: payrollRuleInclude,
+        where: {
+          ...(period.branchId ? { branchId: period.branchId } : {}),
+          isActive: true,
+          validFrom: { lte: period.dateTo },
+          OR: [{ validTo: null }, { validTo: { gte: period.dateFrom } }],
+        },
+      }),
+      this.database.trainerPayoutRule.findMany({
+        orderBy: [{ trainerId: 'asc' }, { category: 'asc' }, { effectiveFrom: 'desc' }],
+        where: {
+          effectiveFrom: { lte: period.dateTo },
+        },
+      }),
+    ]);
+
+    const lessonById = new Map(lessons.map((lesson) => [lesson.id, lesson]));
+    const scheduleById = new Map(schedules.map((schedule) => [schedule.id, schedule]));
+    const groupById = new Map(groups.map((group) => [group.id, group]));
+    const branchById = new Map(branches.map((branch) => [branch.id, branch]));
+    const coachById = new Map(users.map((coach) => [coach.id, coach]));
+    const duplicateAccruals = period.accruals
+      .filter((accrual) => accrual.lessonId)
+      .map(
+        (accrual) =>
+          `${accrual.lessonId ?? ''}::${accrual.coachId ?? 'NO_TRAINER'}::${accrual.payoutCategory ?? 'NO_CATEGORY'}`,
+      )
+      .reduce((acc, item) => {
+        acc.set(item, (acc.get(item) ?? 0) + 1);
+        return acc;
+      }, new Map<string, number>());
+    const payrollAccrualsByLesson = new Map<string, Array<(typeof period.accruals)[number]>>();
+    for (const accrual of period.accruals) {
+      if (!accrual.lessonId) continue;
+      const rows = payrollAccrualsByLesson.get(accrual.lessonId) ?? [];
+      rows.push(accrual);
+      payrollAccrualsByLesson.set(accrual.lessonId, rows);
+    }
+    const calculationAudit = await this.database.auditLog.findFirst({
+      where: {
+        action: 'PAYROLL_CALCULATED',
+        entityType: 'PayrollPeriod',
+        entityId: period.id,
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    const currentFingerprint = await this.payrollCalculationFingerprint(period);
+    let staleSnapshot = false;
+    if (calculationAudit?.detail) {
+      try {
+        staleSnapshot =
+          JSON.parse(calculationAudit.detail).calculationFingerprint !== currentFingerprint;
+      } catch {
+        staleSnapshot = true;
+      }
+    }
+    const lessonRows = this.collectDiagnosticRows({
+      period,
+      occurrences,
+      lessonById,
+      scheduleById,
+      groupById,
+      branchById,
+      rules,
+      payoutRules,
+      coachById,
+      payrollAccrualsByLesson,
+      duplicateAccruals,
+    });
+    const lessonsWithoutTrainerCount = lessonRows.filter(
+      (item) => item.status === 'MISSING' && !item.actualTrainerId,
+    ).length;
+    const lessonsWithoutActivePolicyCount = lessonRows.filter(
+      (item) => item.reason === 'Нет активного правила выплаты',
+    ).length;
+    const pastPlannedCount = lessonRows.filter(
+      (item) =>
+        item.lessonStatus === 'PLANNED' && item.source === 'LESSON' && item.dateTime < new Date(),
+    ).length;
+    return {
+      period,
+      lessonRows,
+      overlappingPeriodCount: overlappingPeriods.length,
+      overlappingPeriods,
+      duplicateAccrualCount: [...duplicateAccruals.values()].reduce(
+        (sum, count) => (count > 1 ? sum + (count - 1) : sum),
+        0,
+      ),
+      staleSnapshot,
+      weeklyScheduleOnlyCount: occurrences.filter((item) => item.source === 'WEEKLY_SCHEDULE')
+        .length,
+      lessonsWithoutTrainerCount,
+      lessonsWithoutActivePolicyCount,
+      pastPlannedCount,
+    };
+  }
+
+  private collectDiagnosticRows(parameters: {
+    period: PayrollPeriodRecord;
+    occurrences: Array<{
+      branchId: string;
+      endsAt: Date;
+      groupId: string;
+      lessonId?: string;
+      scheduleTemplateId?: string;
+      source: 'LESSON' | 'WEEKLY_SCHEDULE';
+      startsAt: Date;
+      status?: string;
+    }>;
+    lessonById: Map<string, PayrollDiagnosticLessonRecord>;
+    scheduleById: Map<string, { coachId: string | null }>;
+    groupById: Map<
+      string,
+      {
+        id: string;
+        name: string;
+        coachId: string | null;
+      }
+    >;
+    branchById: Map<string, { id: string; name: string }>;
+    rules: PayrollRuleRecord[];
+    payoutRules: Array<{
+      trainerId: string;
+      category: PayoutCategory;
+      mode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null;
+      amount: number | null;
+      percentageBasisPoints: number | null;
+      effectiveFrom: Date;
+      id: string;
+    }>;
+    coachById: Map<string, { id: string; fullName: string }>;
+    payrollAccrualsByLesson: Map<string, Array<PayrollPeriodRecord['accruals'][number]>>;
+    duplicateAccruals: Map<string, number>;
+  }): PayrollDiagnosticRow[] {
+    const {
+      period,
+      occurrences,
+      lessonById,
+      scheduleById,
+      groupById,
+      branchById,
+      rules,
+      payoutRules,
+      coachById,
+      payrollAccrualsByLesson,
+      duplicateAccruals,
+    } = parameters;
+    const rows: PayrollDiagnosticRow[] = [];
+    const coachName = (id?: string) =>
+      id ? (coachById.get(id)?.fullName ?? 'Неизвестный тренер') : undefined;
+    for (const occurrence of occurrences) {
+      const lesson = occurrence.lessonId ? lessonById.get(occurrence.lessonId) : undefined;
+      const schedule = occurrence.scheduleTemplateId
+        ? scheduleById.get(occurrence.scheduleTemplateId)
+        : undefined;
+      const group = groupById.get(occurrence.groupId);
+      const branch = branchById.get(occurrence.branchId);
+      const common = {
+        dateTime: occurrence.startsAt,
+        source: (lesson ? 'LESSON' : 'WEEKLY_SCHEDULE') as PayrollOccurrenceSource,
+        branchId: occurrence.branchId,
+        branchName: branch?.name ?? 'Филиал',
+        groupId: occurrence.groupId,
+        groupName: group?.name ?? 'Группа',
+        lessonId: lesson?.id,
+        lessonStatus: lesson?.status ?? 'PLANNED',
+        attendanceCompletedAt: lesson?.attendanceCompletedAt ?? null,
+        actualTrainerSource: (lesson?.substitution?.substituteTrainerId
+          ? 'Заменяющий'
+          : lesson?.coachId
+            ? 'Плановый'
+            : schedule?.coachId
+              ? 'Шаблон'
+              : 'Группа') as PayrollDiagnosticRow['actualTrainerSource'],
+      };
+      if (!lesson) {
+        rows.push({
+          ...common,
+          actualTrainerId: schedule?.coachId ?? group?.coachId ?? undefined,
+          actualTrainerName: schedule?.coachId
+            ? coachName(schedule.coachId)
+            : coachName(group?.coachId ?? undefined),
+          presentCount: 0,
+          lateCount: 0,
+          payoutCategory: 'REGULAR_ATTENDANCE',
+          matchedPolicy: 'Без материализации занятия',
+          expectedAccrual: 0,
+          actualAccrual: 0,
+          status: 'ZERO',
+          reason: 'Только шаблон расписания без созданной записи урока',
+        });
+        continue;
+      }
+      const teacherId =
+        lesson.substitution?.substituteTrainerId ??
+        lesson.coachId ??
+        schedule?.coachId ??
+        group?.coachId;
+      const presentCount = lesson.attendance.filter(
+        (attendance) => attendance.status === 'PRESENT',
+      ).length;
+      const lateCount = lesson.attendance.filter(
+        (attendance) => attendance.status === 'LATE',
+      ).length;
+      const expectedAccruals = this.expectedLessonAccruals({
+        lesson,
+        rules,
+        payoutRules,
+        trainerId: teacherId ?? null,
+      });
+      const accrualRows = payrollAccrualsByLesson.get(lesson.id) ?? [];
+      if (accrualRows.length === 0 && !expectedAccruals.length) {
+        rows.push({
+          ...common,
+          ...(teacherId
+            ? { actualTrainerId: teacherId, actualTrainerName: coachName(teacherId) }
+            : {}),
+          presentCount,
+          lateCount,
+          payoutCategory: lesson.payoutCategory,
+          matchedPolicy: this.actualPayoutPolicyName(lesson, rules, payoutRules),
+          expectedAccrual: 0,
+          actualAccrual: 0,
+          status: teacherId ? 'MISSING' : 'MISSING',
+          reason: teacherId
+            ? lesson.status !== 'COMPLETED'
+              ? 'Период не сформирован: занятие не завершено'
+              : 'Нет подходящего правила выплаты'
+            : 'Не найден тренер для расчёта',
+        });
+        continue;
+      }
+      for (const expected of expectedAccruals) {
+        const actualByCategory = accrualRows.filter(
+          ({ payoutCategory }) =>
+            (payoutCategory ?? undefined) === (expected.payoutCategory ?? undefined),
+        );
+        const matched = actualByCategory.find(({ coachId }) => coachId === expected.trainerId);
+        const matchedAmount = actualByCategory
+          .filter(({ coachId }) => coachId === expected.trainerId)
+          .reduce((sum, item) => sum + item.finalAmount, 0);
+        const wrongTrainer = actualByCategory.find(({ coachId }) => coachId !== expected.trainerId);
+        const status: PayrollDiagnosticRowStatus = !expectedAccruals.length
+          ? lesson.status === 'COMPLETED' || lesson.attendanceCompletedAt
+            ? 'MISSING'
+            : 'ZERO'
+          : !actualByCategory.length
+            ? lesson.status === 'PLANNED' && lesson.attendanceCompletedAt === null
+              ? 'MISSING'
+              : 'MISSING'
+            : !matched
+              ? 'WRONG_TRAINER'
+              : matchedAmount === expected.expectedAmount
+                ? 'INCLUDED'
+                : 'ZERO';
+        const reason =
+          status === 'INCLUDED'
+            ? 'Входит в расчёт'
+            : status === 'WRONG_TRAINER'
+              ? `Назначено тренеру ${coachName(wrongTrainer?.coachId)} вместо ${coachName(expected.trainerId)}`
+              : lesson.status !== 'COMPLETED' || !lesson.attendanceCompletedAt
+                ? 'Занятие не подтверждено/не завершено'
+                : !actualByCategory.length
+                  ? expected.ruleLabel
+                  : status === 'MISSING' && expected.ruleLabel === 'Нет активного правила выплаты'
+                    ? 'Нет активного правила выплаты'
+                    : `Ожидаемая сумма ${String(expected.expectedAmount / 100)} ₽, но получено ${String((matched?.finalAmount ?? 0) / 100)} ₽`;
+        rows.push({
+          ...common,
+          actualTrainerId: expected.trainerId,
+          actualTrainerName: coachName(expected.trainerId),
+          presentCount,
+          lateCount,
+          payoutCategory: expected.payoutCategory,
+          matchedPolicy:
+            expected.ruleLabel ??
+            `Правило: ${expected.type} / ${String(expected.payoutMode ?? 'NO_PAYOUT')}`,
+          expectedAccrual: expected.expectedAmount,
+          actualAccrual:
+            status === 'WRONG_TRAINER' && matchedAmount === 0
+              ? actualByCategory.reduce((sum, item) => sum + item.finalAmount, 0)
+              : matchedAmount,
+          status,
+          reason,
+        });
+      }
+    }
+    for (const [key, duplicateCount] of duplicateAccruals) {
+      if (duplicateCount <= 1) continue;
+      const lessonId = key.split('::')[0] ?? '';
+      const lesson = lessonById.get(lessonId);
+      const duplicateGroup = lesson ? groupById.get(lesson.groupId) : undefined;
+      const duplicateBranch = lesson ? branchById.get(lesson.branchId) : undefined;
+      rows.push({
+        dateTime: lesson?.startsAt ?? period.dateFrom,
+        groupId: duplicateGroup?.id ?? 'unknown',
+        groupName: duplicateGroup?.name ?? 'Неизвестная группа',
+        branchId: duplicateBranch?.id ?? period.branchId ?? 'unknown',
+        branchName: duplicateBranch?.name ?? 'Филиал',
+        source: 'LESSON',
+        lessonId,
+        lessonStatus: lesson?.status ?? 'COMPLETED',
+        attendanceCompletedAt: null,
+        actualTrainerSource: 'Плановый' as const,
+        presentCount: 0,
+        lateCount: 0,
+        payoutCategory: lesson?.payoutCategory ?? 'REGULAR_ATTENDANCE',
+        actualTrainerId: lesson?.coachId ?? undefined,
+        actualTrainerName: coachName(lesson?.coachId ?? undefined),
+        matchedPolicy: 'Дублирующее начисление',
+        expectedAccrual: 0,
+        actualAccrual: 0,
+        status: 'ZERO',
+        reason: `Для занятия ${lessonId} найдено ${String(duplicateCount)} начислений за расчётный период`,
+      });
+    }
+    return rows;
+  }
+
+  private expectedLessonAccruals(parameters: {
+    lesson: {
+      coachId: string | null;
+      substitution: { substituteTrainerId: string | null } | null;
+      startsAt: Date;
+      payoutCategory: PayoutCategory;
+      attendance: Array<{
+        status: 'PRESENT' | 'ABSENT' | 'EXCUSED' | 'LATE' | 'TRIAL';
+        directPaymentId: string | null;
+        studentId: string;
+      }>;
+      trialAppointments: Array<{
+        status: 'BOOKED' | 'MISSED' | 'CANCELLED';
+        studentId: string | null;
+        supersededAt: Date | null;
+      }>;
+      branchId: string;
+      groupId: string;
+    };
+    rules: PayrollRuleRecord[];
+    payoutRules: Array<{
+      category: PayoutCategory;
+      mode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null;
+      amount: number | null;
+      percentageBasisPoints: number | null;
+      effectiveFrom: Date;
+      id: string;
+      trainerId: string;
+    }>;
+    trainerId?: string | null;
+  }): PayrollDiagnosticExpectation[] {
+    const { lesson, rules, payoutRules, trainerId } = parameters;
+    const trainer = trainerId ?? lesson.coachId ?? null;
+    if (!trainer)
+      return [
+        {
+          type: 'FIXED_PER_LESSON',
+          trainerId: '',
+          attendeeCount: 0,
+          expectedAmount: 0,
+          payoutAmount: 0,
+          payoutMode: null,
+          payoutPercentageBasisPoints: null,
+          payoutRuleId: null,
+          payoutRuleEffectiveFrom: null,
+          payoutCategory: lesson.payoutCategory,
+          ruleLabel: 'Нет тренера для выплаты',
+        },
+      ];
+    const trainerProfiles = payoutRules.filter((item) => item.trainerId === trainer);
+    const hasActiveProfile = trainerProfiles.some(
+      ({ effectiveFrom }) => effectiveFrom <= lesson.startsAt,
+    );
+    const eligible = lesson.attendance.filter(
+      ({ status }) => status === 'PRESENT' || status === 'LATE' || status === 'TRIAL',
+    );
+    const trialStudentIds = new Set(
+      lesson.trialAppointments
+        .filter(
+          ({ status, studentId, supersededAt }) =>
+            status === 'BOOKED' && studentId && supersededAt === null,
+        )
+        .map(({ studentId }) => studentId),
+    );
+    if (hasActiveProfile) {
+      const effectiveRule = (category: PayoutCategory) =>
+        trainerProfiles.find(
+          ({ category: ruleCategory, effectiveFrom }) =>
+            ruleCategory === category && effectiveFrom <= lesson.startsAt,
+        );
+      const substitutionRule = lesson.substitution ? effectiveRule('SUBSTITUTION') : undefined;
+      const useSubstitutionRule = Boolean(substitutionRule?.mode);
+      const categorized = new Map<PayoutCategory, number>();
+      for (const attendance of eligible) {
+        const category = useSubstitutionRule
+          ? 'SUBSTITUTION'
+          : attendance.status === 'TRIAL' || trialStudentIds.has(attendance.studentId)
+            ? 'TRIAL'
+            : attendance.directPaymentId
+              ? 'SINGLE_VISIT'
+              : lesson.payoutCategory;
+        categorized.set(category, (categorized.get(category) ?? 0) + 1);
+      }
+      if (categorized.size === 0) {
+        categorized.set(lesson.payoutCategory, 0);
+      }
+      return [...categorized.entries()].map(([category, count]) => {
+        const rule = category === 'SUBSTITUTION' ? substitutionRule : effectiveRule(category);
+        const mode = rule?.mode ?? null;
+        const amount = this.calculateTrainerPayout(
+          mode,
+          rule?.amount ?? 0,
+          rule?.percentageBasisPoints ?? 0,
+          count,
+          0,
+        );
+        return {
+          payoutCategory: category,
+          payoutMode: mode,
+          payoutAmount: rule?.amount ?? 0,
+          payoutPercentageBasisPoints: rule?.percentageBasisPoints ?? null,
+          payoutRuleId: rule?.id ?? null,
+          payoutRuleEffectiveFrom: rule?.effectiveFrom ?? null,
+          type: mode === 'PERCENTAGE' ? 'PERCENT_OF_REVENUE' : 'FIXED_PER_LESSON',
+          attendeeCount: count,
+          expectedAmount: amount,
+          ruleLabel: this.actualPayoutPolicyNameFromRule(rule, category),
+          trainerId: trainer,
+        };
+      });
+    }
+    const relevantRule = rules
+      .filter(
+        (item) =>
+          item.type !== 'FIXED_MONTHLY' &&
+          item.coachId === trainer &&
+          item.branchId === lesson.branchId &&
+          (!item.groupId || item.groupId === lesson.groupId) &&
+          item.validFrom <= lesson.startsAt &&
+          (!item.validTo || item.validTo >= lesson.startsAt),
+      )
+      .sort((a, b) => Number(Boolean(b.groupId)) - Number(Boolean(a.groupId)))[0];
+    if (!relevantRule)
+      return [
+        {
+          payoutCategory: lesson.payoutCategory,
+          payoutMode: null,
+          payoutAmount: 0,
+          payoutPercentageBasisPoints: null,
+          payoutRuleId: null,
+          payoutRuleEffectiveFrom: null,
+          type: 'FIXED_PER_LESSON',
+          attendeeCount: Math.max(eligible.length, 0),
+          expectedAmount: 0,
+          ruleLabel: 'Нет активного правила выплаты',
+          trainerId: trainer,
+        },
+      ];
+    const attendeeCount = lesson.attendance.filter(
+      ({ status }) => status === 'PRESENT' || status === 'LATE',
+    ).length;
+    const amount = this.calculateAccrual(
+      {
+        type: relevantRule.type as PayrollDiagnosticExpectation['type'],
+        fixedAmount: relevantRule.fixedAmount,
+        amountPerAttendee: relevantRule.amountPerAttendee,
+        percent: relevantRule.percent,
+      },
+      attendeeCount,
+      0,
+    );
+    return [
+      {
+        payoutCategory: lesson.payoutCategory,
+        payoutMode: null,
+        payoutAmount: relevantRule.fixedAmount ?? relevantRule.amountPerAttendee ?? 0,
+        payoutPercentageBasisPoints: null,
+        payoutRuleId: null,
+        payoutRuleEffectiveFrom: null,
+        type: relevantRule.type as PayrollDiagnosticExpectation['type'],
+        attendeeCount,
+        expectedAmount: amount,
+        ruleLabel: this.actualPayoutRuleName(relevantRule),
+        trainerId: trainer,
+      },
+    ];
+  }
+
+  private actualPayoutPolicyName(
+    lesson: {
+      coachId: string | null;
+      substitution: { substituteTrainerId: string | null } | null;
+      branchId: string;
+      groupId: string;
+      status: 'PLANNED' | 'COMPLETED' | 'CANCELLED';
+      attendanceCompletedAt: Date | null;
+      startsAt: Date;
+    },
+    rules: PayrollRuleRecord[],
+    payoutRules: Array<{
+      trainerId: string;
+      category: PayoutCategory;
+      mode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null;
+      effectiveFrom: Date;
+      amount: number | null;
+      percentageBasisPoints: number | null;
+      id: string;
+    }>,
+  ): string {
+    const coachId = lesson.substitution?.substituteTrainerId ?? lesson.coachId;
+    const trainerRules = coachId
+      ? payoutRules.filter(({ trainerId }) => trainerId === coachId)
+      : [];
+    const hasProfile = trainerRules.some(({ effectiveFrom }) => effectiveFrom <= lesson.startsAt);
+    if (hasProfile) {
+      const active = trainerRules
+        .filter(({ effectiveFrom }) => effectiveFrom <= lesson.startsAt)
+        .sort((a, b) => b.effectiveFrom.getTime() - a.effectiveFrom.getTime())
+        .slice(0, 1)[0];
+      return active ? `Профиль тренера (${active.mode ?? 'NO_PAYOUT'})` : 'Профиль тренера';
+    }
+    const rule = rules.find(
+      (item) =>
+        item.coachId === coachId &&
+        item.branchId === lesson.branchId &&
+        (!item.groupId || item.groupId === lesson.groupId) &&
+        item.validFrom <= lesson.startsAt &&
+        (!item.validTo || item.validTo >= lesson.startsAt),
+    );
+    return rule ? `Правило (${rule.type})` : 'Нет профиля/правила выплаты';
+  }
+
+  private actualPayoutRuleName(rule: PayrollRuleRecord): string {
+    return `Правило (${rule.type}) на группе ${String(rule.groupId ? 'да' : 'все группы')}`;
+  }
+
+  private actualPayoutPolicyNameFromRule(
+    rule:
+      | {
+          mode: 'FIXED_PER_ATTENDANCE' | 'FIXED_PER_LESSON' | 'NO_PAYOUT' | 'PERCENTAGE' | null;
+          category: PayoutCategory;
+        }
+      | undefined,
+    category: PayoutCategory,
+  ): string {
+    return rule
+      ? `Профиль (${category}): ${String(rule.mode ?? 'NO_PAYOUT')}`
+      : 'Профиль не найден';
+  }
+
+  private renderPayrollDiagnosticReport(
+    report: PayrollDiagnosticReport,
+    format: PayrollDiagnosticOutputFormat,
+  ): Pick<PayrollDiagnosticExportPayload, 'content' | 'filename'> {
+    const label = `${localDateValue(report.period.dateFrom)}-${localDateValue(report.period.dateTo)}`;
+    const overlaps = report.overlappingPeriods
+      .map(
+        (item) =>
+          `${item.id}: ${localDateValue(item.dateFrom)}-${localDateValue(item.dateTo)} (${item.status})`,
+      )
+      .join('; ');
+    if (format === 'json') {
+      const payload = {
+        generatedAt: new Date().toISOString(),
+        period: {
+          id: report.period.id,
+          status: report.period.status,
+          branchId: report.period.branchId,
+          dateFrom: localDateValue(report.period.dateFrom),
+          dateTo: localDateValue(report.period.dateTo),
+        },
+        staleSnapshot: report.staleSnapshot,
+        lessonsWithoutTrainerCount: report.lessonsWithoutTrainerCount,
+        lessonsWithoutActivePolicyCount: report.lessonsWithoutActivePolicyCount,
+        pastPlannedCount: report.pastPlannedCount,
+        weeklyScheduleOnlyCount: report.weeklyScheduleOnlyCount,
+        overlappingPeriods: report.overlappingPeriods.length,
+        duplicateAccruals: report.duplicateAccrualCount,
+        overlappingPeriodIds: report.overlappingPeriods.map((item) => item.id),
+        overlapSummary: overlaps,
+        rows: report.lessonRows,
+      };
+      return {
+        filename: `payroll-diagnostic-${label}.json`,
+        content: `${JSON.stringify(payload, null, 2)}\n`,
+      };
+    }
+    if (format === 'txt') {
+      const lines = [
+        `Диагностика расчёта ${report.period.id}`,
+        `Период: ${localDateValue(report.period.dateFrom)} — ${localDateValue(report.period.dateTo)}`,
+        `Статус: ${report.period.status}`,
+        `Филиал: ${report.period.branchId ?? 'Все филиалы'}`,
+        `Сигнатура snapshot: ${report.staleSnapshot ? 'СТАРЕЕТ' : 'актуальна'}`,
+        `Без тренера: ${String(report.lessonsWithoutTrainerCount)}`,
+        `Без активного правила выплаты: ${String(report.lessonsWithoutActivePolicyCount)}`,
+        `Прошедшие PLANNED: ${String(report.pastPlannedCount)}`,
+        `Только WeeklySchedule: ${String(report.weeklyScheduleOnlyCount)}`,
+        `Накладка периодов: ${overlaps || 'нет'}`,
+        `Дублируемые начисления: ${String(report.duplicateAccrualCount)}`,
+        '',
+        '=== Записи ===',
+      ];
+      for (const row of report.lessonRows) {
+        lines.push(
+          `${row.dateTime.toISOString()} | ${row.source} | ${row.groupName} | ${row.lessonId ?? 'WEEKLY'} | ${row.lessonStatus} | ${row.status} | trainer=${row.actualTrainerName ?? '-'} | expected=${String(row.expectedAccrual / 100)} | actual=${String(row.actualAccrual / 100)} | ${row.reason}`,
+        );
+      }
+      return {
+        filename: `payroll-diagnostic-${label}.txt`,
+        content: `${lines.join('\n')}\n`,
+      };
+    }
+    const header = [
+      'dateTime',
+      'source',
+      'groupId',
+      'lessonId',
+      'lessonStatus',
+      'attendanceCompletedAt',
+      'trainer',
+      'payoutCategory',
+      'matchedPolicy',
+      'present',
+      'late',
+      'expectedAccrual',
+      'actualAccrual',
+      'status',
+      'reason',
+      'actualTrainerSource',
+      'overlappingPeriods',
+      'duplicateAccruals',
+    ]
+      .map(csvCell)
+      .join(';');
+    const rows = report.lessonRows.map((row) =>
+      [
+        row.dateTime.toISOString(),
+        row.source,
+        `${row.groupId} (${row.groupName})`,
+        row.lessonId || '',
+        row.lessonStatus,
+        row.attendanceCompletedAt ? row.attendanceCompletedAt.toISOString() : '',
+        row.actualTrainerName ?? '',
+        row.payoutCategory ?? '',
+        row.matchedPolicy,
+        String(row.presentCount),
+        String(row.lateCount),
+        String(row.expectedAccrual),
+        String(row.actualAccrual),
+        row.status,
+        row.reason,
+        row.actualTrainerSource,
+        String(report.overlappingPeriodCount),
+        String(report.duplicateAccrualCount),
+      ]
+        .map(csvCell)
+        .join(';'),
+    );
+    return {
+      filename: `payroll-diagnostic-${label}.csv`,
+      content: `\uFEFF${[header, ...rows].join('\r\n')}\n`,
+    };
   }
 
   async adjustPayrollAccrual(
@@ -1569,6 +2630,180 @@ export class ManagementService {
     if (rule.type === 'COMBINED')
       return (rule.fixedAmount ?? 0) + (rule.amountPerAttendee ?? 0) * attendees;
     return 0;
+  }
+
+  private payrollLessonSnapshot(lesson: {
+    branch: { name: string };
+    group: { name: string };
+    startsAt: Date;
+  }): Pick<
+    Prisma.PayrollAccrualCreateManyInput,
+    'branchNameSnapshot' | 'groupNameSnapshot' | 'lessonStartsAtSnapshot'
+  > {
+    return {
+      branchNameSnapshot: lesson.branch.name,
+      groupNameSnapshot: lesson.group.name,
+      lessonStartsAtSnapshot: lesson.startsAt,
+    };
+  }
+
+  private async manualLessonAccruals(
+    payrollPeriodId: string,
+    lesson: {
+      attendance: Array<{ directPaymentId: string | null; status: string; studentId: string }>;
+      branch: { name: string };
+      branchId: string;
+      group: { name: string };
+      groupId: string;
+      id: string;
+      payoutCategory: PayoutCategory;
+      startsAt: Date;
+      substitution: { substituteTrainerId: string } | null;
+      trialAppointments: Array<{
+        status: string;
+        studentId: string | null;
+        supersededAt: Date | null;
+      }>;
+    },
+    trainerId: string,
+    legacyRules: Prisma.PayrollRuleGetPayload<Record<string, never>>[],
+    payoutRules: Prisma.TrainerPayoutRuleGetPayload<Record<string, never>>[],
+    metadata: Pick<
+      Prisma.PayrollAccrualCreateManyInput,
+      'manualAddedAt' | 'manualAddedByUserId' | 'manualAdditionReason'
+    >,
+  ): Promise<Prisma.PayrollAccrualCreateManyInput[]> {
+    const snapshot = { ...this.payrollLessonSnapshot(lesson), ...metadata };
+    const trainerPolicies = payoutRules.filter(
+      ({ effectiveFrom }) => effectiveFrom <= lesson.startsAt,
+    );
+    const hasEffectiveProfile = trainerPolicies.length > 0;
+    if (hasEffectiveProfile) {
+      const effectiveRule = (category: PayoutCategory) =>
+        trainerPolicies.find((rule) => rule.category === category);
+      const substitutionRule = lesson.substitution ? effectiveRule('SUBSTITUTION') : undefined;
+      const useSubstitutionRule = Boolean(substitutionRule?.mode);
+      const trialStudentIds = new Set(
+        lesson.trialAppointments.flatMap((appointment) =>
+          appointment.studentId &&
+          appointment.status === 'BOOKED' &&
+          appointment.supersededAt === null
+            ? [appointment.studentId]
+            : [],
+        ),
+      );
+      const categorized = new Map<PayoutCategory, string[]>();
+      for (const attendance of lesson.attendance.filter(
+        ({ status }) => status === 'PRESENT' || status === 'LATE' || status === 'TRIAL',
+      )) {
+        const category: PayoutCategory = useSubstitutionRule
+          ? 'SUBSTITUTION'
+          : attendance.status === 'TRIAL' || trialStudentIds.has(attendance.studentId)
+            ? 'TRIAL'
+            : attendance.directPaymentId
+              ? 'SINGLE_VISIT'
+              : lesson.payoutCategory;
+        categorized.set(category, [...(categorized.get(category) ?? []), attendance.studentId]);
+      }
+      if (!categorized.size)
+        categorized.set(useSubstitutionRule ? 'SUBSTITUTION' : lesson.payoutCategory, []);
+      return Promise.all(
+        [...categorized].map(async ([category, studentIds]) => {
+          const rule = category === 'SUBSTITUTION' ? substitutionRule : effectiveRule(category);
+          const mode = rule?.mode ?? null;
+          const revenueBase =
+            mode === 'PERCENTAGE' ? await this.lessonRevenueBase(lesson.id, studentIds) : null;
+          const calculatedAmount = this.calculateTrainerPayout(
+            mode,
+            rule?.amount ?? 0,
+            rule?.percentageBasisPoints ?? 0,
+            studentIds.length,
+            revenueBase ?? 0,
+          );
+          return {
+            ...snapshot,
+            attendeeCount: studentIds.length,
+            baseAmount: rule?.amount ?? 0,
+            branchId: lesson.branchId,
+            calculatedAmount,
+            coachId: trainerId,
+            finalAmount: calculatedAmount,
+            groupId: lesson.groupId,
+            lessonId: lesson.id,
+            payoutAmount: rule?.amount ?? null,
+            payoutCategory: category,
+            payoutMode: mode,
+            payoutPercentageBasisPoints: rule?.percentageBasisPoints ?? null,
+            payoutRuleEffectiveFrom: rule?.effectiveFrom ?? null,
+            payoutRuleId: rule?.id ?? null,
+            payrollPeriodId,
+            revenueBase,
+            type: this.payoutModeToPayrollType(mode),
+          };
+        }),
+      );
+    }
+    const rule = legacyRules
+      .filter(
+        (item) =>
+          (!item.groupId || item.groupId === lesson.groupId) &&
+          item.validFrom <= lesson.startsAt &&
+          (!item.validTo || item.validTo >= lesson.startsAt),
+      )
+      .sort((left, right) => Number(Boolean(right.groupId)) - Number(Boolean(left.groupId)))[0];
+    const attendeeCount = lesson.attendance.filter(
+      ({ status }) => status === 'PRESENT' || status === 'LATE',
+    ).length;
+    if (!rule || rule.type === 'FIXED_MONTHLY')
+      return [
+        {
+          ...snapshot,
+          attendeeCount,
+          baseAmount: 0,
+          branchId: lesson.branchId,
+          calculatedAmount: 0,
+          coachId: trainerId,
+          finalAmount: 0,
+          groupId: lesson.groupId,
+          lessonId: lesson.id,
+          payrollPeriodId,
+          payoutCategory: lesson.payoutCategory,
+          payoutMode: null,
+          type: 'FIXED_PER_LESSON',
+        },
+      ];
+    const revenueBase =
+      rule.type === 'PERCENT_OF_REVENUE' ? await this.lessonRevenueBase(lesson.id) : null;
+    const calculatedAmount = this.calculateAccrual(rule, attendeeCount, revenueBase ?? 0);
+    return [
+      {
+        ...snapshot,
+        attendeeCount,
+        baseAmount: rule.fixedAmount ?? rule.amountPerAttendee ?? 0,
+        branchId: lesson.branchId,
+        calculatedAmount,
+        coachId: trainerId,
+        finalAmount: calculatedAmount,
+        groupId: lesson.groupId,
+        lessonId: lesson.id,
+        payrollPeriodId,
+        revenueBase,
+        type: rule.type,
+      },
+    ];
+  }
+
+  private async nextPayrollSheetNumber(
+    transaction: TransactionClient,
+    date: Date,
+  ): Promise<string> {
+    const year = date.getFullYear();
+    const sequence = await transaction.payrollSheetSequence.upsert({
+      create: { nextNumber: 2, year },
+      update: { nextNumber: { increment: 1 } },
+      where: { year },
+    });
+    return `ЗП-${String(year)}-${String(sequence.nextNumber - 1).padStart(4, '0')}`;
   }
 
   private payoutModeToPayrollType(

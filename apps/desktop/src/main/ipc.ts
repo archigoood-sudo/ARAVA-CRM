@@ -96,6 +96,8 @@ import {
   paymentOperationReasonSchema,
   publicationInputSchema,
   payrollAdjustmentInputSchema,
+  payrollManualLessonInputSchema,
+  payrollDiagnosticFormatSchema,
   payrollPaymentInputSchema,
   payrollPeriodInputSchema,
   payrollRuleInputSchema,
@@ -1692,6 +1694,11 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
       ),
+    [IPC_CHANNELS.payrollPeriodDelete]: (unsafeToken, unsafeId) =>
+      management.deletePayrollPeriod(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
     [IPC_CHANNELS.payrollPeriodApprove]: (unsafeToken, unsafeId) =>
       management.approvePayrollPeriod(
         sessionTokenSchema.parse(unsafeToken),
@@ -1708,6 +1715,48 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
         payrollAdjustmentInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.payrollPeriodDiagnosticExport]: async (unsafeToken, unsafeId, unsafeFormat) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const format = payrollDiagnosticFormatSchema.parse(unsafeFormat);
+      const report = await management.payrollPeriodDiagnosticExport(
+        token,
+        identifierSchema.parse(unsafeId),
+        format,
+      );
+      if (report.status === 'EMPTY') return report;
+      const selected = backupDependencies.chooseFinanceExportPath
+        ? await backupDependencies.chooseFinanceExportPath(report.filename)
+        : (
+            await dialog.showSaveDialog({
+              buttonLabel: 'Сохранить диагностику',
+              defaultPath: join(app.getPath('documents'), report.filename),
+              filters: [
+                format === 'json'
+                  ? { extensions: ['json'], name: 'Диагностика (JSON)' }
+                  : format === 'csv'
+                    ? { extensions: ['csv'], name: 'Диагностика (CSV)' }
+                    : { extensions: ['txt'], name: 'Диагностика (TXT)' },
+              ],
+              title: 'Сохранить диагностику',
+            })
+          ).filePath;
+      if (!selected) return { ...report, status: 'CANCELLED' as const };
+      if (backupDependencies.writeFinanceExport)
+        await backupDependencies.writeFinanceExport(selected, report.content);
+      else await writeFile(selected, report.content, 'utf8');
+      return { ...report, status: 'SAVED' as const };
+    },
+    [IPC_CHANNELS.payrollPeriodCandidates]: (unsafeToken, unsafeId) =>
+      management.listPayrollLessonCandidates(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
+    [IPC_CHANNELS.payrollPeriodLessonAdd]: (unsafeToken, unsafeId, unsafeInput) =>
+      management.addPayrollLesson(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        payrollManualLessonInputSchema.parse(unsafeInput),
       ),
     [IPC_CHANNELS.payrollCoachView]: (unsafeToken, unsafeDateFrom, unsafeDateTo) =>
       management.coachPayroll(

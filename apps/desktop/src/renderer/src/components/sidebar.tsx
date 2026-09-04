@@ -15,7 +15,6 @@ import {
   FileSpreadsheet,
   FolderTree,
   DoorOpen,
-  HandCoins,
   ListChecks,
   IdCard,
   WalletCards,
@@ -110,11 +109,6 @@ export function Sidebar() {
           { icon: FileSpreadsheet, label: 'Отчёты', to: '/reports' },
         ]
       : []),
-    {
-      icon: HandCoins,
-      label: user?.role === 'COACH' ? 'Моя зарплата' : 'Зарплата',
-      to: '/payroll',
-    },
     ...(!trainer
       ? [
           { icon: Building2, label: t('nav.branches'), to: '/branches' },

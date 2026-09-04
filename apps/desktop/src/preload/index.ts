@@ -373,6 +373,8 @@ const desktopApi: AravaDesktopApi = {
     updateRegister: (token, id, input) => invoke(IPC_CHANNELS.cashRegisterUpdate, token, id, input),
   },
   payroll: {
+    addLesson: (token, periodId, input) =>
+      invoke(IPC_CHANNELS.payrollPeriodLessonAdd, token, periodId, input),
     adjustAccrual: (token, id, input) =>
       invoke(IPC_CHANNELS.payrollAccrualAdjust, token, id, input),
     approvePeriod: (token, id) => invoke(IPC_CHANNELS.payrollPeriodApprove, token, id),
@@ -383,7 +385,12 @@ const desktopApi: AravaDesktopApi = {
     createRule: (token, input) => invoke(IPC_CHANNELS.payrollRuleCreate, token, input),
     getPeriod: (token, id) => invoke(IPC_CHANNELS.payrollPeriodGet, token, id),
     listPeriods: (token, branchId) => invoke(IPC_CHANNELS.payrollPeriodList, token, branchId),
+    listCandidates: (token, periodId) =>
+      invoke(IPC_CHANNELS.payrollPeriodCandidates, token, periodId),
     listRules: (token, branchId) => invoke(IPC_CHANNELS.payrollRuleList, token, branchId),
+    deletePeriod: (token, id) => invoke(IPC_CHANNELS.payrollPeriodDelete, token, id),
+    exportDiagnostic: (token, id, format) =>
+      invoke(IPC_CHANNELS.payrollPeriodDiagnosticExport, token, id, format),
     payPeriod: (token, id, input) => invoke(IPC_CHANNELS.payrollPeriodPay, token, id, input),
     updateRule: (token, id, input) => invoke(IPC_CHANNELS.payrollRuleUpdate, token, id, input),
     getTrainerPayoutProfile: (token, trainerId) =>

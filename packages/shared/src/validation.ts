@@ -85,8 +85,10 @@ import {
   type PaymentListQuery,
   type RefundInput,
   type PayrollAdjustmentInput,
+  type PayrollManualLessonInput,
   type PayrollPaymentInput,
   type PayrollPeriodInput,
+  type PayrollDiagnosticFormat,
   type PayrollRuleInput,
   type TrainerPayoutProfileInput,
   type ReportQuery,
@@ -1062,11 +1064,25 @@ export const trainerPayoutProfileInputSchema: z.ZodType<TrainerPayoutProfileInpu
   .strict();
 
 export const payrollPeriodInputSchema: z.ZodType<PayrollPeriodInput> = z
-  .object({ branchId: optionalIdentifier, dateFrom: isoDate, dateTo: isoDate })
+  .object({
+    branchId: optionalIdentifier,
+    dateFrom: isoDate,
+    dateTo: isoDate,
+    trainerId: optionalIdentifier,
+  })
   .refine((input) => input.dateFrom <= input.dateTo, {
     message: t('validation.dateRange'),
     path: ['dateTo'],
   });
+
+export const payrollManualLessonInputSchema: z.ZodType<PayrollManualLessonInput> = z.object({
+  lessonId: z.string().min(1).max(100),
+  reason: z.string().trim().min(2, 'Укажите причину добавления занятия.').max(500),
+});
+
+export const payrollDiagnosticFormatSchema: z.ZodType<PayrollDiagnosticFormat | undefined> = z
+  .enum(['json', 'txt', 'csv'])
+  .optional();
 
 export const payrollAdjustmentInputSchema: z.ZodType<PayrollAdjustmentInput> = z.object({
   amount: z.number().int().min(-1_000_000_000).max(1_000_000_000),
