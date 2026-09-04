@@ -79,7 +79,16 @@ export function ScheduleDialog({
       title={schedule ? t('schedule.editTitle') : t('schedule.createTitle')}
       wide
     >
-      <form className="grid grid-cols-2 gap-4" onSubmit={handleSubmit(onSubmit)}>
+      <form
+        className="grid grid-cols-2 gap-4"
+        onSubmit={handleSubmit((value) =>
+          onSubmit({
+            ...value,
+            room: undefined,
+            roomId: value.roomId?.length ? value.roomId : undefined,
+          }),
+        )}
+      >
         <Field label={t('student.branch')}>
           <Select {...register('branchId')}>
             {branches.map((branch) => (

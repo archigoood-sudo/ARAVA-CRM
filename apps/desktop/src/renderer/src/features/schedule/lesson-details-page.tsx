@@ -165,7 +165,7 @@ export function LessonDetailsPage() {
           />
           <Info
             label={t('lesson.room')}
-            value={detail.roomName ?? detail.room ?? 'Зал не указан'}
+            value={detail.roomName ?? (detail.roomId ? detail.room : undefined) ?? 'Зал не указан'}
           />
           <div className="col-span-2 mt-4 flex gap-3">
             <Button onClick={() => navigate(`/attendance/${detail.id}`)}>

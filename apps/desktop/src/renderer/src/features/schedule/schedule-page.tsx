@@ -598,7 +598,8 @@ export function SchedulePage() {
                     hour: '2-digit',
                     minute: '2-digit',
                   })}{' '}
-                  · {lesson.roomName ?? lesson.room ?? 'Зал не указан'}
+                  ·{' '}
+                  {lesson.roomName ?? (lesson.roomId ? lesson.room : undefined) ?? 'Зал не указан'}
                 </p>
                 {lesson.originalStartsAt ? (
                   <p className="mt-1 text-xs font-semibold text-amber-700">

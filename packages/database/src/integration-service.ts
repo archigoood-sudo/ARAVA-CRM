@@ -3279,6 +3279,14 @@ export class IntegrationService {
 
   async getStatus(token: string): Promise<IntegrationStatus> {
     await this.assertSyncObserver(token);
+    const current = await this.systemStatus();
+    if (current.enabled && current.connectionState === 'OFFLINE') {
+      try {
+        await this.healthCheck();
+      } catch {
+        // Keep the last confirmed backend state until the next retry.
+      }
+    }
     return this.systemStatus();
   }
 

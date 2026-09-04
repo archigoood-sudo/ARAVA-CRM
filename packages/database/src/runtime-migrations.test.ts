@@ -34,6 +34,7 @@ describe('runtime migrations', () => {
       '20260901000000_trainer_payout_policies',
       '20260901010000_schedule_exceptions_archive',
       '20260904000000_trainer_payroll_sheets',
+      '20260904010000_normalize_invalid_room_references',
     ]);
   });
 });

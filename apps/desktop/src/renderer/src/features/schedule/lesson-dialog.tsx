@@ -123,7 +123,7 @@ export function LessonDialog({
             coachId: value.coachId?.length ? value.coachId : undefined,
             endsAt: new Date(value.endsAt).toISOString(),
             notes: value.notes?.length ? value.notes : undefined,
-            room: value.room?.length ? value.room : undefined,
+            room: undefined,
             roomId: value.roomId?.length ? value.roomId : undefined,
             startsAt: new Date(value.startsAt).toISOString(),
           }),

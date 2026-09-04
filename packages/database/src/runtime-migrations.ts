@@ -862,4 +862,11 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'CREATE TABLE "PayrollSheetSequence" ("year" INTEGER NOT NULL PRIMARY KEY, "nextNumber" INTEGER NOT NULL, "updatedAt" DATETIME NOT NULL)',
     ],
   },
+  {
+    id: '20260904010000_normalize_invalid_room_references',
+    statements: [
+      'UPDATE "Lesson" SET "roomId" = NULL, "room" = NULL WHERE "roomId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Room" WHERE "Room"."id" = "Lesson"."roomId")',
+      'UPDATE "WeeklySchedule" SET "roomId" = NULL, "room" = NULL WHERE "roomId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Room" WHERE "Room"."id" = "WeeklySchedule"."roomId")',
+    ],
+  },
 ];
