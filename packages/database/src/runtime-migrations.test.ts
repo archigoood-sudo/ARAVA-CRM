@@ -33,6 +33,7 @@ describe('runtime migrations', () => {
       '20260830010000_subscription_lifecycle',
       '20260901000000_trainer_payout_policies',
       '20260901010000_schedule_exceptions_archive',
+      '20260904000000_trainer_payroll_sheets',
     ]);
   });
 });
