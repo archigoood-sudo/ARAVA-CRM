@@ -83,7 +83,7 @@ test('профиль тренера открывается из сотрудни
     await expect(page.getByText('Фиксировано за посещение')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Сбросить пароль' })).toBeVisible();
 
-    await page.evaluate(
+    const payrollDate = await page.evaluate(
       async ({ branchId, trainerId }) => {
         const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
           state?: { token?: string };
@@ -120,30 +120,24 @@ test('профиль тренера открывается из сотрудни
           startsAt: startsAt.toISOString(),
         });
         await api.attendance.save(token, lesson.id, [{ status: 'PRESENT', studentId: student.id }]);
-        const period = await api.payroll.createPeriod(token, {
-          branchId,
-          dateFrom: localDay,
-          dateTo: localDay,
-        });
-        await api.payroll.calculatePeriod(token, period.id);
+        return localDay;
       },
       { branchId: created.branchId, trainerId: created.trainerA.id },
     );
-    await page.evaluate(() => {
-      location.hash = '/payroll';
-    });
-    await page.getByRole('button').filter({ hasText: 'Рассчитан' }).first().click();
-    await page.getByRole('button', { name: /Расчётный лист · Алексей Профильный/u }).click();
-    const calculationSheet = page.getByRole('dialog', { name: 'Расчётный лист тренера' });
+    await page.getByLabel('С даты').fill(payrollDate);
+    await page.getByLabel('По дату').fill(payrollDate);
+    await page.getByRole('button', { name: 'Рассчитать зарплату' }).click();
+    await expect(page.getByRole('heading', { name: 'Предпросмотр расчёта' })).toBeVisible();
+    const calculationSheet = page
+      .getByRole('heading', { name: 'Расчётный лист тренера' })
+      .locator('xpath=ancestor::section[1]');
+    await expect(calculationSheet).toBeVisible();
     await expect(
-      calculationSheet.getByRole('heading', { name: 'Алексей Профильный' }),
+      calculationSheet.getByRole('cell', { name: 'Группа расчётного листа' }),
     ).toBeVisible();
-    await expect(calculationSheet.getByText('Группа расчётного листа')).toBeVisible();
-    await expect(calculationSheet.getByText('Начислено за период')).toBeVisible();
-    await expect(
-      calculationSheet.getByRole('button', { name: 'Печать / сохранить PDF' }),
-    ).toBeVisible();
-    await page.keyboard.press('Escape');
+    await expect(calculationSheet.getByText('Начислено по занятиям')).toBeVisible();
+    await expect(calculationSheet.getByText('Итого к выплате')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Печать / PDF' })).toBeVisible();
 
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     const search = page.getByRole('region', { name: 'Глобальный поиск' });

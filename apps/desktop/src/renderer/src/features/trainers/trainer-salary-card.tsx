@@ -338,7 +338,7 @@ export function TrainerSalaryCard({
       <Card className="border-neutral-800 bg-sidebar text-white">
         <CardHeader className="flex-row items-center justify-between gap-3">
           <div>
-            <CardTitle>Зарплата</CardTitle>
+            <CardTitle>Расчётный лист</CardTitle>
             <p className="mt-1 text-sm text-neutral-400">
               Расчётный лист формируется только для этого тренера.
             </p>
