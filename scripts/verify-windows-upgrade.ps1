@@ -4,6 +4,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Wait-ForInstalledExecutable([string]$Path, [string]$InstallerName) {
+  for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
+    if (Test-Path $Path) { return }
+    Start-Sleep -Seconds 1
+  }
+  throw "$InstallerName installer did not create $Path"
+}
+
 $oldReleaseDirectory = Join-Path $env:RUNNER_TEMP 'arava-old-release'
 New-Item -ItemType Directory -Force -Path $oldReleaseDirectory | Out-Null
 
@@ -17,9 +26,7 @@ $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs\ARAVA CRM'
 $installedExecutable = Join-Path $installDirectory 'ARAVA CRM.exe'
 
 Start-Process -FilePath $oldInstaller -ArgumentList '/S' -Wait
-if (-not (Test-Path $installedExecutable)) {
-  throw "The 0.5.1 installer did not create $installedExecutable"
-}
+Wait-ForInstalledExecutable $installedExecutable 'The 0.5.1'
 
 $dataDirectory = Join-Path $env:APPDATA '@arava\desktop'
 $mediaDirectory = Join-Path $dataDirectory 'managed-media\customer-display'
@@ -39,9 +46,7 @@ $before = @{
 }
 
 Start-Process -FilePath $CurrentInstaller -ArgumentList '/S' -Wait
-if (-not (Test-Path $installedExecutable)) {
-  throw "The current installer did not preserve $installedExecutable"
-}
+Wait-ForInstalledExecutable $installedExecutable 'The current'
 
 $after = @{
   database = (Get-FileHash $databasePath -Algorithm SHA256).Hash
