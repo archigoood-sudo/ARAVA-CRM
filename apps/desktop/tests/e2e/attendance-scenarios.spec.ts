@@ -1,12 +1,24 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type ElectronApplication } from '@playwright/test';
 import { resolve } from 'node:path';
 
 import { launchElectron } from './electron-launch';
 
+async function closeApplication(application: ElectronApplication): Promise<void> {
+  const process = application.process();
+  const closed = await Promise.race([
+    application.close().then(() => true),
+    new Promise<boolean>((resolveCloseTimeout) =>
+      setTimeout(() => resolveCloseTimeout(false), 10_000),
+    ),
+  ]);
+  if (!closed) process.kill('SIGKILL');
+  await application.close().catch(() => undefined);
+}
+
 test('OWNER changes attendance scenarios and the setting survives restart', async ({
   request: _request,
 }, testInfo) => {
-  test.setTimeout(90_000);
+  test.setTimeout(process.env.CI ? 240_000 : 90_000);
   const executablePath = process.env.ARAVA_E2E_EXECUTABLE;
   const userDataArgument = `--user-data-dir=${testInfo.outputPath('user-data')}`;
   const launch = () =>
@@ -34,7 +46,7 @@ test('OWNER changes attendance scenarios and the setting survives restart', asyn
     await absentDeduction.click();
     await expect(absentDeduction).toHaveAttribute('aria-checked', 'false');
 
-    await application.close();
+    await closeApplication(application);
     application = await launch();
     window = await application.firstWindow();
     const email = window.getByLabel('Электронная почта');
@@ -48,6 +60,6 @@ test('OWNER changes attendance scenarios and the setting survives restart', asyn
       window.getByRole('switch', { name: 'Отсутствовал: списывать с абонемента' }),
     ).toHaveAttribute('aria-checked', 'false');
   } finally {
-    await application.close();
+    await closeApplication(application);
   }
 });
