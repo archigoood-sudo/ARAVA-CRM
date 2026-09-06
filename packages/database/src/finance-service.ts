@@ -128,9 +128,10 @@ async function paidSubscriptionConsumable(
       0,
     );
   const paymentAllowsConsumption =
-    subscription.status === 'PENDING'
+    subscription.salePrice === 0 ||
+    (subscription.status === 'PENDING'
       ? paid >= subscription.salePrice
-      : subscription.payments.some(({ status }) => status !== 'CANCELLED');
+      : subscription.payments.some(({ status }) => status !== 'CANCELLED'));
   return (
     paymentAllowsConsumption &&
     subscription.startsAt <= at &&
@@ -618,16 +619,10 @@ export async function createCanonicalSubscription(
   actor: AuthenticatedUser,
   input: SubscriptionCreateInput,
   subscriptionPaymentOperationId?: string,
-): Promise<{ id: string; paymentId: string }> {
+): Promise<{ id: string; paymentId?: string }> {
   assertPermission(actor, 'subscriptions:manage');
-  if (!Number.isInteger(input.salePrice) || input.salePrice <= 0)
-    throw new DomainError('VALIDATION', 'Абонемент должен иметь положительную стоимость.');
-  if (
-    !input.initialPayment ||
-    !Number.isInteger(input.initialPayment.amount) ||
-    input.initialPayment.amount !== input.salePrice
-  )
-    throw new DomainError('VALIDATION', 'Абонемент выдаётся только после полной успешной оплаты.');
+  if (!Number.isInteger(input.salePrice) || input.salePrice < 0)
+    throw new DomainError('VALIDATION', t('validation.money'));
   if (input.idempotencyKey) {
     const existing = await client.subscription.findUnique({
       where: { saleIdempotencyKey: input.idempotencyKey },
@@ -644,6 +639,7 @@ export async function createCanonicalSubscription(
         (input.expiresAt && existing.expiresAt?.getTime() !== requestedExpiresAt?.getTime())
       )
         throw new DomainError('CONFLICT', 'Ключ продажи уже использован для другого абонемента.');
+      if (existing.salePrice === 0) return { id: existing.id };
       const payment = await client.payment.findFirst({
         orderBy: { createdAt: 'asc' },
         where: { status: { not: 'CANCELLED' }, subscriptionId: existing.id },
@@ -667,6 +663,14 @@ export async function createCanonicalSubscription(
   if (!tariff) throw new DomainError('NOT_FOUND', t('domain.notFound.tariff'));
   if (!tariff.isActive || tariff.archivedAt)
     throw new DomainError('VALIDATION', t('domain.validation.tariffArchived'));
+  const isFree = input.salePrice === 0;
+  if (isFree ? tariff.price !== 0 : input.initialPayment?.amount !== input.salePrice)
+    throw new DomainError(
+      'VALIDATION',
+      isFree
+        ? 'Бесплатный абонемент можно выдать только по тарифу с ценой 0 ₽.'
+        : 'Абонемент выдаётся только после полной успешной оплаты.',
+    );
   if (!subscriptionPaymentOperationId && input.salePrice !== tariff.price)
     throw new DomainError('VALIDATION', 'Стоимость тарифа изменилась. Выберите тариф заново.');
   const branchId = tariff.branchId ?? student.branchId;
@@ -696,15 +700,17 @@ export async function createCanonicalSubscription(
       : null;
   if (expiresAt && expiresAt < startsAt)
     throw new DomainError('VALIDATION', 'Дата окончания не может быть раньше даты начала.');
-  const payment = await createCanonicalPayment(client, actor, {
-    amount: input.initialPayment.amount,
-    branchId,
-    comment: input.initialPayment.comment,
-    externalReference: input.initialPayment.externalReference,
-    paidAt: input.initialPayment.paidAt,
-    paymentMethod: input.initialPayment.paymentMethod,
-    studentId: input.studentId,
-  });
+  const payment = isFree
+    ? undefined
+    : await createCanonicalPayment(client, actor, {
+        amount: input.initialPayment?.amount ?? 0,
+        branchId,
+        comment: input.initialPayment?.comment,
+        externalReference: input.initialPayment?.externalReference,
+        paidAt: input.initialPayment?.paidAt ?? new Date().toISOString(),
+        paymentMethod: input.initialPayment?.paymentMethod ?? 'CASH',
+        studentId: input.studentId,
+      });
   const subscription = await client.subscription.create({
     data: {
       branchId,
@@ -741,10 +747,11 @@ export async function createCanonicalSubscription(
       type: 'PURCHASE',
     },
   });
-  await client.payment.update({
-    data: { subscriptionId: subscription.id },
-    where: { id: payment.id },
-  });
+  if (payment)
+    await client.payment.update({
+      data: { subscriptionId: subscription.id },
+      where: { id: payment.id },
+    });
   await client.auditLog.create({
     data: {
       action: 'SUBSCRIPTION_CREATED',
@@ -760,11 +767,12 @@ export async function createCanonicalSubscription(
   });
   await client.auditLog.create({
     data: {
-      action: 'SUBSCRIPTION_SALE_COMPLETED',
+      action: isFree ? 'SUBSCRIPTION_GRANTED_FREE' : 'SUBSCRIPTION_SALE_COMPLETED',
       actorUserId: actor.id,
       detail: JSON.stringify({
-        amount: input.initialPayment.amount,
-        paymentMethod: input.initialPayment.paymentMethod,
+        amount: input.salePrice,
+        free: isFree,
+        paymentMethod: input.initialPayment?.paymentMethod,
         salePrice: input.salePrice,
         startsAt: input.startsAt,
         sequenceAfterSubscriptionId: input.sequenceAfterSubscriptionId,
@@ -784,7 +792,49 @@ export async function createCanonicalSubscription(
     data: { outcome: 'PURCHASED', version: { increment: 1 } },
     where: { outcome: null, status: 'BOOKED', studentId: student.id, supersededAt: null },
   });
-  return { id: subscription.id, paymentId: payment.id };
+  return payment ? { id: subscription.id, paymentId: payment.id } : { id: subscription.id };
+}
+
+export async function coverCanonicalFreeAttendance(
+  client: Prisma.TransactionClient,
+  actor: AuthenticatedUser,
+  input: { lessonId: string; studentId: string; tariffId: string },
+): Promise<void> {
+  assertPermission(actor, 'payments:manage');
+  const attendance = await client.attendance.findUnique({
+    include: { lesson: { select: { branchId: true } } },
+    where: { lessonId_studentId: { lessonId: input.lessonId, studentId: input.studentId } },
+  });
+  if (!attendance) throw new DomainError('NOT_FOUND', 'Посещение не найдено.');
+  assertBranchAccess(actor, attendance.lesson.branchId);
+  await assertDirectAttendancePayment(client, {
+    amount: 0,
+    branchId: attendance.lesson.branchId,
+    lessonId: input.lessonId,
+    studentId: input.studentId,
+    tariffId: input.tariffId,
+  });
+  const covered = await client.attendance.updateMany({
+    data: { freeAttendanceTariffId: input.tariffId },
+    where: {
+      directPaymentId: null,
+      directPaymentOperationId: null,
+      freeAttendanceTariffId: null,
+      lessonId: input.lessonId,
+      studentId: input.studentId,
+    },
+  });
+  if (covered.count !== 1)
+    throw new DomainError('CONFLICT', 'Это посещение уже оплачено или находится в оплате.');
+  await client.auditLog.create({
+    data: {
+      action: 'ATTENDANCE_FREE_COVERED',
+      actorUserId: actor.id,
+      detail: JSON.stringify({ amount: 0, lessonId: input.lessonId, tariffId: input.tariffId }),
+      entityId: `${input.lessonId}:${input.studentId}`,
+      entityType: 'Attendance',
+    },
+  });
 }
 
 export async function assertDirectAttendancePayment(
@@ -829,6 +879,7 @@ export async function assertDirectAttendancePayment(
     throw new DomainError('VALIDATION', 'Посещение относится к другому филиалу.');
   if (
     attendance.directPaymentId ||
+    attendance.freeAttendanceTariffId ||
     (attendance.directPaymentOperationId &&
       attendance.directPaymentOperationId !== input.operationId)
   )
@@ -949,6 +1000,16 @@ export class FinanceService {
     );
     const subscriptionId = subscription.id;
     return this.getSubscription(token, subscriptionId);
+  }
+
+  async coverFreeAttendance(
+    token: string,
+    input: { lessonId: string; studentId: string; tariffId: string },
+  ): Promise<void> {
+    const actor = await this.application.authenticate(token);
+    await this.database.$transaction((transaction) =>
+      coverCanonicalFreeAttendance(transaction, actor, input),
+    );
   }
 
   async listStudentSubscriptions(token: string, studentId: string): Promise<StudentFinanceSummary> {
@@ -2493,6 +2554,7 @@ export class FinanceService {
       this.database.attendance.findMany({
         select: {
           directPaymentId: true,
+          freeAttendanceTariffId: true,
           lesson: { select: { branchId: true, status: true } },
           lessonId: true,
           studentId: true,
@@ -2528,6 +2590,7 @@ export class FinanceService {
     for (const attendance of attendances) {
       if (
         attendance.directPaymentId ||
+        attendance.freeAttendanceTariffId ||
         freeTrials.has(`${attendance.lessonId}:${attendance.studentId}`) ||
         covered.has(`${attendance.lessonId}:${attendance.studentId}`)
       )
@@ -2600,6 +2663,7 @@ export class FinanceService {
     for (const attendance of attendances) {
       if (
         attendance.directPaymentId ||
+        attendance.freeAttendanceTariffId ||
         freeTrials.has(`${attendance.lessonId}:${attendance.studentId}`) ||
         covered.has(`${attendance.lessonId}:${attendance.studentId}`)
       )

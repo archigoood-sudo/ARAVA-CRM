@@ -64,6 +64,7 @@ import {
   financeTodayQuerySchema,
   financeJournalFilterSchema,
   financeJournalQuerySchema,
+  freeAttendanceCoverInputSchema,
   forcedPasswordChangeSchema,
   groupInputSchema,
   groupListQuerySchema,
@@ -1137,6 +1138,11 @@ export function createIpcHandlers(
       finance.createSubscription(
         sessionTokenSchema.parse(unsafeToken),
         subscriptionCreateInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.attendanceCoverFree]: (unsafeToken, unsafeInput) =>
+      finance.coverFreeAttendance(
+        sessionTokenSchema.parse(unsafeToken),
+        freeAttendanceCoverInputSchema.parse(unsafeInput),
       ),
     [IPC_CHANNELS.subscriptionListStudent]: (unsafeToken, unsafeStudentId) =>
       finance.listStudentSubscriptions(

@@ -107,6 +107,7 @@ import {
   type SubscriptionCreateInput,
   type SubscriptionUpdateInput,
   type SubscriptionFreezeInput,
+  type FreeAttendanceCoverInput,
   type TariffInput,
   type TariffListQuery,
   type UserCreateInput,
@@ -773,6 +774,12 @@ export const paymentInputSchema: z.ZodType<PaymentInput> = z.object({
   subscriptionId: optionalIdentifier,
   attendanceLessonId: optionalIdentifier,
   attendanceTariffId: optionalIdentifier,
+});
+
+export const freeAttendanceCoverInputSchema: z.ZodType<FreeAttendanceCoverInput> = z.object({
+  lessonId: z.string().min(1).max(100),
+  studentId: z.string().min(1).max(100),
+  tariffId: z.string().min(1).max(100),
 });
 
 export const paymentOperationCreateSchema: z.ZodType<PaymentOperationCreateInput> = z

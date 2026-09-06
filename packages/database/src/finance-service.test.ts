@@ -390,6 +390,44 @@ describe('Sprint 3 finance service', () => {
     });
   });
 
+  it('issues a genuinely free canonical subscription without a payment or cash movement', async () => {
+    const { branch, group, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 2,
+      name: 'Бесплатный абонемент',
+      price: 0,
+      type: 'LESSON_PACK',
+      validityDays: 30,
+    });
+    const subscription = await finance.createSubscription(ownerToken, {
+      idempotencyKey: 'free-subscription-sale-1',
+      salePrice: 0,
+      startsAt: dateString(new Date(Date.now() - DAY_MS)),
+      studentId: student.id,
+      tariffId: tariff.id,
+    });
+    expect(subscription).toMatchObject({ debt: 0, paidAmount: 0, salePrice: 0, status: 'ACTIVE' });
+    expect(await database.payment.count({ where: { subscriptionId: subscription.id } })).toBe(0);
+    expect(await database.cashTransaction.count({ where: { sourceType: 'PAYMENT' } })).toBe(0);
+
+    const startsAt = new Date();
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(startsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(1);
+    expect(await database.auditLog.count({ where: { action: 'SUBSCRIPTION_GRANTED_FREE' } })).toBe(
+      1,
+    );
+  });
+
   it('blocks every ordinary activation path until a pending subscription is fully paid', async () => {
     const { branch, group, student } = await foundation();
     const tariff = await finance.createTariff(ownerToken, {
@@ -934,6 +972,49 @@ describe('Sprint 3 finance service', () => {
         where: { action: 'ATTENDANCE_DIRECT_PAYMENT_COMPLETED' },
       }),
     ).toBe(2);
+  });
+
+  it('covers a zero-priced single visit without creating a payment or fake revenue', async () => {
+    const { branch, group, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 1,
+      name: 'Бесплатное разовое посещение',
+      price: 0,
+      type: 'SINGLE_LESSON',
+    });
+    const startsAt = new Date(Date.now() - DAY_MS);
+    const lesson = await studio.createLesson(ownerToken, {
+      endsAt: new Date(startsAt.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: startsAt.toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [{ status: 'LATE', studentId: student.id }]);
+    expect(await finance.listStudentSubscriptions(ownerToken, student.id)).toMatchObject({
+      uncoveredDebt: 0,
+      uncoveredAttendances: [expect.objectContaining({ amount: 0, tariffId: tariff.id })],
+    });
+
+    await finance.coverFreeAttendance(ownerToken, {
+      lessonId: lesson.id,
+      studentId: student.id,
+      tariffId: tariff.id,
+    });
+    expect(
+      (await finance.listStudentSubscriptions(ownerToken, student.id)).uncoveredAttendances,
+    ).toHaveLength(0);
+    expect(await database.payment.count({ where: { attendanceLessonId: lesson.id } })).toBe(0);
+    expect(await database.cashTransaction.count({ where: { sourceType: 'PAYMENT' } })).toBe(0);
+    await expect(
+      finance.coverFreeAttendance(ownerToken, {
+        lessonId: lesson.id,
+        studentId: student.id,
+        tariffId: tariff.id,
+      }),
+    ).rejects.toThrow('уже оплачено');
+    expect(await database.auditLog.count({ where: { action: 'ATTENDANCE_FREE_COVERED' } })).toBe(1);
   });
 
   it('reverses coverage after moving startsAt forward without changing attendance or payments', async () => {

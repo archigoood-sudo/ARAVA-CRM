@@ -442,6 +442,8 @@ export class PaymentOperationService {
             locked.id,
           );
           subscriptionId = subscription.id;
+          if (!subscription.paymentId)
+            throw new DomainError('CONFLICT', 'Подтверждённая продажа не создала платёж.');
           paymentId = subscription.paymentId;
         } else {
           const payment = await createCanonicalPayment(transaction, actor, {

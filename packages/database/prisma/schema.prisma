@@ -765,6 +765,7 @@ model Attendance {
   directPaymentId          String?          @unique
   directPaymentOperationId String?          @unique
   directPaymentTariffId    String?
+  freeAttendanceTariffId   String?
 
   @@id([lessonId, studentId])
   @@index([studentId, markedAt])

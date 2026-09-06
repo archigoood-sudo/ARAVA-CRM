@@ -51,7 +51,7 @@ export function SubscriptionDialog({
   activeSubscriptionCount?: number | undefined;
   onSubmit: (
     input: SubscriptionCreateInput,
-    payment: SubscriptionSalePaymentPlan,
+    payment?: SubscriptionSalePaymentPlan,
   ) => Promise<void> | void;
   open: boolean;
   renewalOf?: SubscriptionSummary | undefined;
@@ -99,8 +99,8 @@ export function SubscriptionDialog({
       studentId: student.id,
       tariffId,
     };
-    if (!selected || selected.price <= 0 || !tariffId || !startsAt) {
-      setValidationError('Выберите платный тариф для продажи абонемента.');
+    if (!selected || !tariffId || !startsAt) {
+      setValidationError('Выберите тариф для выдачи абонемента.');
       return;
     }
     if (expiresAt && expiresAt < startsAt) {
@@ -109,7 +109,10 @@ export function SubscriptionDialog({
     }
     setSubmitting(true);
     try {
-      await onSubmit(input, { amount: selected.price, mode: 'FULL' });
+      await onSubmit(
+        input,
+        selected.price === 0 ? undefined : { amount: selected.price, mode: 'FULL' },
+      );
     } finally {
       setSubmitting(false);
     }
@@ -206,8 +209,9 @@ export function SubscriptionDialog({
           />
         </div>
         <div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-900">
-          Абонемент будет выдан только после полной оплаты. Способ оплаты — наличные, карта или СБП
-          — выбирается на следующем шаге.
+          {selected?.price === 0
+            ? 'Тариф бесплатный: абонемент будет выдан без оплаты и без выбора способа оплаты.'
+            : 'Абонемент будет выдан только после полной оплаты. Способ оплаты — наличные, карта или СБП — выбирается на следующем шаге.'}
         </div>
         {validationError || error ? (
           <p className="text-sm text-red-600">{validationError ?? error}</p>
@@ -217,7 +221,11 @@ export function SubscriptionDialog({
             {t('common.cancel')}
           </Button>
           <Button disabled={submitting} onClick={() => void submit()}>
-            {submitting ? t('common.saving') : 'Продолжить к оплате'}
+            {submitting
+              ? t('common.saving')
+              : selected?.price === 0
+                ? 'Выдать бесплатно'
+                : 'Продолжить к оплате'}
           </Button>
         </div>
       </div>

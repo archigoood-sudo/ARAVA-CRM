@@ -17,7 +17,9 @@ export async function subscriptionHasSuccessfulFullPayment(
     include: { payments: { include: { refunds: { select: { amount: true } } } } },
     where: { id: subscriptionId },
   });
-  if (!subscription || subscription.payments.length === 0) return false;
+  if (!subscription) return false;
+  if ((salePrice ?? subscription.salePrice) === 0) return true;
+  if (subscription.payments.length === 0) return false;
   const paid = subscription.payments
     .filter(({ status }) => status !== 'CANCELLED')
     .reduce(
@@ -174,10 +176,15 @@ export async function applyAttendanceWriteOff(
   if (freeTrial) return null;
 
   const attendance = await client.attendance.findUnique({
-    select: { directPaymentId: true, directPaymentOperationId: true },
+    select: { directPaymentId: true, directPaymentOperationId: true, freeAttendanceTariffId: true },
     where: { lessonId_studentId: { lessonId: input.lessonId, studentId: input.studentId } },
   });
-  if (attendance?.directPaymentId || attendance?.directPaymentOperationId) return null;
+  if (
+    attendance?.directPaymentId ||
+    attendance?.directPaymentOperationId ||
+    attendance?.freeAttendanceTariffId
+  )
+    return null;
 
   const attendanceId = `${input.lessonId}:${input.studentId}`;
   const existing = await client.subscriptionLedger.findMany({
@@ -250,15 +257,15 @@ export async function applyAttendanceWriteOff(
           0,
         ) ?? 0;
     const candidatePaymentAllowsConsumption =
-      candidate.status === 'PENDING'
+      candidate.salePrice === 0 ||
+      (candidate.status === 'PENDING'
         ? paid >= candidate.salePrice
-        : candidate.payments.some(({ status }) => status !== 'CANCELLED');
-    const predecessorPaymentAllowsConsumption = Boolean(
-      predecessor &&
-      (predecessor.status === 'PENDING'
+        : candidate.payments.some(({ status }) => status !== 'CANCELLED'));
+    const predecessorPaymentAllowsConsumption =
+      predecessor?.salePrice === 0 ||
+      (predecessor?.status === 'PENDING'
         ? predecessorPaid >= predecessor.salePrice
-        : predecessor.payments.some(({ status }) => status !== 'CANCELLED')),
-    );
+        : (predecessor?.payments.some(({ status }) => status !== 'CANCELLED') ?? false));
     const predecessorStillConsumable = Boolean(
       predecessor &&
       predecessorPaymentAllowsConsumption &&

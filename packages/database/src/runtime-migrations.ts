@@ -869,4 +869,8 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       'UPDATE "WeeklySchedule" SET "roomId" = NULL, "room" = NULL WHERE "roomId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "Room" WHERE "Room"."id" = "WeeklySchedule"."roomId")',
     ],
   },
+  {
+    id: '20260906000000_free_attendance_coverage',
+    statements: ['ALTER TABLE "Attendance" ADD COLUMN "freeAttendanceTariffId" TEXT'],
+  },
 ];

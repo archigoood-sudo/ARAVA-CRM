@@ -43,6 +43,7 @@ export {
   financeJournalFilterSchema,
   financeJournalQuerySchema,
   financeTodayQuerySchema,
+  freeAttendanceCoverInputSchema,
   forcedPasswordChangeSchema,
   genderSchema,
   groupInputSchema,

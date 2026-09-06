@@ -190,12 +190,20 @@ export function StudentFinance({
   });
   const sellSubscription = (
     input: SubscriptionCreateInput,
-    paymentPlan: SubscriptionSalePaymentPlan,
+    paymentPlan?: SubscriptionSalePaymentPlan,
   ) => {
     setError(undefined);
     setSuccessMessage(undefined);
     try {
       setIssueOpen(false);
+      if (!paymentPlan) {
+        void perform(
+          () => issue.mutateAsync(input),
+          t('subscription.errorSave'),
+          () => setSuccessMessage('Бесплатный абонемент выдан'),
+        );
+        return;
+      }
       const tariffName = tariffs.data?.find(({ id }) => id === input.tariffId)?.name ?? 'Абонемент';
       setSubscriptionSale({
         amount: paymentPlan.amount,
@@ -226,6 +234,10 @@ export function StudentFinance({
   });
   const payment = useMutation({
     mutationFn: (input: PaymentInput) => getDesktopApi().payments.create(getSessionToken(), input),
+  });
+  const coverFreeAttendance = useMutation({
+    mutationFn: (input: { lessonId: string; studentId: string; tariffId: string }) =>
+      getDesktopApi().subscriptions.coverFreeAttendance(getSessionToken(), input),
   });
   const refreshAqsi = useMutation({
     mutationFn: (id: string) =>
@@ -424,6 +436,19 @@ export function StudentFinance({
                             attendanceTariffs[attendance.lessonId] ?? attendance.tariffId;
                           const tariff = attendance.tariffs.find(({ id }) => id === tariffId);
                           if (!tariff) return;
+                          if (tariff.price === 0) {
+                            void perform(
+                              () =>
+                                coverFreeAttendance.mutateAsync({
+                                  lessonId: attendance.lessonId,
+                                  studentId: student.id,
+                                  tariffId: tariff.id,
+                                }),
+                              'Не удалось провести бесплатное посещение.',
+                              () => setSuccessMessage('Посещение проведено бесплатно'),
+                            );
+                            return;
+                          }
                           setAttendancePayment({
                             amount: tariff.price,
                             lessonId: attendance.lessonId,
@@ -435,7 +460,12 @@ export function StudentFinance({
                         }}
                         size="small"
                       >
-                        Оплатить разовое посещение
+                        {attendance.tariffs.find(
+                          ({ id }) =>
+                            id === (attendanceTariffs[attendance.lessonId] ?? attendance.tariffId),
+                        )?.price === 0
+                          ? 'Провести бесплатно'
+                          : 'Оплатить разовое посещение'}
                       </Button>
                     </>
                   )}

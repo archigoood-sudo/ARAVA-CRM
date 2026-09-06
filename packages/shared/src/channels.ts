@@ -373,6 +373,7 @@ export const IPC_CHANNELS = {
   subscriptionUnfreeze: 'subscription:unfreeze',
   paymentCancel: 'payment:cancel',
   paymentCreate: 'payment:create',
+  attendanceCoverFree: 'attendance:cover-free',
   paymentGet: 'payment:get',
   paymentList: 'payment:list',
   paymentOperationCancel: 'payment-operation:cancel',
@@ -1224,6 +1225,12 @@ export interface UncoveredAttendanceSummary {
   tariffId?: string | undefined;
   tariffs: { id: string; name: string; price: number }[];
   trainerName?: string | undefined;
+}
+
+export interface FreeAttendanceCoverInput {
+  lessonId: string;
+  studentId: string;
+  tariffId: string;
 }
 
 export interface PaymentOperationCreateInput {
@@ -3762,6 +3769,7 @@ export interface AravaDesktopApi {
       input: SubscriptionAdjustmentInput,
     ) => Promise<SubscriptionDetail>;
     cancel: (token: string, id: string) => Promise<SubscriptionDetail>;
+    coverFreeAttendance: (token: string, input: FreeAttendanceCoverInput) => Promise<void>;
     create: (token: string, input: SubscriptionCreateInput) => Promise<SubscriptionDetail>;
     freeze: (
       token: string,

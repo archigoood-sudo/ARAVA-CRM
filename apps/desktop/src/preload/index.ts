@@ -297,6 +297,7 @@ const desktopApi: AravaDesktopApi = {
     adjust: (token, id, input) => invoke(IPC_CHANNELS.subscriptionAdjust, token, id, input),
     cancel: (token, id) => invoke(IPC_CHANNELS.subscriptionCancel, token, id),
     create: (token, input) => invoke(IPC_CHANNELS.subscriptionCreate, token, input),
+    coverFreeAttendance: (token, input) => invoke(IPC_CHANNELS.attendanceCoverFree, token, input),
     freeze: (token, id, input) => invoke(IPC_CHANNELS.subscriptionFreeze, token, id, input),
     get: (token, id) => invoke(IPC_CHANNELS.subscriptionGet, token, id),
     listStudent: (token, studentId) =>
