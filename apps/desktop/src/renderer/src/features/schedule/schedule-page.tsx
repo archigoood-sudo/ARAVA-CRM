@@ -511,12 +511,42 @@ export function SchedulePage() {
                 days={days}
                 emptyLabel="Нет занятий"
                 items={unassignedSchedules.map((schedule) => ({
+                  color: groups.data?.find(({ id }) => id === schedule.groupId)?.color,
                   content: (
-                    <div>
-                      <p className="font-semibold">
-                        {schedule.startTime}–{schedule.endTime}
-                      </p>
-                      <p className="mt-1 truncate">{schedule.groupName}</p>
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold">
+                          {schedule.startTime}–{schedule.endTime}
+                        </p>
+                        <p className="mt-1 truncate">{schedule.groupName}</p>
+                        <p className="mt-1 truncate text-muted-foreground">
+                          {schedule.coachName ?? 'Тренер не назначен'}
+                        </p>
+                      </div>
+                      {canManage ? (
+                        <span className="flex shrink-0 gap-1">
+                          <button
+                            aria-label={`${t('common.edit')}: ${schedule.groupName}`}
+                            onClick={() => {
+                              setEditingSchedule(schedule);
+                              setScheduleDialog(true);
+                            }}
+                            type="button"
+                          >
+                            <Pencil className="size-3.5" />
+                          </button>
+                          <button
+                            aria-label={`${t('schedule.deactivate')}: ${schedule.groupName}`}
+                            onClick={async () => {
+                              await deactivateSchedule.mutateAsync(schedule.id);
+                              await client.invalidateQueries({ queryKey: ['schedules'] });
+                            }}
+                            type="button"
+                          >
+                            <CalendarX className="size-3.5" />
+                          </button>
+                        </span>
+                      ) : null}
                     </div>
                   ),
                   id: schedule.id,

@@ -41,6 +41,21 @@ test('отмена с отработкой, единоразовый перен�
         name: 'Исключения E2E',
         status: 'ACTIVE',
       });
+      const room = await api.rooms.create(token, {
+        branchId: branch.id,
+        isActive: true,
+        name: 'Новый зал E2E',
+        sortOrder: 1,
+      });
+      const roomlessSchedule = await api.schedules.create(token, {
+        branchId: branch.id,
+        endTime: '09:00',
+        groupId: group.id,
+        isActive: true,
+        startTime: '08:00',
+        validFrom: '2020-01-01',
+        weekday: 1,
+      });
       const student = await api.students.create(token, {
         branchId: branch.id,
         firstName: 'Мила',
@@ -69,12 +84,20 @@ test('отмена с отработкой, единоразовый перен�
         groupId: group.id,
         startsAt: '2030-09-11T15:00:00.000Z',
       });
+      const roomless = await api.lessons.create(token, {
+        endsAt: '2030-09-14T16:00:00.000Z',
+        groupId: group.id,
+        startsAt: '2030-09-14T15:00:00.000Z',
+      });
       await api.students.archive(token, student.id);
       await api.students.archive(token, deletedStudent.id);
       return {
         deletedStudentId: deletedStudent.id,
         movingId: moving.id,
         originalId: original.id,
+        roomId: room.id,
+        roomlessId: roomless.id,
+        roomlessScheduleId: roomlessSchedule.id,
         studentId: student.id,
       };
     });
@@ -107,6 +130,78 @@ test('отмена с отработкой, единоразовый перен�
     await moveDialog.locator('input[type="datetime-local"]').nth(1).fill('2030-09-13T19:00');
     await moveDialog.getByRole('button', { name: 'Сохранить' }).click();
     await expect(page.getByText('Перенесено с')).toBeVisible();
+
+    await page.evaluate((lessonId) => {
+      window.location.hash = `#/lessons/${lessonId}`;
+    }, fixture.roomlessId);
+    await page.getByRole('button', { name: 'Перенести занятие' }).click();
+    const roomlessLessonDialog = page.getByRole('dialog');
+    const lessonRoom = roomlessLessonDialog.getByRole('combobox').nth(2);
+    await expect(lessonRoom).toHaveValue('');
+    await lessonRoom.selectOption(fixture.roomId);
+    await roomlessLessonDialog.getByRole('button', { name: 'Сохранить' }).click();
+    await expect(page.getByText('Новый зал E2E')).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(async (lessonId) => {
+          const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+            state?: { token?: string };
+          };
+          const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+          const token = persisted.state?.token ?? '';
+          const detail = await api.lessons.get(token, lessonId);
+          const matches = await api.lessons.list(token, {
+            dateFrom: '2030-09-14T00:00:00.000Z',
+            dateTo: '2030-09-14T23:59:59.999Z',
+            groupId: detail.groupId,
+          });
+          return {
+            count: matches.filter(({ id }) => id === lessonId).length,
+            endsAt: detail.endsAt,
+            roomId: detail.roomId,
+            startsAt: detail.startsAt,
+          };
+        }, fixture.roomlessId),
+      )
+      .toEqual({
+        count: 1,
+        endsAt: '2030-09-14T16:00:00.000Z',
+        roomId: fixture.roomId,
+        startsAt: '2030-09-14T15:00:00.000Z',
+      });
+
+    await page.evaluate(() => {
+      window.location.hash = '#/schedule';
+    });
+    const noRoomSection = page.getByTestId('room-week-sections');
+    await noRoomSection.locator('button[aria-label$=": Исключения E2E"]').first().click();
+    const roomlessScheduleDialog = page.getByRole('dialog');
+    const scheduleRoom = roomlessScheduleDialog.getByRole('combobox').nth(4);
+    await expect(scheduleRoom).toHaveValue('');
+    await scheduleRoom.selectOption(fixture.roomId);
+    await roomlessScheduleDialog.getByRole('button', { name: 'Сохранить' }).click();
+    const targetRoom = noRoomSection.locator(`[data-room-id="${fixture.roomId}"]`);
+    await expect(targetRoom.getByText('Исключения E2E', { exact: true })).toHaveCount(1);
+    await expect
+      .poll(() =>
+        page.evaluate(async (scheduleId) => {
+          const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+            state?: { token?: string };
+          };
+          const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+          const schedules = await api.schedules.list(persisted.state?.token ?? '', {});
+          const schedule = schedules.find(({ id }) => id === scheduleId);
+          return schedule
+            ? {
+                count: schedules.filter(({ id }) => id === scheduleId).length,
+                endTime: schedule.endTime,
+                roomId: schedule.roomId,
+                startTime: schedule.startTime,
+              }
+            : null;
+        }, fixture.roomlessScheduleId),
+      )
+      .toEqual({ count: 1, endTime: '09:00', roomId: fixture.roomId, startTime: '08:00' });
 
     await page.getByRole('link', { name: 'Архив', exact: true }).click();
     await expect(
