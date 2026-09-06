@@ -675,6 +675,9 @@ describe('Sprint 4.2B attention center', () => {
         expect.objectContaining({ id: `payroll:attendance:${period.id}`, severity: 'CRITICAL' }),
       ]),
     );
+    expect(items.find(({ id }) => id === `payroll:attendance:${period.id}`)?.actionRoute).toBe(
+      `/legacy-payroll/${period.id}`,
+    );
     const otherRoom = await database.room.create({
       data: { branchId: branch.id, isActive: true, name: 'Малый зал' },
     });
@@ -690,6 +693,9 @@ describe('Sprint 4.2B attention center', () => {
     expect(items.map(({ id }) => id)).not.toContain(`room:closure:${closure.id}`);
     expect(items.map(({ id }) => id)).not.toContain(`payroll:attendance:${period.id}`);
     expect(items.map(({ id }) => id)).toContain(`payroll:review:${period.id}`);
+    expect(items.find(({ id }) => id === `payroll:review:${period.id}`)?.actionRoute).toBe(
+      `/legacy-payroll/${period.id}`,
+    );
   });
 
   it('enforces OWNER scope, ADMIN branch isolation and denies TRAINER IPC-level data', async () => {

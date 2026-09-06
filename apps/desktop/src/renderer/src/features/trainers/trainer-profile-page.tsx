@@ -41,7 +41,7 @@ import {
   WalletCards,
 } from 'lucide-react';
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
@@ -161,6 +161,7 @@ function LessonRow({ lesson }: { lesson: TrainerProfileLesson }) {
 
 export function TrainerProfilePage() {
   const { trainerId = '' } = useParams();
+  const [searchParams] = useSearchParams();
   const actor = useAuthStore((state) => state.user);
   const [month, setMonth] = useState(currentMonth);
   const [actionMessage, setActionMessage] = useState<string>();
@@ -588,7 +589,12 @@ export function TrainerProfilePage() {
 
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
         {actor?.role === 'OWNER' ? (
-          <TrainerSalaryCard isOwner trainerId={trainerId} trainerName={data.trainer.fullName} />
+          <TrainerSalaryCard
+            initialPeriodId={searchParams.get('payrollPeriodId') ?? undefined}
+            isOwner
+            trainerId={trainerId}
+            trainerName={data.trainer.fullName}
+          />
         ) : null}
         {actor?.role !== 'COACH' ? <TrainerPayoutProfileCard trainerId={trainerId} /> : null}
         <Card>

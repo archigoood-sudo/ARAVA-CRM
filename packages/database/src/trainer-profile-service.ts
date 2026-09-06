@@ -338,7 +338,7 @@ export class TrainerProfileService {
     const attention: TrainerProfileOverview['attention'] = [];
     if (pendingAttendance.length)
       attention.push({
-        actionRoute: '/payroll',
+        actionRoute: '/schedule',
         code: 'PENDING_ATTENDANCE',
         message: `${String(pendingAttendance.length)} занятия требуют заполнения посещаемости`,
         tone: 'warning',

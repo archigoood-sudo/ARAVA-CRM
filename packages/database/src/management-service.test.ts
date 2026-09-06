@@ -785,6 +785,63 @@ describe('Sprint 4 management service', () => {
     ]);
   });
 
+  it('deletes a legacy calculated period without deleting its lessons or attendance', async () => {
+    const { branch, coach, group } = await coachFoundation();
+    const day = inputDateForTest(new Date());
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Сохранённый',
+      lastName: 'Источник',
+      status: 'ACTIVE',
+    });
+    await management.createPayrollRule(ownerToken, {
+      branchId: branch.id,
+      coachId: coach.id,
+      fixedAmount: 2_500,
+      groupId: group.id,
+      isActive: true,
+      type: 'FIXED_PER_LESSON',
+      validFrom: day,
+    });
+    const startsAt = new Date();
+    const lesson = await database.lesson.create({
+      data: {
+        attendanceCompletedAt: startsAt,
+        branchId: branch.id,
+        coachId: coach.id,
+        endsAt: new Date(startsAt.getTime() + 60 * 60_000),
+        groupId: group.id,
+        startsAt,
+        status: 'COMPLETED',
+      },
+    });
+    await database.attendance.create({
+      data: {
+        lessonId: lesson.id,
+        markedAt: startsAt,
+        markedByUserId: ownerId,
+        status: 'PRESENT',
+        studentId: student.id,
+      },
+    });
+    const period = await management.createPayrollPeriod(ownerToken, {
+      branchId: branch.id,
+      dateFrom: day,
+      dateTo: day,
+    });
+    await management.calculatePayrollPeriod(ownerToken, period.id);
+    expect((await management.getPayrollPeriod(ownerToken, period.id)).accruals).toHaveLength(1);
+
+    await expect(management.deletePayrollPeriod(ownerToken, period.id)).resolves.toMatchObject({
+      deletedAccrualCount: 1,
+      status: 'DELETED',
+    });
+    expect(await database.payrollPeriod.findUnique({ where: { id: period.id } })).toBeNull();
+    expect(await database.payrollAccrual.count({ where: { payrollPeriodId: period.id } })).toBe(0);
+    expect(await database.lesson.findUnique({ where: { id: lesson.id } })).not.toBeNull();
+    expect(await database.attendance.count({ where: { lessonId: lesson.id } })).toBe(1);
+  });
+
   it('enforces branch and role permissions and exports UTF-8 Russian CSV', async () => {
     const { branch } = await branchAndRegisters();
     await application.createUser(ownerToken, {

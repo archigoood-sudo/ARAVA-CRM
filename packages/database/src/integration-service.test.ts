@@ -1901,6 +1901,40 @@ describe('Sprint 4.5A multi-device integration', () => {
       status: 'SYNCED',
     });
     expect(await database.syncLog.count({ where: { outboxId: retry.id } })).toBe(2);
+    expect(await integration.systemStatus()).toMatchObject({
+      connectionState: 'CONNECTED',
+      lastSuccessfulSync: now.toISOString(),
+    });
+    expect(await integration.systemStatus()).not.toHaveProperty('lastError');
+  });
+
+  it('recomputes a stale offline warning after restart when website health has recovered', async () => {
+    await pair();
+    await database.appSetting.upsert({
+      create: { key: 'integration.lastState', value: 'OFFLINE' },
+      update: { value: 'OFFLINE' },
+      where: { key: 'integration.lastState' },
+    });
+    await database.appSetting.upsert({
+      create: { key: 'integration.lastError', value: 'Старая ошибка' },
+      update: { value: 'Старая ошибка' },
+      where: { key: 'integration.lastError' },
+    });
+    const restarted = new IntegrationService(
+      database,
+      application,
+      credentials,
+      new IntegrationApiClient(),
+      () => now,
+    );
+
+    const status = await restarted.getStatus(ownerToken);
+
+    expect(status).toMatchObject({
+      connectionState: 'CONNECTED',
+      lastSuccessfulSync: now.toISOString(),
+    });
+    expect(status).not.toHaveProperty('lastError');
   });
 
   it('rebases a rapid second mutation from the same device after a delayed acknowledgement', async () => {

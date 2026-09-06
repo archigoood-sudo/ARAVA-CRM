@@ -870,7 +870,10 @@ export class AttentionService {
             severity: 'CRITICAL',
             title: 'Ошибка согласования синхронизации',
           });
-        else if (failedSync >= 3 || pendingCount >= 100 || oldestHours >= 24)
+        else if (
+          failedSync >= 3 ||
+          (state === 'OFFLINE' && (pendingCount >= 100 || oldestHours >= 24))
+        )
           add({
             actionLabel: 'Открыть журнал синхронизации',
             actionRoute: '/settings#integration',
@@ -930,6 +933,7 @@ export class AttentionService {
       dateTo: Date;
       id: string;
       status: string;
+      trainerId: string | null;
     }[],
     branchIds: string[] | undefined,
     now: Date,
@@ -976,7 +980,9 @@ export class AttentionService {
       if (pending.length)
         items.push({
           actionLabel: 'Открыть расчёт зарплаты',
-          actionRoute: `/payroll?periodId=${period.id}`,
+          actionRoute: period.trainerId
+            ? `/trainers/${encodeURIComponent(period.trainerId)}?payrollPeriodId=${encodeURIComponent(period.id)}`
+            : `/legacy-payroll/${encodeURIComponent(period.id)}`,
           branchId: period.branchId ?? undefined,
           branchName: period.branch?.name,
           category: 'PAYROLL',
@@ -991,7 +997,9 @@ export class AttentionService {
       else if (period.status === 'CALCULATED')
         items.push({
           actionLabel: 'Открыть расчёт зарплаты',
-          actionRoute: `/payroll?periodId=${period.id}`,
+          actionRoute: period.trainerId
+            ? `/trainers/${encodeURIComponent(period.trainerId)}?payrollPeriodId=${encodeURIComponent(period.id)}`
+            : `/legacy-payroll/${encodeURIComponent(period.id)}`,
           branchId: period.branchId ?? undefined,
           branchName: period.branch?.name,
           category: 'PAYROLL',

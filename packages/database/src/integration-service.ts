@@ -4791,9 +4791,11 @@ export class IntegrationService {
     try {
       const rotatedToken = await this.api.health(baseUrl, deviceId, token);
       if (rotatedToken) await this.credentials.saveToken(rotatedToken);
+      const checkedAt = this.now().toISOString();
       await Promise.all([
         this.setSetting(SETTINGS.lastState, 'CONNECTED'),
-        this.setSetting(SETTINGS.lastError, ''),
+        this.setSetting(SETTINGS.lastSuccessfulSync, checkedAt),
+        this.database.appSetting.deleteMany({ where: { key: SETTINGS.lastError } }),
       ]);
       await this.log(undefined, 'HEALTH', 'SUCCESS', 1, undefined, 'Соединение установлено.');
     } catch (error) {
@@ -5830,6 +5832,7 @@ export class IntegrationService {
         update: { value: syncedAt.toISOString() },
         where: { key: SETTINGS.lastSuccessfulSync },
       });
+      await transaction.appSetting.deleteMany({ where: { key: SETTINGS.lastError } });
     });
   }
 
@@ -6741,9 +6744,10 @@ export class IntegrationService {
         item.entityId,
         { clientMessageId, text },
       );
+      const syncedAt = this.now();
       await this.database.$transaction([
         this.database.syncOutbox.update({
-          data: { lastErrorCode: null, status: 'SYNCED', syncedAt: this.now() },
+          data: { lastErrorCode: null, status: 'SYNCED', syncedAt },
           where: { id: item.id },
         }),
         this.database.appSetting.upsert({
@@ -6751,6 +6755,12 @@ export class IntegrationService {
           update: { value: 'CONNECTED' },
           where: { key: SETTINGS.lastState },
         }),
+        this.database.appSetting.upsert({
+          create: { key: SETTINGS.lastSuccessfulSync, value: syncedAt.toISOString() },
+          update: { value: syncedAt.toISOString() },
+          where: { key: SETTINGS.lastSuccessfulSync },
+        }),
+        this.database.appSetting.deleteMany({ where: { key: SETTINGS.lastError } }),
       ]);
       await this.log(item, 'CHAT_SEND', 'SYNCED', item.attemptCount + 1);
     } catch (error) {
@@ -6799,9 +6809,10 @@ export class IntegrationService {
         payload.context as unknown as CrmChatRequestContext,
         { checkedInAt, crmStudentId, lessonId },
       );
+      const syncedAt = this.now();
       await this.database.$transaction([
         this.database.syncOutbox.update({
-          data: { lastErrorCode: null, status: 'SYNCED', syncedAt: this.now() },
+          data: { lastErrorCode: null, status: 'SYNCED', syncedAt },
           where: { id: item.id },
         }),
         this.database.appSetting.upsert({
@@ -6809,6 +6820,12 @@ export class IntegrationService {
           update: { value: 'CONNECTED' },
           where: { key: SETTINGS.lastState },
         }),
+        this.database.appSetting.upsert({
+          create: { key: SETTINGS.lastSuccessfulSync, value: syncedAt.toISOString() },
+          update: { value: syncedAt.toISOString() },
+          where: { key: SETTINGS.lastSuccessfulSync },
+        }),
+        this.database.appSetting.deleteMany({ where: { key: SETTINGS.lastError } }),
       ]);
       await this.log(
         item,

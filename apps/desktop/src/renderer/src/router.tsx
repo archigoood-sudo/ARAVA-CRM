@@ -32,6 +32,7 @@ import { StudentsPage } from './features/students/students-page';
 import { TariffsPage } from './features/tariffs/tariffs-page';
 import { UsersPage } from './features/users/users-page';
 import { TrainerProfilePage } from './features/trainers/trainer-profile-page';
+import { LegacyPayrollPage } from './features/trainers/legacy-payroll-page';
 import { AppLayout } from './layouts/app-layout';
 import {
   AuthenticatedRoute,
@@ -86,6 +87,7 @@ export const router = createHashRouter([
           { element: <ReportsPage />, path: '/reports' },
           { element: <UsersPage />, path: '/users' },
           { element: <TrainerProfilePage />, path: '/trainers/:trainerId' },
+          { element: <LegacyPayrollPage />, path: '/legacy-payroll/:periodId' },
           { element: <SettingsPage />, path: '/settings' },
           { element: <AboutPage />, path: '/about' },
         ],

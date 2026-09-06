@@ -22,7 +22,7 @@ import {
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Calculator, Check, CircleAlert, FileDown, Plus, Printer, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { getDesktopApi } from '../../lib/desktop-api';
 import { getErrorMessage } from '../../lib/errors';
@@ -231,10 +231,12 @@ function SalarySheet({
 }
 
 export function TrainerSalaryCard({
+  initialPeriodId,
   trainerId,
   trainerName,
   isOwner,
 }: {
+  initialPeriodId?: string | undefined;
   trainerId: string;
   trainerName: string;
   isOwner: boolean;
@@ -248,6 +250,9 @@ export function TrainerSalaryCard({
   const [selectedLessonId, setSelectedLessonId] = useState<string>();
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState<string>();
+  useEffect(() => {
+    if (initialPeriodId) setSelectedId(initialPeriodId);
+  }, [initialPeriodId]);
   const history = useQuery({
     queryKey: ['trainer-payroll-history', trainerId],
     queryFn: () => getDesktopApi().payroll.listPeriods(getSessionToken()),
