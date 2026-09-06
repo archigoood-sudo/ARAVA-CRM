@@ -46,6 +46,11 @@ import { accessibleBranchIds, assertBranchAccess, assertPermission } from './per
 import { endOfLocalDay, startOfLocalDay } from './schedule';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
+import {
+  attendanceIncludedInTrainerPayroll,
+  readAttendanceScenarioSettings,
+  type AttendanceScenarioSettings,
+} from './attendance-scenarios';
 
 type TransactionClient = Prisma.TransactionClient;
 type DbClient = DatabaseClient | TransactionClient;
@@ -1074,7 +1079,7 @@ export class ManagementService {
         }),
       ),
     ];
-    const [rules, payoutRules] = await Promise.all([
+    const [rules, payoutRules, attendanceScenarios] = await Promise.all([
       this.database.payrollRule.findMany({
         where: {
           coachId: { in: coachIds },
@@ -1088,6 +1093,7 @@ export class ManagementService {
         orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
         where: { trainerId: { in: coachIds } },
       }),
+      readAttendanceScenarioSettings(this.database),
     ]);
     const accruals: Prisma.PayrollAccrualCreateManyInput[] = [];
     for (const lesson of eligibleLessons) {
@@ -1113,8 +1119,8 @@ export class ManagementService {
               : [],
           ),
         );
-        const eligible = lesson.attendance.filter(
-          ({ status }) => status === 'PRESENT' || status === 'LATE' || status === 'TRIAL',
+        const eligible = lesson.attendance.filter(({ status }) =>
+          attendanceIncludedInTrainerPayroll(attendanceScenarios, status),
         );
         const categorized = new Map<PayoutCategory, string[]>();
         for (const attendance of eligible) {
@@ -1180,8 +1186,8 @@ export class ManagementService {
         )
         .sort((a, b) => Number(Boolean(b.groupId)) - Number(Boolean(a.groupId)))[0];
       if (!rule || rule.type === 'FIXED_MONTHLY') continue;
-      const attendeeCount = lesson.attendance.filter(
-        ({ status }) => status === 'PRESENT' || status === 'LATE',
+      const attendeeCount = lesson.attendance.filter(({ status }) =>
+        attendanceIncludedInTrainerPayroll(attendanceScenarios, status),
       ).length;
       const revenueBase =
         rule.type === 'PERCENT_OF_REVENUE' ? await this.lessonRevenueBase(lesson.id) : null;
@@ -1306,6 +1312,7 @@ export class ManagementService {
     const included = new Set(
       period.accruals.flatMap(({ lessonId }) => (lessonId ? [lessonId] : [])),
     );
+    const attendanceScenarios = await readAttendanceScenarioSettings(this.database);
     return lessons
       .filter(
         (lesson) =>
@@ -1313,8 +1320,8 @@ export class ManagementService {
       )
       .filter((lesson) => !included.has(lesson.id))
       .map((lesson) => {
-        const attendanceCount = lesson.attendance.filter(
-          ({ status }) => status === 'PRESENT' || status === 'LATE',
+        const attendanceCount = lesson.attendance.filter(({ status }) =>
+          attendanceIncludedInTrainerPayroll(attendanceScenarios, status),
         ).length;
         const canAdd =
           lesson.status !== 'CANCELLED' &&
@@ -1380,7 +1387,7 @@ export class ManagementService {
     if (period.accruals.some(({ lessonId }) => lessonId === lesson.id))
       throw new DomainError('CONFLICT', 'Это занятие уже есть в расчётном листе.');
 
-    const [legacyRules, payoutRules] = await Promise.all([
+    const [legacyRules, payoutRules, attendanceScenarios] = await Promise.all([
       this.database.payrollRule.findMany({
         where: { coachId: period.trainerId, isActive: true, branchId: lesson.branchId },
       }),
@@ -1388,6 +1395,7 @@ export class ManagementService {
         orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
         where: { trainerId: period.trainerId },
       }),
+      readAttendanceScenarioSettings(this.database),
     ]);
     const metadata = {
       manualAddedAt: new Date(),
@@ -1401,6 +1409,7 @@ export class ManagementService {
       legacyRules,
       payoutRules,
       metadata,
+      attendanceScenarios,
     );
     await this.database.$transaction(async (transaction) => {
       await transaction.payrollAccrual.createMany({ data: accruals });
@@ -1473,65 +1482,67 @@ export class ManagementService {
     const groupIds = [...new Set(occurrences.map((item) => item.groupId))];
     const branchIds = [...new Set(occurrences.map((item) => item.branchId))];
 
-    const [lessons, schedules, groups, branches, users, rules, payoutRules] = await Promise.all([
-      lessonIds.length
-        ? this.database.lesson.findMany({
-            include: payrollDiagnosticLessonInclude,
-            where: { id: { in: lessonIds } },
-          })
-        : Promise.resolve([] as PayrollDiagnosticLessonRecord[]),
-      scheduleTemplateIds.length
-        ? this.database.weeklySchedule.findMany({
-            select: { id: true, coachId: true },
-            where: { id: { in: scheduleTemplateIds } },
-          })
-        : Promise.resolve([] as { id: string; coachId: string | null }[]),
-      groupIds.length
-        ? this.database.danceGroup.findMany({
-            select: {
-              id: true,
-              name: true,
-              coachId: true,
-              branchId: true,
-              branch: { select: { name: true } },
-            },
-            where: { id: { in: groupIds } },
-          })
-        : Promise.resolve(
-            [] as {
-              id: string;
-              name: string;
-              coachId: string | null;
-              branchId: string;
-              branch: { name: string };
-            }[],
-          ),
-      branchIds.length
-        ? this.database.branch.findMany({
-            where: { id: { in: branchIds } },
-            select: { id: true, name: true },
-          })
-        : Promise.resolve([] as { id: string; name: string }[]),
-      this.database.user.findMany({
-        where: { role: 'COACH' },
-        select: { id: true, fullName: true },
-      }),
-      this.database.payrollRule.findMany({
-        include: payrollRuleInclude,
-        where: {
-          ...(period.branchId ? { branchId: period.branchId } : {}),
-          isActive: true,
-          validFrom: { lte: period.dateTo },
-          OR: [{ validTo: null }, { validTo: { gte: period.dateFrom } }],
-        },
-      }),
-      this.database.trainerPayoutRule.findMany({
-        orderBy: [{ trainerId: 'asc' }, { category: 'asc' }, { effectiveFrom: 'desc' }],
-        where: {
-          effectiveFrom: { lte: period.dateTo },
-        },
-      }),
-    ]);
+    const [lessons, schedules, groups, branches, users, rules, payoutRules, attendanceScenarios] =
+      await Promise.all([
+        lessonIds.length
+          ? this.database.lesson.findMany({
+              include: payrollDiagnosticLessonInclude,
+              where: { id: { in: lessonIds } },
+            })
+          : Promise.resolve([] as PayrollDiagnosticLessonRecord[]),
+        scheduleTemplateIds.length
+          ? this.database.weeklySchedule.findMany({
+              select: { id: true, coachId: true },
+              where: { id: { in: scheduleTemplateIds } },
+            })
+          : Promise.resolve([] as { id: string; coachId: string | null }[]),
+        groupIds.length
+          ? this.database.danceGroup.findMany({
+              select: {
+                id: true,
+                name: true,
+                coachId: true,
+                branchId: true,
+                branch: { select: { name: true } },
+              },
+              where: { id: { in: groupIds } },
+            })
+          : Promise.resolve(
+              [] as {
+                id: string;
+                name: string;
+                coachId: string | null;
+                branchId: string;
+                branch: { name: string };
+              }[],
+            ),
+        branchIds.length
+          ? this.database.branch.findMany({
+              where: { id: { in: branchIds } },
+              select: { id: true, name: true },
+            })
+          : Promise.resolve([] as { id: string; name: string }[]),
+        this.database.user.findMany({
+          where: { role: 'COACH' },
+          select: { id: true, fullName: true },
+        }),
+        this.database.payrollRule.findMany({
+          include: payrollRuleInclude,
+          where: {
+            ...(period.branchId ? { branchId: period.branchId } : {}),
+            isActive: true,
+            validFrom: { lte: period.dateTo },
+            OR: [{ validTo: null }, { validTo: { gte: period.dateFrom } }],
+          },
+        }),
+        this.database.trainerPayoutRule.findMany({
+          orderBy: [{ trainerId: 'asc' }, { category: 'asc' }, { effectiveFrom: 'desc' }],
+          where: {
+            effectiveFrom: { lte: period.dateTo },
+          },
+        }),
+        readAttendanceScenarioSettings(this.database),
+      ]);
 
     const lessonById = new Map(lessons.map((lesson) => [lesson.id, lesson]));
     const scheduleById = new Map(schedules.map((schedule) => [schedule.id, schedule]));
@@ -1589,6 +1600,7 @@ export class ManagementService {
       coachById,
       payrollAccrualsByLesson,
       duplicateAccruals,
+      attendanceScenarios,
     });
     const lessonsWithoutTrainerCount = lessonRows.filter(
       (item) => item.status === 'MISSING' && !item.actualTrainerId,
@@ -1654,6 +1666,7 @@ export class ManagementService {
     coachById: Map<string, { id: string; fullName: string }>;
     payrollAccrualsByLesson: Map<string, PayrollPeriodRecord['accruals'][number][]>;
     duplicateAccruals: Map<string, number>;
+    attendanceScenarios: AttendanceScenarioSettings;
   }): PayrollDiagnosticRow[] {
     const {
       period,
@@ -1667,6 +1680,7 @@ export class ManagementService {
       coachById,
       payrollAccrualsByLesson,
       duplicateAccruals,
+      attendanceScenarios,
     } = parameters;
     const rows: PayrollDiagnosticRow[] = [];
     const coachName = (id?: string) =>
@@ -1742,6 +1756,7 @@ export class ManagementService {
         rules,
         payoutRules,
         trainerId: teacherId ?? null,
+        attendanceScenarios,
       });
       const accrualRows = payrollAccrualsByLesson.get(lesson.id) ?? [];
       if (accrualRows.length === 0 && !expectedAccruals.length) {
@@ -1879,8 +1894,9 @@ export class ManagementService {
       trainerId: string;
     }[];
     trainerId?: string | null;
+    attendanceScenarios: AttendanceScenarioSettings;
   }): PayrollDiagnosticExpectation[] {
-    const { lesson, rules, payoutRules, trainerId } = parameters;
+    const { lesson, rules, payoutRules, trainerId, attendanceScenarios } = parameters;
     const trainer = trainerId ?? lesson.coachId ?? null;
     if (!trainer)
       return [
@@ -1902,8 +1918,8 @@ export class ManagementService {
     const hasActiveProfile = trainerProfiles.some(
       ({ effectiveFrom }) => effectiveFrom <= lesson.startsAt,
     );
-    const eligible = lesson.attendance.filter(
-      ({ status }) => status === 'PRESENT' || status === 'LATE' || status === 'TRIAL',
+    const eligible = lesson.attendance.filter(({ status }) =>
+      attendanceIncludedInTrainerPayroll(attendanceScenarios, status),
     );
     const trialStudentIds = new Set(
       lesson.trialAppointments
@@ -1987,8 +2003,8 @@ export class ManagementService {
           trainerId: trainer,
         },
       ];
-    const attendeeCount = lesson.attendance.filter(
-      ({ status }) => status === 'PRESENT' || status === 'LATE',
+    const attendeeCount = lesson.attendance.filter(({ status }) =>
+      attendanceIncludedInTrainerPayroll(attendanceScenarios, status),
     ).length;
     const amount = this.calculateAccrual(
       {
@@ -2683,6 +2699,7 @@ export class ManagementService {
       Prisma.PayrollAccrualCreateManyInput,
       'manualAddedAt' | 'manualAddedByUserId' | 'manualAdditionReason'
     >,
+    attendanceScenarios: AttendanceScenarioSettings,
   ): Promise<Prisma.PayrollAccrualCreateManyInput[]> {
     const snapshot = { ...this.payrollLessonSnapshot(lesson), ...metadata };
     const trainerPolicies = payoutRules.filter(
@@ -2704,8 +2721,8 @@ export class ManagementService {
         ),
       );
       const categorized = new Map<PayoutCategory, string[]>();
-      for (const attendance of lesson.attendance.filter(
-        ({ status }) => status === 'PRESENT' || status === 'LATE' || status === 'TRIAL',
+      for (const attendance of lesson.attendance.filter(({ status }) =>
+        attendanceIncludedInTrainerPayroll(attendanceScenarios, status),
       )) {
         const category: PayoutCategory = useSubstitutionRule
           ? 'SUBSTITUTION'
@@ -2762,8 +2779,8 @@ export class ManagementService {
           (!item.validTo || item.validTo >= lesson.startsAt),
       )
       .sort((left, right) => Number(Boolean(right.groupId)) - Number(Boolean(left.groupId)))[0];
-    const attendeeCount = lesson.attendance.filter(
-      ({ status }) => status === 'PRESENT' || status === 'LATE',
+    const attendeeCount = lesson.attendance.filter(({ status }) =>
+      attendanceIncludedInTrainerPayroll(attendanceScenarios, status),
     ).length;
     if (!rule || rule.type === 'FIXED_MONTHLY')
       return [
@@ -2989,6 +3006,7 @@ export class ManagementService {
   }
 
   private async payrollCalculationFingerprint(period: PayrollPeriodRecord): Promise<string> {
+    const attendanceScenarios = await readAttendanceScenarioSettings(this.database);
     const lessonWhere: Prisma.LessonWhereInput = {
       ...(period.branchId ? { branchId: period.branchId } : {}),
       startsAt: { gte: period.dateFrom, lte: period.dateTo },
@@ -3065,6 +3083,7 @@ export class ManagementService {
       .update(
         JSON.stringify({
           closures,
+          attendanceScenarios,
           exceptions,
           ledger,
           legacyRules: legacyRules.filter(({ coachId }) => relevantTrainerIds.has(coachId)),

@@ -17,6 +17,16 @@ export const LESSON_STATUSES = ['PLANNED', 'COMPLETED', 'CANCELLED'] as const;
 export type LessonStatus = (typeof LESSON_STATUSES)[number];
 export const ATTENDANCE_STATUSES = ['PRESENT', 'ABSENT', 'EXCUSED', 'LATE', 'TRIAL'] as const;
 export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
+export const ATTENDANCE_SCENARIO_STATUSES = ['PRESENT', 'ABSENT', 'ILL', 'LATE'] as const;
+export type AttendanceScenarioStatus = (typeof ATTENDANCE_SCENARIO_STATUSES)[number];
+export interface AttendanceScenarioRule {
+  deductSubscription: boolean;
+  includeInTrainerPayroll: boolean;
+}
+export interface AttendanceScenarioSummary extends AttendanceScenarioRule {
+  status: AttendanceScenarioStatus;
+}
+export type AttendanceScenarioUpdate = AttendanceScenarioRule;
 export const TARIFF_TYPES = ['LESSON_PACK', 'UNLIMITED', 'SINGLE_LESSON', 'TRIAL'] as const;
 export type TariffType = (typeof TARIFF_TYPES)[number];
 export const SUBSCRIPTION_STATUSES = [
@@ -354,6 +364,8 @@ export const IPC_CHANNELS = {
   attendanceGet: 'attendance:get',
   attendanceManualSave: 'attendance:manual-save',
   attendanceOpenOccurrence: 'attendance:open-occurrence',
+  attendanceScenarioList: 'attendance-scenario:list',
+  attendanceScenarioUpdate: 'attendance-scenario:update',
   attendanceSave: 'attendance:save',
   attendanceScanConfirm: 'attendance:scan-confirm',
   attendanceScanOptions: 'attendance:scan-options',
@@ -3743,6 +3755,12 @@ export interface AravaDesktopApi {
       entry: AttendanceEntryInput,
     ) => Promise<AttendanceLessonDetail>;
     openOccurrence: (token: string, input: AttendanceOccurrenceInput) => Promise<LessonSummary>;
+    listScenarios: (token: string) => Promise<AttendanceScenarioSummary[]>;
+    updateScenario: (
+      token: string,
+      status: AttendanceScenarioStatus,
+      input: AttendanceScenarioUpdate,
+    ) => Promise<AttendanceScenarioSummary>;
     scanOptions: (token: string, studentId: string, date: string) => Promise<AttendanceScanOptions>;
     confirmScan: (
       token: string,

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   ATTENDANCE_STATUSES,
+  ATTENDANCE_SCENARIO_STATUSES,
   ARCHIVE_ENTITY_TYPES,
   CASH_REGISTER_TYPES,
   CALENDAR_EXCEPTION_TYPES,
@@ -44,6 +45,7 @@ import {
   type AttentionFilters,
   type ArchiveQuery,
   type AttendanceEntryInput,
+  type AttendanceScenarioUpdate,
   type AttendanceScanConfirmationInput,
   type EnrollmentInput,
   type CashCorrectionInput,
@@ -166,6 +168,11 @@ export const groupStatusSchema = z.enum(GROUP_STATUSES);
 export const enrollmentStatusSchema = z.enum(ENROLLMENT_STATUSES);
 export const lessonStatusSchema = z.enum(LESSON_STATUSES);
 export const attendanceStatusSchema = z.enum(ATTENDANCE_STATUSES);
+export const attendanceScenarioStatusSchema = z.enum(ATTENDANCE_SCENARIO_STATUSES);
+export const attendanceScenarioUpdateSchema: z.ZodType<AttendanceScenarioUpdate> = z.object({
+  deductSubscription: z.boolean(),
+  includeInTrainerPayroll: z.boolean(),
+});
 export const tariffTypeSchema = z.enum(TARIFF_TYPES);
 export const paymentMethodSchema = z.enum(PAYMENT_METHODS);
 export const paymentStatusSchema = z.enum(PAYMENT_STATUSES);

@@ -24,6 +24,7 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { BackupSettings } from './backup-settings';
 import { CustomerDisplaySettings } from './customer-display-settings';
 import { IntegrationSettings } from './integration-settings';
+import { AttendanceScenarioSettings } from './attendance-scenario-settings';
 
 const settingsSchema = z.object({
   workspaceName: z.string().trim().min(2, t('validation.workspaceName')).max(80),
@@ -214,6 +215,7 @@ export function SettingsPage() {
         {user?.role === 'OWNER' ? <BackupSettings /> : null}
         {user?.role === 'OWNER' ? <CustomerDisplaySettings /> : null}
         {user?.role === 'OWNER' ? <IntegrationSettings /> : null}
+        {user?.role !== 'COACH' ? <AttendanceScenarioSettings /> : null}
 
         {user?.role === 'OWNER' ? (
           <Card>

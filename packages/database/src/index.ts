@@ -143,6 +143,16 @@ export {
 export { CustomerDisplayService, CUSTOMER_DISPLAY_DEFAULTS } from './customer-display-service';
 export { AttentionService } from './attention-service';
 export { AttendanceWorkspaceService, rankAttendanceOptions } from './attendance-workspace-service';
+export {
+  AttendanceScenarioService,
+  ATTENDANCE_SCENARIO_DEFAULTS,
+  attendanceDeductsSubscription,
+  attendanceIncludedInTrainerPayroll,
+  attendanceScenarioForStatus,
+  attendanceScenarioSettingKey,
+  readAttendanceScenarioSettings,
+  type AttendanceScenarioSettings,
+} from './attendance-scenarios';
 export { LessonOccurrenceService } from './lesson-occurrence-service';
 export { ArchiveService } from './archive-service';
 export { BackupService, type BackupServiceOptions } from './backup-service';

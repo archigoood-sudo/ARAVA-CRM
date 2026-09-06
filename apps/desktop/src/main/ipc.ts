@@ -2,6 +2,7 @@ import {
   ApplicationService,
   ArchiveService,
   AttendanceWorkspaceService,
+  AttendanceScenarioService,
   ChatService,
   CalendarService,
   CardService,
@@ -32,6 +33,8 @@ import {
   archiveQuerySchema,
   attendanceEntryInputSchema,
   attendanceEntriesSchema,
+  attendanceScenarioStatusSchema,
+  attendanceScenarioUpdateSchema,
   attendanceOccurrenceInputSchema,
   attendanceScanConfirmationInputSchema,
   attendanceWorkspaceDateSchema,
@@ -227,6 +230,7 @@ export function createIpcHandlers(
   backupDependencies: BackupIpcDependencies = {},
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
+  const attendanceScenarios = new AttendanceScenarioService(database, service);
   const archive = new ArchiveService(database, service);
   const groupRoster = new GroupRosterService(database, service);
   const attendanceWorkspace = new AttendanceWorkspaceService(database, service);
@@ -1069,6 +1073,14 @@ export function createIpcHandlers(
       attendanceWorkspace.openOccurrence(
         sessionTokenSchema.parse(unsafeToken),
         attendanceOccurrenceInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.attendanceScenarioList]: (unsafeToken) =>
+      attendanceScenarios.list(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.attendanceScenarioUpdate]: (unsafeToken, unsafeStatus, unsafeInput) =>
+      attendanceScenarios.update(
+        sessionTokenSchema.parse(unsafeToken),
+        attendanceScenarioStatusSchema.parse(unsafeStatus),
+        attendanceScenarioUpdateSchema.parse(unsafeInput),
       ),
     [IPC_CHANNELS.attendanceSave]: (unsafeToken, unsafeLessonId, unsafeEntries) =>
       studio.saveAttendance(

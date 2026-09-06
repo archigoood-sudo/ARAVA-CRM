@@ -2,6 +2,11 @@ import { t, type AttendanceStatus } from '@arava/shared';
 import type { Prisma, SubscriptionStatus } from '@prisma/client';
 
 import type { DatabaseClient } from './index';
+import {
+  attendanceDeductsSubscription,
+  readAttendanceScenarioSettings,
+  type AttendanceScenarioSettings,
+} from './attendance-scenarios';
 import { DomainError } from './security';
 
 type LedgerClient = DatabaseClient | Prisma.TransactionClient;
@@ -157,10 +162,14 @@ export async function applyAttendanceWriteOff(
     branchId: string;
     lessonId: string;
     lessonStartsAt: Date;
+    scenarioSettings?: AttendanceScenarioSettings;
     studentId: string;
   },
 ): Promise<string | null> {
-  const consumesPaid = input.attendanceStatus === 'PRESENT' || input.attendanceStatus === 'LATE';
+  const scenarioSettings = input.scenarioSettings ?? (await readAttendanceScenarioSettings(client));
+  const consumesPaid =
+    input.attendanceStatus !== 'TRIAL' &&
+    attendanceDeductsSubscription(scenarioSettings, input.attendanceStatus);
   const consumesTrial = input.attendanceStatus === 'TRIAL';
   if (!consumesPaid && !consumesTrial) return null;
 
@@ -336,10 +345,13 @@ function writeOffStillEligible(
     };
   },
   attendanceStatus: AttendanceStatus | undefined,
+  scenarioSettings: AttendanceScenarioSettings,
 ): boolean {
   const lesson = writeOff.lesson;
   if (!lesson || lesson.status === 'CANCELLED' || !attendanceStatus) return false;
-  const paid = attendanceStatus === 'PRESENT' || attendanceStatus === 'LATE';
+  const paid =
+    attendanceStatus !== 'TRIAL' &&
+    attendanceDeductsSubscription(scenarioSettings, attendanceStatus);
   const trial = attendanceStatus === 'TRIAL';
   if (!paid && !trial) return false;
   const subscription = writeOff.subscription;
@@ -365,14 +377,17 @@ export async function reconcileStudentAttendanceCoverage(
   client: LedgerClient,
   input: { actorUserId: string; studentId: string },
 ): Promise<{ applied: number; reversed: number }> {
-  const attendances = await client.attendance.findMany({
-    include: { lesson: true },
-    orderBy: { lesson: { startsAt: 'asc' } },
-    where: {
-      studentId: input.studentId,
-      status: { in: ['PRESENT', 'LATE', 'TRIAL'] },
-    },
-  });
+  const [allAttendances, scenarioSettings] = await Promise.all([
+    client.attendance.findMany({
+      include: { lesson: true },
+      orderBy: { lesson: { startsAt: 'asc' } },
+      where: { studentId: input.studentId },
+    }),
+    readAttendanceScenarioSettings(client),
+  ]);
+  const attendances = allAttendances.filter(
+    ({ status }) => status === 'TRIAL' || attendanceDeductsSubscription(scenarioSettings, status),
+  );
   const attendanceById = new Map(
     attendances.map((attendance) => [
       `${attendance.lessonId}:${attendance.studentId}`,
@@ -398,7 +413,10 @@ export async function reconcileStudentAttendanceCoverage(
   let reversed = 0;
   for (const writeOff of writeOffs) {
     if (writeOff.reversals.length || !writeOff.attendanceId) continue;
-    if (writeOffStillEligible(writeOff, attendanceById.get(writeOff.attendanceId))) continue;
+    if (
+      writeOffStillEligible(writeOff, attendanceById.get(writeOff.attendanceId), scenarioSettings)
+    )
+      continue;
     await reverseWriteOff(
       client,
       writeOff,
@@ -432,6 +450,7 @@ export async function reconcileStudentAttendanceCoverage(
       branchId: attendance.lesson.branchId,
       lessonId: attendance.lessonId,
       lessonStartsAt: attendance.lesson.startsAt,
+      scenarioSettings,
       studentId: attendance.studentId,
     });
     if (subscriptionId) {

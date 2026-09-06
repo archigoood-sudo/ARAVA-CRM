@@ -140,7 +140,7 @@ test('отмена с отработкой, единоразовый перен�
     await expect(lessonRoom).toHaveValue('');
     await lessonRoom.selectOption(fixture.roomId);
     await roomlessLessonDialog.getByRole('button', { name: 'Сохранить' }).click();
-    await expect(page.getByText('Новый зал E2E')).toBeVisible();
+    await expect(page.getByRole('paragraph').filter({ hasText: /^Новый зал E2E$/u })).toBeVisible();
     await expect
       .poll(() =>
         page.evaluate(async (lessonId) => {

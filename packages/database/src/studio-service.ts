@@ -46,6 +46,7 @@ import { DomainError } from './security';
 import type { ApplicationService } from './services';
 import { CalendarService } from './calendar-service';
 import { LessonOccurrenceService } from './lesson-occurrence-service';
+import { readAttendanceScenarioSettings } from './attendance-scenarios';
 import {
   applyAttendanceWriteOff,
   reverseAttendanceWriteOffs,
@@ -1249,6 +1250,7 @@ export class StudioService {
     if (entries.some(({ studentId }) => !allowedStudents.has(studentId)))
       throw new DomainError('AUTHORIZATION', t('domain.authorization.attendanceStudent'));
     await this.database.$transaction(async (transaction) => {
+      const attendanceScenarios = await readAttendanceScenarioSettings(transaction);
       for (const entry of entries) {
         const previous = await transaction.attendance.findUnique({
           where: { lessonId_studentId: { lessonId: lesson.id, studentId: entry.studentId } },
@@ -1310,6 +1312,7 @@ export class StudioService {
             branchId: lesson.branchId,
             lessonId: lesson.id,
             lessonStartsAt: lesson.startsAt,
+            scenarioSettings: attendanceScenarios,
             studentId: entry.studentId,
           });
         if (checkinStudents.has(entry.studentId) && entry.status === 'PRESENT') {

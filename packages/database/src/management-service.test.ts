@@ -22,6 +22,7 @@ import { FinanceService } from './finance-service';
 import { ManagementService } from './management-service';
 import { ApplicationService } from './services';
 import { StudioService } from './studio-service';
+import { AttendanceScenarioService } from './attendance-scenarios';
 
 const DAY = 86_400_000;
 const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
@@ -39,6 +40,7 @@ describe('Sprint 4 management service', () => {
   let ownerId: string;
   let ownerToken: string;
   let studio: StudioService;
+  let attendanceScenarios: AttendanceScenarioService;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'arava-management-'));
@@ -48,6 +50,7 @@ describe('Sprint 4 management service', () => {
     finance = new FinanceService(database, application);
     management = new ManagementService(database, application);
     studio = new StudioService(database, application);
+    attendanceScenarios = new AttendanceScenarioService(database, application);
     const owner = await application.login({
       email: INITIAL_OWNER_EMAIL,
       password: INITIAL_OWNER_PASSWORD,
@@ -259,6 +262,76 @@ describe('Sprint 4 management service', () => {
     expect(paid.status).toBe('PAID');
     expect(await database.expense.count({ where: { status: 'CONFIRMED' } })).toBe(1);
     expect(await database.cashTransaction.count({ where: { sourceType: 'PAYROLL' } })).toBe(1);
+  });
+
+  it('recalculates open payroll from attendance scenarios and keeps approved snapshots immutable', async () => {
+    const { branch, coach, group } = await coachFoundation();
+    const now = new Date();
+    await management.createPayrollRule(ownerToken, {
+      amountPerAttendee: 2_000,
+      branchId: branch.id,
+      coachId: coach.id,
+      groupId: group.id,
+      isActive: true,
+      type: 'PER_ATTENDEE',
+      validFrom: dateOnly(new Date(now.getTime() - DAY)),
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Мила',
+      lastName: 'Сценарная',
+      status: 'ACTIVE',
+    });
+    const lesson = await database.lesson.create({
+      data: {
+        attendanceCompletedAt: now,
+        branchId: branch.id,
+        coachId: coach.id,
+        endsAt: new Date(now.getTime() + 3_600_000),
+        groupId: group.id,
+        startsAt: now,
+        status: 'COMPLETED',
+      },
+    });
+    await database.attendance.create({
+      data: {
+        lessonId: lesson.id,
+        markedAt: now,
+        markedByUserId: ownerId,
+        status: 'ABSENT',
+        studentId: student.id,
+      },
+    });
+    const period = await management.createPayrollPeriod(ownerToken, {
+      branchId: branch.id,
+      dateFrom: dateOnly(new Date(now.getTime() - DAY)),
+      dateTo: dateOnly(new Date(now.getTime() + DAY)),
+      trainerId: coach.id,
+    });
+    expect(
+      (await management.calculatePayrollPeriod(ownerToken, period.id)).accruals[0],
+    ).toMatchObject({
+      attendeeCount: 0,
+      finalAmount: 0,
+    });
+    await attendanceScenarios.update(ownerToken, 'ABSENT', {
+      deductSubscription: true,
+      includeInTrainerPayroll: true,
+    });
+    await expect(management.approvePayrollPeriod(ownerToken, period.id)).rejects.toThrow(
+      'Расчёт устарел',
+    );
+    const recalculated = await management.calculatePayrollPeriod(ownerToken, period.id);
+    expect(recalculated.accruals[0]).toMatchObject({ attendeeCount: 1, finalAmount: 2_000 });
+    await management.approvePayrollPeriod(ownerToken, period.id);
+    await attendanceScenarios.update(ownerToken, 'ABSENT', {
+      deductSubscription: true,
+      includeInTrainerPayroll: false,
+    });
+    expect((await management.getPayrollPeriod(ownerToken, period.id)).accruals[0]).toMatchObject({
+      attendeeCount: 1,
+      finalAmount: 2_000,
+    });
   });
 
   it('allocates net subscription revenue once and excludes refunds from percent payroll', async () => {

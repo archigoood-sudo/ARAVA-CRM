@@ -36,6 +36,7 @@ describe('runtime migrations', () => {
       '20260904000000_trainer_payroll_sheets',
       '20260904010000_normalize_invalid_room_references',
       '20260906000000_free_attendance_coverage',
+      '20260906010000_attendance_scenarios',
     ]);
   });
 });

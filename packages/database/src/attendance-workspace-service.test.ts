@@ -559,7 +559,7 @@ describe('Attendance 2.0 workspace', () => {
     await studio.saveAttendance(ownerToken, firstLesson.id, [
       { status: 'ABSENT', studentId: laterStudent.id },
     ]);
-    expect((await finance.getSubscription(ownerToken, laterSubscription.id)).lessonsUsed).toBe(0);
+    expect((await finance.getSubscription(ownerToken, laterSubscription.id)).lessonsUsed).toBe(1);
     expect((await management.calculatePayrollPeriod(ownerToken, period.id)).totalAmount).toBe(
       10_000,
     );
@@ -567,7 +567,7 @@ describe('Attendance 2.0 workspace', () => {
     await studio.saveAttendance(ownerToken, firstLesson.id, [
       { status: 'ABSENT', studentId: data.student.id },
     ]);
-    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(0);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(1);
     expect((await management.calculatePayrollPeriod(ownerToken, period.id)).totalAmount).toBe(0);
 
     await studio.saveAttendance(ownerToken, firstLesson.id, [

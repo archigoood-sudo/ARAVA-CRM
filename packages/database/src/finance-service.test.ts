@@ -17,6 +17,7 @@ import { FinanceService } from './finance-service';
 import { PaymentOperationService } from './payment-operation-service';
 import { ApplicationService } from './services';
 import { StudioService } from './studio-service';
+import { AttendanceScenarioService } from './attendance-scenarios';
 
 const DAY_MS = 86_400_000;
 const dateString = (value: Date) =>
@@ -39,6 +40,7 @@ describe('Sprint 3 finance service', () => {
   let ownerToken: string;
   let paymentOperations: PaymentOperationService;
   let studio: StudioService;
+  let attendanceScenarios: AttendanceScenarioService;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'arava-finance-'));
@@ -48,6 +50,7 @@ describe('Sprint 3 finance service', () => {
     finance = new FinanceService(database, application);
     paymentOperations = new PaymentOperationService(database, application);
     studio = new StudioService(database, application);
+    attendanceScenarios = new AttendanceScenarioService(database, application);
     const owner = await application.login({
       email: INITIAL_OWNER_EMAIL,
       password: INITIAL_OWNER_PASSWORD,
@@ -794,6 +797,55 @@ describe('Sprint 3 finance service', () => {
       await database.auditLog.count({ where: { action: 'SUBSCRIPTION_WRITE_OFF_REVERSED' } }),
     ).toBe(2);
     expect(branch.id).toBeTruthy();
+  });
+
+  it('uses attendance scenarios for idempotent subscription deductions and corrections', async () => {
+    const { group, student, subscription } = await tariffAndSubscription({ lessonCount: 4 });
+    const first = await studio.createLesson(ownerToken, {
+      endsAt: new Date(Date.now() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: new Date().toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, first.id, [
+      { status: 'ABSENT', studentId: student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(1);
+
+    await attendanceScenarios.update(ownerToken, 'ABSENT', {
+      deductSubscription: false,
+      includeInTrainerPayroll: false,
+    });
+    const second = await studio.createLesson(ownerToken, {
+      endsAt: new Date(Date.now() + 7_200_000).toISOString(),
+      groupId: group.id,
+      startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, second.id, [
+      { status: 'ABSENT', studentId: student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(1);
+
+    await studio.saveAttendance(ownerToken, first.id, [
+      { status: 'EXCUSED', studentId: student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(0);
+    await studio.saveAttendance(ownerToken, first.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    await studio.saveAttendance(ownerToken, first.id, [
+      { status: 'PRESENT', studentId: student.id },
+    ]);
+    expect((await finance.getSubscription(ownerToken, subscription.id)).lessonsUsed).toBe(1);
+    expect(
+      await database.subscriptionLedger.count({
+        where: { attendanceId: `${first.id}:${student.id}`, type: 'LESSON_WRITE_OFF' },
+      }),
+    ).toBe(2);
+    expect(
+      await database.auditLog.count({
+        where: { action: 'ATTENDANCE_SCENARIO_UPDATED', entityId: 'ABSENT' },
+      }),
+    ).toBe(1);
   });
 
   it('prices uncovered PRESENT attendance and retroactively covers it exactly once', async () => {

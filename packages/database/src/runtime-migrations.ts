@@ -873,4 +873,13 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
     id: '20260906000000_free_attendance_coverage',
     statements: ['ALTER TABLE "Attendance" ADD COLUMN "freeAttendanceTariffId" TEXT'],
   },
+  {
+    id: '20260906010000_attendance_scenarios',
+    statements: [
+      `INSERT OR IGNORE INTO "AppSetting" ("key", "value", "updatedAt") VALUES ('attendance.scenario.PRESENT', '{"deductSubscription":true,"includeInTrainerPayroll":true}', CURRENT_TIMESTAMP)`,
+      `INSERT OR IGNORE INTO "AppSetting" ("key", "value", "updatedAt") VALUES ('attendance.scenario.ABSENT', '{"deductSubscription":true,"includeInTrainerPayroll":false}', CURRENT_TIMESTAMP)`,
+      `INSERT OR IGNORE INTO "AppSetting" ("key", "value", "updatedAt") VALUES ('attendance.scenario.ILL', '{"deductSubscription":false,"includeInTrainerPayroll":false}', CURRENT_TIMESTAMP)`,
+      `INSERT OR IGNORE INTO "AppSetting" ("key", "value", "updatedAt") VALUES ('attendance.scenario.LATE', '{"deductSubscription":true,"includeInTrainerPayroll":true}', CURRENT_TIMESTAMP)`,
+    ],
+  },
 ];
