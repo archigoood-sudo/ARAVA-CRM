@@ -26,6 +26,8 @@ import type {
   IntegrationDeviceRenameInput,
   IntegrationSettingsInput,
   IntegrationStatus,
+  IntegrationWebsiteAuthorityStatus,
+  IntegrationWebsiteReconciliationResult,
   IntegrationReconciliationPreview,
   IntegrationRecoveryResult,
   LeadCreateInput,
@@ -44,7 +46,7 @@ import type {
 } from '@arava/shared';
 import type { Gender, SyncOperation } from '@prisma/client';
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 
@@ -66,6 +68,18 @@ export const INITIAL_SYNC_FUTURE_DAYS = 180;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CHAT_IMAGE_BYTES = 15 * 1024 * 1024;
 const RETRY_DELAYS_MS = [15_000, 60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000] as const;
+
+const WEBSITE_ENTITY_TYPES = [
+  'BRANCH',
+  'ROOM',
+  'TRAINER',
+  'GROUP',
+  'STUDENT_IDENTITY',
+  'GROUP_MEMBERSHIP',
+  'SCHEDULE',
+  'LESSON',
+  'PUBLICATION',
+] as const satisfies readonly SyncEntityType[];
 
 const SETTINGS = {
   baseUrl: 'integration.baseUrl',
@@ -218,6 +232,53 @@ interface BatchAcknowledgement {
   apiVersion: string;
   deviceToken?: string;
   serverTimestamp: string;
+  websitePublication?: { code?: string; state: string };
+}
+
+interface WebsiteReconciliationBatchResult {
+  processed: number;
+  websiteAuthority: IntegrationWebsiteAuthorityStatus;
+}
+
+function parseWebsiteAuthority(
+  payload: unknown,
+  currentDeviceId: string,
+): IntegrationWebsiteAuthorityStatus {
+  const value =
+    isRecord(payload) && isRecord(payload.websiteAuthority) ? payload.websiteAuthority : undefined;
+  if (
+    value?.currentDeviceId !== currentDeviceId ||
+    typeof value.isCurrentDeviceAuthoritative !== 'boolean' ||
+    !['AUTHORITATIVE', 'NON_AUTHORITATIVE', 'UNASSIGNED'].includes(String(value.state))
+  ) {
+    throw new IntegrationApiError(
+      'INVALID_RESPONSE',
+      false,
+      'Сервер вернул неверный статус источника данных сайта.',
+    );
+  }
+  return {
+    ...(typeof value.assignedAt === 'string' ? { assignedAt: value.assignedAt } : {}),
+    ...(typeof value.authoritativeDeviceId === 'string'
+      ? { authoritativeDeviceId: value.authoritativeDeviceId }
+      : {}),
+    ...(typeof value.authoritativeDeviceName === 'string'
+      ? { authoritativeDeviceName: value.authoritativeDeviceName }
+      : {}),
+    currentDeviceId,
+    ...(typeof value.currentDeviceName === 'string'
+      ? { currentDeviceName: value.currentDeviceName }
+      : {}),
+    isCurrentDeviceAuthoritative: value.isCurrentDeviceAuthoritative,
+    ...(typeof value.lastError === 'string' ? { lastError: value.lastError } : {}),
+    ...(typeof value.lastFullReconciliation === 'string'
+      ? { lastFullReconciliation: value.lastFullReconciliation }
+      : {}),
+    ...(typeof value.lastSuccessfulWebsiteSync === 'string'
+      ? { lastSuccessfulWebsiteSync: value.lastSuccessfulWebsiteSync }
+      : {}),
+    state: value.state as IntegrationWebsiteAuthorityStatus['state'],
+  };
 }
 
 interface SyncAcknowledgement {
@@ -1539,6 +1600,77 @@ export class IntegrationApiClient {
       apiVersion: INTEGRATION_API_VERSION,
       ...(rotatedToken ? { deviceToken: rotatedToken } : {}),
       serverTimestamp,
+      ...(isRecord(payload.websitePublication)
+        ? {
+            websitePublication: {
+              ...(typeof payload.websitePublication.code === 'string'
+                ? { code: payload.websitePublication.code }
+                : {}),
+              state: optionalString(payload.websitePublication.state) ?? 'NOT_APPLICABLE',
+            },
+          }
+        : {}),
+    };
+  }
+
+  async websiteAuthorityStatus(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+  ): Promise<IntegrationWebsiteAuthorityStatus> {
+    const payload = await this.request(baseUrl, 'website-authority', deviceId, token, 'GET');
+    return parseWebsiteAuthority(payload, deviceId);
+  }
+
+  async claimWebsiteAuthority(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+  ): Promise<IntegrationWebsiteAuthorityStatus> {
+    const payload = await this.request(
+      baseUrl,
+      'website-authority',
+      deviceId,
+      token,
+      'POST',
+      { apiVersion: INTEGRATION_API_VERSION },
+      context,
+    );
+    return parseWebsiteAuthority(payload, deviceId);
+  }
+
+  async reconcileWebsiteBatch(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    input: {
+      batchIndex: number;
+      isFinal: boolean;
+      operations: SyncEntityEnvelope[];
+      reconciliationId: string;
+    },
+  ): Promise<WebsiteReconciliationBatchResult> {
+    const payload = await this.request(
+      baseUrl,
+      'website-authority/reconcile',
+      deviceId,
+      token,
+      'POST',
+      { apiVersion: INTEGRATION_API_VERSION, deviceId, ...input },
+      context,
+    );
+    if (!isRecord(payload) || typeof payload.processed !== 'number') {
+      throw new IntegrationApiError(
+        'INVALID_RESPONSE',
+        false,
+        'Сервер не подтвердил полную синхронизацию сайта.',
+      );
+    }
+    return {
+      processed: payload.processed,
+      websiteAuthority: parseWebsiteAuthority(payload, deviceId),
     };
   }
 
@@ -3358,13 +3490,29 @@ export class IntegrationService {
     else if (pendingCount > 0 || processingCount > 0) connectionState = 'PENDING_CHANGES';
     else connectionState = 'CONNECTED';
     let devices: IntegrationDeviceSummary[] = [];
+    let websiteAuthority: IntegrationWebsiteAuthorityStatus = {
+      currentDeviceId: deviceId,
+      isCurrentDeviceAuthoritative: false,
+      state: 'UNASSIGNED',
+    };
     if (enabled && token && baseUrl) {
       try {
         devices = await this.api.listDevices(baseUrl, deviceId, token);
       } catch {
         // Status stays available from durable local state while offline.
       }
+      try {
+        websiteAuthority = await this.api.websiteAuthorityStatus(baseUrl, deviceId, token);
+      } catch {
+        // Website authority diagnostics do not hide ordinary CRM device sync status.
+      }
     }
+    const websitePendingCount = await this.database.syncOutbox.count({
+      where: {
+        entityType: { in: [...WEBSITE_ENTITY_TYPES] },
+        status: { in: ['PENDING', 'PROCESSING', 'FAILED'] },
+      },
+    });
     const currentDevice = devices.find((device) => device.deviceId === deviceId);
     const safeFailedItems = failedItems.map((item) => ({
       createdAt: item.createdAt.toISOString(),
@@ -3398,7 +3546,103 @@ export class IntegrationService {
       recoveryBlocked: pendingCount + processingCount + failedCount > 0,
       retryableFailedCount: safeFailedItems.filter(({ retryable }) => retryable).length,
       syncInProgress: this.processing,
+      websiteAuthority,
+      websitePendingCount,
     };
+  }
+
+  async claimWebsiteAuthority(token: string): Promise<IntegrationStatus> {
+    const actor = await this.assertOwner(token);
+    const connection = await this.chatConnection();
+    await this.api.claimWebsiteAuthority(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      this.ownerContext(actor),
+    );
+    await this.log(
+      undefined,
+      'WEBSITE_AUTHORITY_TRANSFER',
+      'SUCCESS',
+      1,
+      undefined,
+      `Источник данных сайта перенесён на ${connection.deviceId}.`,
+    );
+    return this.systemStatus();
+  }
+
+  async fullWebsiteReconciliation(token: string): Promise<IntegrationWebsiteReconciliationResult> {
+    const actor = await this.assertOwner(token);
+    const connection = await this.chatConnection();
+    const context = this.ownerContext(actor);
+    const authority = await this.api.websiteAuthorityStatus(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+    );
+    if (!authority.isCurrentDeviceAuthoritative) {
+      throw new DomainError(
+        'CONFLICT',
+        'Полную синхронизацию сайта можно запустить только с выбранного компьютера-источника.',
+      );
+    }
+    const rows = (await this.reconciliationRows()).filter(({ entityType }) =>
+      (WEBSITE_ENTITY_TYPES as readonly string[]).includes(entityType),
+    );
+    const reconciliationId = randomUUID();
+    let processed = 0;
+    let lastAuthority = authority;
+    const batchCount = Math.max(1, Math.ceil(rows.length / INTEGRATION_BATCH_SIZE));
+    for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
+      const batchRows = rows.slice(
+        batchIndex * INTEGRATION_BATCH_SIZE,
+        (batchIndex + 1) * INTEGRATION_BATCH_SIZE,
+      );
+      const operations: SyncEntityEnvelope[] = [];
+      for (const row of batchRows) {
+        if (row.entityType === 'PUBLICATION') {
+          await this.preparePublicationMedia(
+            connection.baseUrl,
+            connection.deviceId,
+            connection.token,
+            row.entityId,
+          );
+        }
+        operations.push(
+          await this.buildEnvelope(
+            row.entityType,
+            row.entityId,
+            'UPSERT',
+            `website-full:${reconciliationId}:${row.entityType}:${row.entityId}`,
+            0,
+          ),
+        );
+      }
+      const result = await this.api.reconcileWebsiteBatch(
+        connection.baseUrl,
+        connection.deviceId,
+        connection.token,
+        context,
+        {
+          batchIndex,
+          isFinal: batchIndex === batchCount - 1,
+          operations,
+          reconciliationId,
+        },
+      );
+      processed += result.processed;
+      lastAuthority = result.websiteAuthority;
+    }
+    const completedAt = lastAuthority.lastFullReconciliation ?? this.now().toISOString();
+    await this.log(
+      undefined,
+      'WEBSITE_FULL_RECONCILIATION',
+      'SUCCESS',
+      1,
+      undefined,
+      `Полностью синхронизировано записей сайта: ${String(processed)}.`,
+    );
+    return { completedAt, processed, reconciliationId, websiteAuthority: lastAuthority };
   }
 
   async diagnose(token: string): Promise<IntegrationDiagnostics> {

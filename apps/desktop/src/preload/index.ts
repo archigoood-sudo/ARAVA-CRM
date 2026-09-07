@@ -99,10 +99,13 @@ const desktopApi: AravaDesktopApi = {
     update: (token, id, input) => invoke(IPC_CHANNELS.publicationUpdate, token, id, input),
   },
   integration: {
+    claimWebsiteAuthority: (token) => invoke(IPC_CHANNELS.integrationClaimWebsiteAuthority, token),
     confirmInitialSync: (token) => invoke(IPC_CHANNELS.integrationConfirmInitialSync, token),
     confirmReconciliation: (token) => invoke(IPC_CHANNELS.integrationConfirmReconciliation, token),
     diagnose: (token) => invoke(IPC_CHANNELS.integrationDiagnose, token),
     getStatus: (token) => invoke(IPC_CHANNELS.integrationGetStatus, token),
+    fullWebsiteReconciliation: (token) =>
+      invoke(IPC_CHANNELS.integrationFullWebsiteReconciliation, token),
     listConflicts: (token) => invoke(IPC_CHANNELS.integrationListConflicts, token),
     listLog: (token) => invoke(IPC_CHANNELS.integrationListLog, token),
     onDataChanged: (listener) => {

@@ -145,6 +145,7 @@ export function IntegrationSettings() {
   const [editingDisplayName, setEditingDisplayName] = useState('');
   const [revokingDeviceId, setRevokingDeviceId] = useState<string>();
   const [recoveryConfirmationOpen, setRecoveryConfirmationOpen] = useState(false);
+  const [authorityConfirmationOpen, setAuthorityConfirmationOpen] = useState(false);
   const status = useQuery({
     queryFn: () => getDesktopApi().integration.getStatus(getSessionToken()),
     queryKey: queryKeys.integrationStatus,
@@ -290,6 +291,25 @@ export function IntegrationSettings() {
     onSuccess: (result) =>
       setNotice(`Безопасно удалено записей журнала: ${String(result.deleted)}.`),
   });
+  const claimWebsiteAuthority = useMutation({
+    mutationFn: () => getDesktopApi().integration.claimWebsiteAuthority(getSessionToken()),
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: async () => {
+      setAuthorityConfirmationOpen(false);
+      setNotice('Этот компьютер выбран источником данных для сайта.');
+      await refresh();
+    },
+  });
+  const fullWebsiteReconciliation = useMutation({
+    mutationFn: () => getDesktopApi().integration.fullWebsiteReconciliation(getSessionToken()),
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: async (result) => {
+      setNotice(
+        `Полная синхронизация сайта завершена. Обновлено записей: ${String(result.processed)}.`,
+      );
+      await refresh();
+    },
+  });
 
   const prepare = async () => {
     setNotice(undefined);
@@ -432,6 +452,121 @@ export function IntegrationSettings() {
             изменения или ошибки отправки.
           </p>
         ) : null}
+
+        {status.data?.isPaired ? (
+          <div
+            className="rounded-2xl border border-border bg-background p-5"
+            data-testid="website-authority-settings"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="font-semibold">Источник данных для сайта</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Только выбранный компьютер обновляет данные кабинетов. Обычная CRM-синхронизация
+                  продолжает работать на всех устройствах.
+                </p>
+              </div>
+              <Badge>
+                {status.data.websiteAuthority.state === 'AUTHORITATIVE'
+                  ? 'Этот компьютер — источник'
+                  : status.data.websiteAuthority.state === 'NON_AUTHORITATIVE'
+                    ? 'Публикация заблокирована'
+                    : 'Источник не выбран'}
+              </Badge>
+            </div>
+            <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
+              <div>
+                <p className="text-muted-foreground">Текущий компьютер</p>
+                <p className="font-medium">
+                  {status.data.currentDeviceName ?? 'Без имени'} ·{' '}
+                  {formatShortDeviceId(status.data.deviceId)}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Авторитетный источник</p>
+                <p className="font-medium">
+                  {status.data.websiteAuthority.authoritativeDeviceName ?? 'Не выбран'}
+                  {status.data.websiteAuthority.authoritativeDeviceId
+                    ? ` · ${formatShortDeviceId(status.data.websiteAuthority.authoritativeDeviceId)}`
+                    : ''}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Последняя успешная публикация</p>
+                <p>{dateTime(status.data.websiteAuthority.lastSuccessfulWebsiteSync)}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Последняя полная синхронизация</p>
+                <p>{dateTime(status.data.websiteAuthority.lastFullReconciliation)}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Ожидающие website-операции</p>
+                <p>{String(status.data.websitePendingCount)}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Последняя ошибка публикации</p>
+                <p>{status.data.websiteAuthority.lastError ?? 'Нет'}</p>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Button
+                disabled={
+                  claimWebsiteAuthority.isPending ||
+                  status.data.websiteAuthority.isCurrentDeviceAuthoritative
+                }
+                onClick={() => setAuthorityConfirmationOpen(true)}
+                variant="outline"
+              >
+                Сделать этот компьютер источником данных для сайта
+              </Button>
+              <Button
+                disabled={
+                  !status.data.websiteAuthority.isCurrentDeviceAuthoritative ||
+                  fullWebsiteReconciliation.isPending
+                }
+                onClick={() => fullWebsiteReconciliation.mutate()}
+              >
+                {fullWebsiteReconciliation.isPending
+                  ? 'Синхронизация сайта…'
+                  : 'Синхронизировать сайт полностью'}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        <Dialog
+          closeLabel="Закрыть"
+          description="Право публикации сайта будет явно передано этому компьютеру. Другие CRM продолжат обычную синхронизацию, но не смогут менять данные сайта."
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setAuthorityConfirmationOpen(false)} variant="outline">
+                Отмена
+              </Button>
+              <Button
+                disabled={claimWebsiteAuthority.isPending}
+                onClick={() => claimWebsiteAuthority.mutate()}
+              >
+                Подтвердить передачу
+              </Button>
+            </div>
+          }
+          onClose={() => setAuthorityConfirmationOpen(false)}
+          open={authorityConfirmationOpen}
+          title="Сделать этот компьютер источником данных для сайта?"
+        >
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              Было: {status.data?.websiteAuthority.authoritativeDeviceName ?? 'источник не выбран'}.
+            </p>
+            <p>
+              Станет: {status.data?.currentDeviceName ?? 'этот компьютер'} ·{' '}
+              {status.data ? formatShortDeviceId(status.data.deviceId) : ''}.
+            </p>
+            <p>
+              После передачи запустите «Синхронизировать сайт полностью» на студийном Windows PC.
+            </p>
+          </div>
+        </Dialog>
 
         {status.data?.devices.length ? (
           <div className="overflow-hidden rounded-2xl border border-border">

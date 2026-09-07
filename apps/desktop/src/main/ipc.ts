@@ -655,6 +655,10 @@ export function createIpcHandlers(
 
     [IPC_CHANNELS.integrationGetStatus]: (unsafeToken) =>
       requireIntegration().getStatus(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationClaimWebsiteAuthority]: (unsafeToken) =>
+      requireIntegration().claimWebsiteAuthority(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationFullWebsiteReconciliation]: (unsafeToken) =>
+      requireIntegration().fullWebsiteReconciliation(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationDiagnose]: (unsafeToken) =>
       requireIntegration().diagnose(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationUpdateSettings]: (unsafeToken, unsafeInput) =>

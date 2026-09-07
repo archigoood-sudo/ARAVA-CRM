@@ -358,6 +358,8 @@ export const IPC_CHANNELS = {
   integrationRevokeDevice: 'integration:revoke-device',
   integrationPruneJournal: 'integration:prune-journal',
   integrationGetStatus: 'integration:get-status',
+  integrationClaimWebsiteAuthority: 'integration:claim-website-authority',
+  integrationFullWebsiteReconciliation: 'integration:full-website-reconciliation',
   integrationListLog: 'integration:list-log',
   integrationPair: 'integration:pair',
   integrationPrepareInitialSync: 'integration:prepare-initial-sync',
@@ -3017,6 +3019,28 @@ export interface IntegrationStatus {
   retryableFailedCount: number;
   syncInProgress: boolean;
   devices: IntegrationDeviceSummary[];
+  websiteAuthority: IntegrationWebsiteAuthorityStatus;
+  websitePendingCount: number;
+}
+
+export interface IntegrationWebsiteAuthorityStatus {
+  assignedAt?: string;
+  authoritativeDeviceId?: string;
+  authoritativeDeviceName?: string;
+  currentDeviceId: string;
+  currentDeviceName?: string;
+  isCurrentDeviceAuthoritative: boolean;
+  lastError?: string;
+  lastFullReconciliation?: string;
+  lastSuccessfulWebsiteSync?: string;
+  state: 'AUTHORITATIVE' | 'NON_AUTHORITATIVE' | 'UNASSIGNED';
+}
+
+export interface IntegrationWebsiteReconciliationResult {
+  completedAt: string;
+  processed: number;
+  reconciliationId: string;
+  websiteAuthority: IntegrationWebsiteAuthorityStatus;
 }
 
 export interface IntegrationFailedSyncItem {
@@ -3530,6 +3554,7 @@ export interface AravaDesktopApi {
     query: (token: string, query: string) => Promise<GlobalSearchResult[]>;
   };
   integration: {
+    claimWebsiteAuthority: (token: string) => Promise<IntegrationStatus>;
     confirmInitialSync: (token: string) => Promise<IntegrationStatus>;
     diagnose: (token: string) => Promise<IntegrationDiagnostics>;
     onDataChanged: (listener: (entityType: string) => void) => () => void;
@@ -3545,6 +3570,7 @@ export interface AravaDesktopApi {
     revokeDevice: (token: string, deviceId: string) => Promise<IntegrationStatus>;
     pruneJournal: (token: string) => Promise<IntegrationJournalMaintenanceResult>;
     getStatus: (token: string) => Promise<IntegrationStatus>;
+    fullWebsiteReconciliation: (token: string) => Promise<IntegrationWebsiteReconciliationResult>;
     listLog: (token: string) => Promise<IntegrationLogEntry[]>;
     pair: (token: string, input: IntegrationPairInput) => Promise<IntegrationStatus>;
     prepareInitialSync: (token: string) => Promise<IntegrationInitialSyncPreview>;
