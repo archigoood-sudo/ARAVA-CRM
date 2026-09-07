@@ -27,6 +27,61 @@ export interface AttendanceScenarioSummary extends AttendanceScenarioRule {
   status: AttendanceScenarioStatus;
 }
 export type AttendanceScenarioUpdate = AttendanceScenarioRule;
+export interface AttendanceScenarioReconciliationFilters {
+  branchId?: string | undefined;
+  dateFrom: string;
+  dateTo: string;
+  groupId?: string | undefined;
+  status?: AttendanceScenarioStatus | undefined;
+}
+export type AttendanceScenarioSubscriptionEffect = 'DEDUCTED' | 'NOT_DEDUCTED';
+export type AttendanceScenarioPayrollEffect = 'INCLUDED' | 'EXCLUDED' | 'NOT_CALCULATED';
+export interface AttendanceScenarioReconciliationRow {
+  attendanceId: string;
+  currentPayrollEffect: AttendanceScenarioPayrollEffect;
+  currentSubscriptionEffect: AttendanceScenarioSubscriptionEffect;
+  date: string;
+  groupId: string;
+  groupName: string;
+  lessonId: string;
+  newPayrollEffect: Exclude<AttendanceScenarioPayrollEffect, 'NOT_CALCULATED'>;
+  newSubscriptionEffect: AttendanceScenarioSubscriptionEffect;
+  payrollProtected: boolean;
+  skipReason?: string | undefined;
+  status: AttendanceScenarioStatus;
+  studentId: string;
+  studentName: string;
+}
+export interface AttendanceScenarioReconciliationTotals {
+  actionableRows: number;
+  payrollPeriodsToRecalculate: number;
+  payrollRowsToExclude: number;
+  payrollRowsToInclude: number;
+  skippedProtectedRows: number;
+  visitsToDeduct: number;
+  visitsToRestore: number;
+}
+export interface AttendanceScenarioReconciliationPreview {
+  affectedLessonsCount: number;
+  affectedStudentsCount: number;
+  filters: AttendanceScenarioReconciliationFilters;
+  fingerprint: string;
+  rows: AttendanceScenarioReconciliationRow[];
+  scenarioSnapshot: Record<AttendanceScenarioStatus, AttendanceScenarioRule>;
+  totals: AttendanceScenarioReconciliationTotals;
+}
+export interface AttendanceScenarioReconciliationApplyInput {
+  filters: AttendanceScenarioReconciliationFilters;
+  previewFingerprint: string;
+}
+export interface AttendanceScenarioReconciliationResult {
+  batchId: string;
+  deductedVisits: number;
+  payrollPeriodsInvalidated: number;
+  processedAttendanceCount: number;
+  protectedRowsSkipped: number;
+  restoredVisits: number;
+}
 export const TARIFF_TYPES = ['LESSON_PACK', 'UNLIMITED', 'SINGLE_LESSON', 'TRIAL'] as const;
 export type TariffType = (typeof TARIFF_TYPES)[number];
 export const SUBSCRIPTION_STATUSES = [
@@ -364,6 +419,8 @@ export const IPC_CHANNELS = {
   attendanceGet: 'attendance:get',
   attendanceManualSave: 'attendance:manual-save',
   attendanceOpenOccurrence: 'attendance:open-occurrence',
+  attendanceScenarioReconciliationApply: 'attendance-scenario:reconciliation-apply',
+  attendanceScenarioReconciliationPreview: 'attendance-scenario:reconciliation-preview',
   attendanceScenarioList: 'attendance-scenario:list',
   attendanceScenarioUpdate: 'attendance-scenario:update',
   attendanceSave: 'attendance:save',
@@ -3755,7 +3812,15 @@ export interface AravaDesktopApi {
       entry: AttendanceEntryInput,
     ) => Promise<AttendanceLessonDetail>;
     openOccurrence: (token: string, input: AttendanceOccurrenceInput) => Promise<LessonSummary>;
+    applyScenarioReconciliation: (
+      token: string,
+      input: AttendanceScenarioReconciliationApplyInput,
+    ) => Promise<AttendanceScenarioReconciliationResult>;
     listScenarios: (token: string) => Promise<AttendanceScenarioSummary[]>;
+    previewScenarioReconciliation: (
+      token: string,
+      filters: AttendanceScenarioReconciliationFilters,
+    ) => Promise<AttendanceScenarioReconciliationPreview>;
     updateScenario: (
       token: string,
       status: AttendanceScenarioStatus,

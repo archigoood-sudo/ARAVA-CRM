@@ -23,6 +23,7 @@ import { ManagementService } from './management-service';
 import { ApplicationService } from './services';
 import { StudioService } from './studio-service';
 import { AttendanceScenarioService } from './attendance-scenarios';
+import { AttendanceScenarioReconciliationService } from './attendance-scenario-reconciliation';
 
 const DAY = 86_400_000;
 const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
@@ -41,6 +42,7 @@ describe('Sprint 4 management service', () => {
   let ownerToken: string;
   let studio: StudioService;
   let attendanceScenarios: AttendanceScenarioService;
+  let attendanceScenarioReconciliation: AttendanceScenarioReconciliationService;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'arava-management-'));
@@ -51,6 +53,10 @@ describe('Sprint 4 management service', () => {
     management = new ManagementService(database, application);
     studio = new StudioService(database, application);
     attendanceScenarios = new AttendanceScenarioService(database, application);
+    attendanceScenarioReconciliation = new AttendanceScenarioReconciliationService(
+      database,
+      application,
+    );
     const owner = await application.login({
       email: INITIAL_OWNER_EMAIL,
       password: INITIAL_OWNER_PASSWORD,
@@ -332,6 +338,267 @@ describe('Sprint 4 management service', () => {
       attendeeCount: 1,
       finalAmount: 2_000,
     });
+  });
+
+  it('previews and idempotently reconciles historical subscription effects', async () => {
+    const { branch, coach, group } = await coachFoundation();
+    const lessonDate = new Date();
+    lessonDate.setHours(10, 0, 0, 0);
+    const students = await Promise.all(
+      [
+        ['Анна', 'Отсутствующая'],
+        ['Ирина', 'Болевшая'],
+        ['Полина', 'Присутствующая'],
+      ].map(([firstName, lastName]) =>
+        application.createStudent(ownerToken, {
+          branchId: branch.id,
+          firstName: firstName ?? '',
+          lastName: lastName ?? '',
+          status: 'ACTIVE',
+        }),
+      ),
+    );
+    for (const student of students)
+      await studio.addEnrollment(ownerToken, group.id, {
+        joinedAt: dateOnly(new Date(lessonDate.getTime() - DAY)),
+        overrideCapacity: false,
+        status: 'ACTIVE',
+        studentId: student.id,
+      });
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 10,
+      name: 'Исторические посещения',
+      price: 30_000,
+      type: 'LESSON_PACK',
+      validityDays: 60,
+    });
+    for (const student of students)
+      await finance.createSubscription(ownerToken, {
+        initialPayment: {
+          amount: 30_000,
+          paidAt: new Date(lessonDate.getTime() - DAY).toISOString(),
+          paymentMethod: 'CARD',
+        },
+        salePrice: 30_000,
+        startsAt: dateOnly(new Date(lessonDate.getTime() - DAY)),
+        studentId: student.id,
+        tariffId: tariff.id,
+      });
+    await attendanceScenarios.update(ownerToken, 'ABSENT', {
+      deductSubscription: false,
+      includeInTrainerPayroll: false,
+    });
+    await attendanceScenarios.update(ownerToken, 'ILL', {
+      deductSubscription: true,
+      includeInTrainerPayroll: false,
+    });
+    const lesson = await studio.createLesson(ownerToken, {
+      coachId: coach.id,
+      endsAt: new Date(lessonDate.getTime() + 3_600_000).toISOString(),
+      groupId: group.id,
+      startsAt: lessonDate.toISOString(),
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { status: 'ABSENT', studentId: students[0]?.id ?? '' },
+      { status: 'EXCUSED', studentId: students[1]?.id ?? '' },
+      { status: 'PRESENT', studentId: students[2]?.id ?? '' },
+    ]);
+    await database.lesson.update({
+      data: { attendanceCompletedAt: lessonDate, status: 'COMPLETED' },
+      where: { id: lesson.id },
+    });
+    await attendanceScenarios.update(ownerToken, 'ABSENT', {
+      deductSubscription: true,
+      includeInTrainerPayroll: false,
+    });
+    await attendanceScenarios.update(ownerToken, 'ILL', {
+      deductSubscription: false,
+      includeInTrainerPayroll: false,
+    });
+
+    const filters = {
+      branchId: branch.id,
+      dateFrom: inputDateForTest(lessonDate),
+      dateTo: inputDateForTest(lessonDate),
+      groupId: group.id,
+    };
+    const preview = await attendanceScenarioReconciliation.preview(ownerToken, filters);
+    expect(preview.rows).toHaveLength(2);
+    expect(preview.totals).toMatchObject({
+      actionableRows: 2,
+      visitsToDeduct: 1,
+      visitsToRestore: 1,
+    });
+    expect(preview.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentSubscriptionEffect: 'NOT_DEDUCTED',
+          newSubscriptionEffect: 'DEDUCTED',
+          status: 'ABSENT',
+        }),
+        expect.objectContaining({
+          currentSubscriptionEffect: 'DEDUCTED',
+          newSubscriptionEffect: 'NOT_DEDUCTED',
+          status: 'ILL',
+        }),
+      ]),
+    );
+    const result = await attendanceScenarioReconciliation.apply(ownerToken, {
+      filters,
+      previewFingerprint: preview.fingerprint,
+    });
+    expect(result).toMatchObject({
+      deductedVisits: 1,
+      processedAttendanceCount: 2,
+      restoredVisits: 1,
+    });
+    const ledgerCount = await database.subscriptionLedger.count();
+    const auditCount = await database.auditLog.count({
+      where: { action: 'ATTENDANCE_SCENARIO_RECONCILIATION_APPLIED' },
+    });
+    const repeatedPreview = await attendanceScenarioReconciliation.preview(ownerToken, filters);
+    expect(repeatedPreview.rows).toEqual([]);
+    expect(repeatedPreview.totals.actionableRows).toBe(0);
+    await expect(
+      attendanceScenarioReconciliation.apply(ownerToken, {
+        filters,
+        previewFingerprint: repeatedPreview.fingerprint,
+      }),
+    ).rejects.toThrow('Нет изменений');
+    expect(await database.subscriptionLedger.count()).toBe(ledgerCount);
+    expect(
+      await database.auditLog.count({
+        where: { action: 'ATTENDANCE_SCENARIO_RECONCILIATION_APPLIED' },
+      }),
+    ).toBe(auditCount);
+
+    await closeDatabase(database);
+    database = createDatabaseClient(toSqliteUrl(join(directory, 'management.db')));
+    await initializeDatabase(database);
+    application = new ApplicationService(database);
+    attendanceScenarioReconciliation = new AttendanceScenarioReconciliationService(
+      database,
+      application,
+    );
+    expect(
+      (await attendanceScenarioReconciliation.preview(ownerToken, filters)).totals.actionableRows,
+    ).toBe(0);
+  });
+
+  it('invalidates only calculated payroll and protects approved and paid snapshots', async () => {
+    const { branch, coach, first, group } = await coachFoundation();
+    await management.createPayrollRule(ownerToken, {
+      amountPerAttendee: 2_000,
+      branchId: branch.id,
+      coachId: coach.id,
+      groupId: group.id,
+      isActive: true,
+      type: 'PER_ATTENDEE',
+      validFrom: dateOnly(new Date(Date.now() - 5 * DAY)),
+    });
+    const student = await application.createStudent(ownerToken, {
+      branchId: branch.id,
+      firstName: 'Мария',
+      lastName: 'Payroll-Сценарная',
+      status: 'ACTIVE',
+    });
+    await attendanceScenarios.update(ownerToken, 'ABSENT', {
+      deductSubscription: true,
+      includeInTrainerPayroll: true,
+    });
+    const lessons = [];
+    for (const daysAgo of [3, 2, 1]) {
+      const startsAt = new Date(Date.now() - daysAgo * DAY);
+      startsAt.setHours(12, 0, 0, 0);
+      const lesson = await database.lesson.create({
+        data: {
+          attendanceCompletedAt: startsAt,
+          branchId: branch.id,
+          coachId: coach.id,
+          endsAt: new Date(startsAt.getTime() + 3_600_000),
+          groupId: group.id,
+          startsAt,
+          status: 'COMPLETED',
+        },
+      });
+      await database.attendance.create({
+        data: {
+          lessonId: lesson.id,
+          markedAt: startsAt,
+          markedByUserId: ownerId,
+          status: 'ABSENT',
+          studentId: student.id,
+        },
+      });
+      lessons.push(lesson);
+    }
+    const periods = [];
+    for (const lesson of lessons) {
+      const period = await management.createPayrollPeriod(ownerToken, {
+        branchId: branch.id,
+        dateFrom: inputDateForTest(lesson.startsAt),
+        dateTo: inputDateForTest(lesson.startsAt),
+        trainerId: coach.id,
+      });
+      periods.push(await management.calculatePayrollPeriod(ownerToken, period.id));
+    }
+    const approved = await management.approvePayrollPeriod(ownerToken, periods[1]?.id ?? '');
+    await management.approvePayrollPeriod(ownerToken, periods[2]?.id ?? '');
+    const paid = await management.payPayrollPeriod(ownerToken, periods[2]?.id ?? '', {
+      cashRegisterId: first.id,
+      occurredAt: new Date().toISOString(),
+    });
+    const approvedAmount = approved.totalAmount;
+    const paidAmount = paid.totalAmount;
+    await attendanceScenarios.update(ownerToken, 'ABSENT', {
+      deductSubscription: true,
+      includeInTrainerPayroll: false,
+    });
+
+    const filters = {
+      dateFrom: inputDateForTest(lessons[0]?.startsAt ?? new Date()),
+      dateTo: inputDateForTest(lessons[2]?.startsAt ?? new Date()),
+      status: 'ABSENT' as const,
+    };
+    const preview = await attendanceScenarioReconciliation.preview(ownerToken, filters);
+    expect(preview.totals).toMatchObject({
+      actionableRows: 1,
+      payrollPeriodsToRecalculate: 1,
+      payrollRowsToExclude: 3,
+      skippedProtectedRows: 2,
+    });
+    const result = await attendanceScenarioReconciliation.apply(ownerToken, {
+      filters,
+      previewFingerprint: preview.fingerprint,
+    });
+    expect(result).toMatchObject({
+      payrollPeriodsInvalidated: 1,
+      processedAttendanceCount: 1,
+      protectedRowsSkipped: 2,
+    });
+    const calculatedPeriodId = periods[0]?.id;
+    if (!calculatedPeriodId) throw new Error('Открытый расчёт не создан.');
+    expect(
+      await database.payrollPeriod.findUnique({ where: { id: calculatedPeriodId } }),
+    ).toMatchObject({ status: 'DRAFT' });
+    expect(
+      await database.payrollAccrual.count({ where: { payrollPeriodId: calculatedPeriodId } }),
+    ).toBe(0);
+    expect(await management.getPayrollPeriod(ownerToken, approved.id)).toMatchObject({
+      status: 'APPROVED',
+      totalAmount: approvedAmount,
+    });
+    expect(await management.getPayrollPeriod(ownerToken, paid.id)).toMatchObject({
+      status: 'PAID',
+      totalAmount: paidAmount,
+    });
+    expect(await database.attendance.count({ where: { studentId: student.id } })).toBe(3);
+    const repeated = await attendanceScenarioReconciliation.preview(ownerToken, filters);
+    expect(repeated.totals.actionableRows).toBe(0);
+    expect(repeated.totals.skippedProtectedRows).toBe(2);
   });
 
   it('allocates net subscription revenue once and excludes refunds from percent payroll', async () => {

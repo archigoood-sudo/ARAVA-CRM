@@ -45,6 +45,8 @@ import {
   type AttentionFilters,
   type ArchiveQuery,
   type AttendanceEntryInput,
+  type AttendanceScenarioReconciliationApplyInput,
+  type AttendanceScenarioReconciliationFilters,
   type AttendanceScenarioUpdate,
   type AttendanceScanConfirmationInput,
   type EnrollmentInput,
@@ -390,6 +392,25 @@ export const attendanceWorkspaceDateSchema = isoDate;
 const optionalIsoDate = isoDate.optional().or(z.literal('').transform(() => undefined));
 const isoDateTime = z.string().datetime({ message: t('validation.dateTime'), offset: true });
 const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/u, t('validation.time'));
+
+export const attendanceScenarioReconciliationFiltersSchema: z.ZodType<AttendanceScenarioReconciliationFilters> =
+  z
+    .object({
+      branchId: optionalIdentifier,
+      dateFrom: isoDate,
+      dateTo: isoDate,
+      groupId: optionalIdentifier,
+      status: attendanceScenarioStatusSchema.optional(),
+    })
+    .refine((input) => input.dateFrom <= input.dateTo, {
+      message: t('validation.dateRange'),
+      path: ['dateTo'],
+    });
+export const attendanceScenarioReconciliationApplySchema: z.ZodType<AttendanceScenarioReconciliationApplyInput> =
+  z.object({
+    filters: attendanceScenarioReconciliationFiltersSchema,
+    previewFingerprint: z.string().regex(/^[a-f\d]{64}$/u),
+  });
 
 export const groupInputSchema: z.ZodType<GroupInput> = z
   .object({

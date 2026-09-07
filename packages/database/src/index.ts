@@ -153,6 +153,7 @@ export {
   readAttendanceScenarioSettings,
   type AttendanceScenarioSettings,
 } from './attendance-scenarios';
+export { AttendanceScenarioReconciliationService } from './attendance-scenario-reconciliation';
 export { LessonOccurrenceService } from './lesson-occurrence-service';
 export { ArchiveService } from './archive-service';
 export { BackupService, type BackupServiceOptions } from './backup-service';
@@ -160,6 +161,7 @@ export { ATTENTION_RULES, DAY_MS, isExpiringSoon, isLowLessonBalance } from './a
 export {
   addDays,
   applyAttendanceWriteOff,
+  inspectAttendanceWriteOff,
   reconcileStudentAttendanceCoverage,
   reverseAttendanceWriteOffs,
   reverseLessonWriteOffs,

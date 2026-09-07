@@ -11,6 +11,24 @@ import { DomainError } from './security';
 
 type LedgerClient = DatabaseClient | Prisma.TransactionClient;
 
+interface AttendanceWriteOffInput {
+  actorUserId: string;
+  attendanceStatus: AttendanceStatus;
+  branchId: string;
+  lessonId: string;
+  lessonStartsAt: Date;
+  scenarioSettings?: AttendanceScenarioSettings;
+  studentId: string;
+}
+
+export interface AttendanceWriteOffInspection {
+  lessonLimit?: number | null | undefined;
+  lessonsUsed?: number | undefined;
+  outcome: 'ALREADY_APPLIED' | 'BLOCKED' | 'NOT_REQUIRED' | 'READY';
+  reason?: string | undefined;
+  subscriptionId?: string | undefined;
+}
+
 const DAY_MS = 86_400_000;
 
 export async function subscriptionHasSuccessfulFullPayment(
@@ -154,24 +172,17 @@ export async function reverseAttendanceWriteOffs(
   return reversed;
 }
 
-export async function applyAttendanceWriteOff(
+async function inspectAttendanceWriteOffInternal(
   client: LedgerClient,
-  input: {
-    actorUserId: string;
-    attendanceStatus: AttendanceStatus;
-    branchId: string;
-    lessonId: string;
-    lessonStartsAt: Date;
-    scenarioSettings?: AttendanceScenarioSettings;
-    studentId: string;
-  },
-): Promise<string | null> {
+  input: AttendanceWriteOffInput,
+  lessonsUsedOverrides?: ReadonlyMap<string, number>,
+): Promise<AttendanceWriteOffInspection> {
   const scenarioSettings = input.scenarioSettings ?? (await readAttendanceScenarioSettings(client));
   const consumesPaid =
     input.attendanceStatus !== 'TRIAL' &&
     attendanceDeductsSubscription(scenarioSettings, input.attendanceStatus);
   const consumesTrial = input.attendanceStatus === 'TRIAL';
-  if (!consumesPaid && !consumesTrial) return null;
+  if (!consumesPaid && !consumesTrial) return { outcome: 'NOT_REQUIRED' };
 
   const freeTrial = await client.trialAppointment.findFirst({
     select: { id: true },
@@ -182,26 +193,30 @@ export async function applyAttendanceWriteOff(
       supersededAt: null,
     },
   });
-  if (freeTrial) return null;
+  if (freeTrial)
+    return { outcome: 'NOT_REQUIRED', reason: 'Пробное посещение не списывает абонемент.' };
 
   const attendance = await client.attendance.findUnique({
     select: { directPaymentId: true, directPaymentOperationId: true, freeAttendanceTariffId: true },
     where: { lessonId_studentId: { lessonId: input.lessonId, studentId: input.studentId } },
   });
-  if (
-    attendance?.directPaymentId ||
-    attendance?.directPaymentOperationId ||
-    attendance?.freeAttendanceTariffId
-  )
-    return null;
+  if (attendance?.directPaymentId || attendance?.directPaymentOperationId)
+    return { outcome: 'NOT_REQUIRED', reason: 'Посещение оплачено отдельно.' };
+  if (attendance?.freeAttendanceTariffId)
+    return { outcome: 'NOT_REQUIRED', reason: 'Посещение проведено по бесплатной услуге.' };
 
   const attendanceId = `${input.lessonId}:${input.studentId}`;
   const existing = await client.subscriptionLedger.findMany({
     include: { reversals: { select: { id: true } } },
     where: { attendanceId, type: 'LESSON_WRITE_OFF' },
   });
-  if (existing.some(({ reversals }) => reversals.length === 0))
-    throw new DomainError('CONFLICT', t('domain.conflict.writeOffDuplicate'));
+  const activeWriteOffs = existing.filter(({ reversals }) => reversals.length === 0);
+  if (activeWriteOffs.length > 1)
+    return {
+      outcome: 'BLOCKED',
+      reason: 'Найдено несколько активных списаний. Требуется ручная проверка.',
+    };
+  if (activeWriteOffs.length === 1) return { outcome: 'ALREADY_APPLIED' };
 
   const candidates = await client.subscription.findMany({
     include: {
@@ -275,13 +290,17 @@ export async function applyAttendanceWriteOff(
       (predecessor?.status === 'PENDING'
         ? predecessorPaid >= predecessor.salePrice
         : (predecessor?.payments.some(({ status }) => status !== 'CANCELLED') ?? false));
+    const candidateLessonsUsed = lessonsUsedOverrides?.get(candidate.id) ?? candidate.lessonsUsed;
+    const predecessorLessonsUsed = predecessor
+      ? (lessonsUsedOverrides?.get(predecessor.id) ?? predecessor.lessonsUsed)
+      : 0;
     const predecessorStillConsumable = Boolean(
       predecessor &&
       predecessorPaymentAllowsConsumption &&
       predecessor.status !== 'CANCELLED' &&
       predecessor.startsAt <= input.lessonStartsAt &&
       (!predecessor.expiresAt || predecessor.expiresAt >= input.lessonStartsAt) &&
-      (predecessor.lessonLimit === null || predecessor.lessonsUsed < predecessor.lessonLimit),
+      (predecessor.lessonLimit === null || predecessorLessonsUsed < predecessor.lessonLimit),
     );
     const frozenAtLesson = candidate.ledgerEntries.some(
       ({ periodEndsAt, periodStartsAt }) =>
@@ -294,10 +313,43 @@ export async function applyAttendanceWriteOff(
       candidatePaymentAllowsConsumption &&
       !predecessorStillConsumable &&
       !frozenAtLesson &&
-      (candidate.lessonLimit === null || candidate.lessonsUsed < candidate.lessonLimit)
+      (candidate.lessonLimit === null || candidateLessonsUsed < candidate.lessonLimit)
     );
   });
-  if (!subscription) return null;
+  if (!subscription)
+    return {
+      outcome: 'BLOCKED',
+      reason: 'Нет подходящего оплаченного абонемента на дату занятия.',
+    };
+
+  return {
+    lessonLimit: subscription.lessonLimit,
+    lessonsUsed: lessonsUsedOverrides?.get(subscription.id) ?? subscription.lessonsUsed,
+    outcome: 'READY',
+    subscriptionId: subscription.id,
+  };
+}
+
+export async function inspectAttendanceWriteOff(
+  client: LedgerClient,
+  input: AttendanceWriteOffInput,
+  lessonsUsedOverrides?: ReadonlyMap<string, number>,
+): Promise<AttendanceWriteOffInspection> {
+  return inspectAttendanceWriteOffInternal(client, input, lessonsUsedOverrides);
+}
+
+export async function applyAttendanceWriteOff(
+  client: LedgerClient,
+  input: AttendanceWriteOffInput,
+): Promise<string | null> {
+  const attendanceId = `${input.lessonId}:${input.studentId}`;
+  const inspection = await inspectAttendanceWriteOffInternal(client, input);
+  if (inspection.outcome === 'ALREADY_APPLIED')
+    throw new DomainError('CONFLICT', t('domain.conflict.writeOffDuplicate'));
+  if (inspection.outcome !== 'READY' || !inspection.subscriptionId) return null;
+  const subscription = await client.subscription.findUniqueOrThrow({
+    where: { id: inspection.subscriptionId },
+  });
 
   const lessonsUsed = subscription.lessonsUsed + 1;
   const status =

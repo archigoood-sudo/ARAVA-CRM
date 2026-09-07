@@ -59,6 +59,14 @@ test('OWNER changes attendance scenarios and the setting survives restart', asyn
     await expect(
       window.getByRole('switch', { name: 'Отсутствовал: списывать с абонемента' }),
     ).toHaveAttribute('aria-checked', 'false');
+    await window.getByRole('button', { name: 'Применить к прошлым занятиям' }).click();
+    const reconciliation = window.getByRole('dialog', {
+      name: 'Применить сценарии к прошлым занятиям',
+    });
+    await expect(reconciliation).toBeVisible();
+    await reconciliation.getByRole('button', { name: 'Предпросмотр' }).click();
+    await expect(window.getByTestId('attendance-reconciliation-preview')).toBeVisible();
+    await expect(window.getByText('Все найденные посещения уже соответствуют')).toBeVisible();
   } finally {
     await closeApplication(application);
   }

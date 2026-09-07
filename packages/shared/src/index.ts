@@ -9,6 +9,8 @@ export {
   attendanceEntryInputSchema,
   attendanceOccurrenceInputSchema,
   attendanceScanConfirmationInputSchema,
+  attendanceScenarioReconciliationApplySchema,
+  attendanceScenarioReconciliationFiltersSchema,
   attendanceScenarioStatusSchema,
   attendanceScenarioUpdateSchema,
   attendanceStatusSchema,

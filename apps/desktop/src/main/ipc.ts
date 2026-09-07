@@ -3,6 +3,7 @@ import {
   ArchiveService,
   AttendanceWorkspaceService,
   AttendanceScenarioService,
+  AttendanceScenarioReconciliationService,
   ChatService,
   CalendarService,
   CardService,
@@ -33,6 +34,8 @@ import {
   archiveQuerySchema,
   attendanceEntryInputSchema,
   attendanceEntriesSchema,
+  attendanceScenarioReconciliationApplySchema,
+  attendanceScenarioReconciliationFiltersSchema,
   attendanceScenarioStatusSchema,
   attendanceScenarioUpdateSchema,
   attendanceOccurrenceInputSchema,
@@ -231,6 +234,10 @@ export function createIpcHandlers(
 ): Record<string, IpcHandler> {
   const studio = new StudioService(database, service);
   const attendanceScenarios = new AttendanceScenarioService(database, service);
+  const attendanceScenarioReconciliation = new AttendanceScenarioReconciliationService(
+    database,
+    service,
+  );
   const archive = new ArchiveService(database, service);
   const groupRoster = new GroupRosterService(database, service);
   const attendanceWorkspace = new AttendanceWorkspaceService(database, service);
@@ -1073,6 +1080,16 @@ export function createIpcHandlers(
       attendanceWorkspace.openOccurrence(
         sessionTokenSchema.parse(unsafeToken),
         attendanceOccurrenceInputSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.attendanceScenarioReconciliationApply]: (unsafeToken, unsafeInput) =>
+      attendanceScenarioReconciliation.apply(
+        sessionTokenSchema.parse(unsafeToken),
+        attendanceScenarioReconciliationApplySchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.attendanceScenarioReconciliationPreview]: (unsafeToken, unsafeFilters) =>
+      attendanceScenarioReconciliation.preview(
+        sessionTokenSchema.parse(unsafeToken),
+        attendanceScenarioReconciliationFiltersSchema.parse(unsafeFilters),
       ),
     [IPC_CHANNELS.attendanceScenarioList]: (unsafeToken) =>
       attendanceScenarios.list(sessionTokenSchema.parse(unsafeToken)),
