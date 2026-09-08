@@ -870,10 +870,7 @@ export class AttentionService {
             severity: 'CRITICAL',
             title: 'Ошибка согласования синхронизации',
           });
-        else if (
-          failedSync >= 3 ||
-          (state === 'OFFLINE' && (pendingCount >= 100 || oldestHours >= 24))
-        )
+        else if (state === 'OFFLINE' && (pendingCount >= 100 || oldestHours >= 24))
           add({
             actionLabel: 'Открыть журнал синхронизации',
             actionRoute: '/settings#integration',
@@ -883,9 +880,20 @@ export class AttentionService {
             entityType: 'Integration',
             id: 'integration:queue-health',
             occurredAt: oldestPending?.createdAt.toISOString(),
-            severity:
-              failedSync >= 10 || pendingCount >= 500 || oldestHours >= 72 ? 'CRITICAL' : 'WARNING',
-            title: 'Проблема синхронизации с сайтом',
+            severity: pendingCount >= 500 || oldestHours >= 72 ? 'CRITICAL' : 'WARNING',
+            title: 'Сервер синхронизации недоступен',
+          });
+        else if (failedSync >= 3)
+          add({
+            actionLabel: 'Открыть журнал синхронизации',
+            actionRoute: '/settings#integration',
+            category: 'INTEGRATION',
+            description: `Не отправлены отдельные записи: ${String(failedSync)}. Сервер может быть доступен; причины показаны в диагностике очереди.`,
+            entityId: 'integration-failed-items',
+            entityType: 'Integration',
+            id: 'integration:failed-items',
+            severity: failedSync >= 10 ? 'CRITICAL' : 'WARNING',
+            title: 'Не отправлены отдельные изменения',
           });
       }
     }

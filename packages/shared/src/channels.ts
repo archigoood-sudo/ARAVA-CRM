@@ -3000,6 +3000,15 @@ export interface IntegrationDeviceRenameInput {
 
 export interface IntegrationStatus {
   baseUrl: string;
+  canonicalSyncHealth:
+    | 'HEALTHY'
+    | 'DEGRADED'
+    | 'OFFLINE'
+    | 'AUTH_ERROR'
+    | 'VERSION_UNSUPPORTED'
+    | 'CONFLICT'
+    | 'DISABLED'
+    | 'NOT_PAIRED';
   connectionState: IntegrationConnectionState;
   currentDeviceName?: string;
   deviceId: string;
@@ -3008,19 +3017,42 @@ export interface IntegrationStatus {
   failedItems: IntegrationFailedSyncItem[];
   conflictCount: number;
   isPaired: boolean;
+  lastAttemptedSync?: string;
+  lastCanonicalSyncSuccess?: string;
   lastError?: string;
+  lastErrorAt?: string;
+  lastErrorCode?: string;
+  lastErrorEndpoint?: string;
+  lastErrorHttpStatus?: number;
+  lastSuccessfulHealthCheck?: string;
   lastSuccessfulSync?: string;
   lastInboundSync?: string;
   lastOutboundSync?: string;
   inboundCursor: number;
   pendingCount: number;
   processingCount: number;
+  nextRetryAt?: string;
+  oldestPendingAt?: string;
   recoveryBlocked: boolean;
   retryableFailedCount: number;
   syncInProgress: boolean;
   devices: IntegrationDeviceSummary[];
   websiteAuthority: IntegrationWebsiteAuthorityStatus;
   websitePendingCount: number;
+  websitePublicationHealth:
+    | 'HEALTHY'
+    | 'ERROR'
+    | 'NON_AUTHORITATIVE'
+    | 'UNASSIGNED'
+    | 'UNKNOWN'
+    | 'DISABLED'
+    | 'NOT_PAIRED';
+  websitePublicationProbeError?: {
+    code: string;
+    endpoint?: string;
+    httpStatus?: number;
+    message: string;
+  };
 }
 
 export interface IntegrationWebsiteAuthorityStatus {

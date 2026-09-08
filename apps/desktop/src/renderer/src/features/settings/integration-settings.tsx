@@ -23,6 +23,7 @@ import {
   Cable,
   CheckCircle2,
   CloudCog,
+  Copy,
   GitCompareArrows,
   Pencil,
   RefreshCw,
@@ -37,6 +38,7 @@ import { useEffect, useState } from 'react';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken } from '../../stores/auth-store';
+import { buildIntegrationDiagnosticReport } from './integration-diagnostic-report';
 
 const stateLabels: Record<IntegrationConnectionState, string> = {
   AUTH_ERROR: 'Требуется повторное подключение',
@@ -92,6 +94,25 @@ const conflictDiagnosticLabels = {
   AUTO_RESOLVED: 'Разрешён автоматически',
   OBSOLETE: 'Устарел',
   REAL_ERROR: 'Требует диагностики',
+} as const;
+const canonicalHealthLabels = {
+  AUTH_ERROR: 'Ошибка авторизации',
+  CONFLICT: 'Требуется согласование',
+  DEGRADED: 'Сервер доступен, есть ошибки отдельных записей',
+  DISABLED: 'Выключено',
+  HEALTHY: 'Работает',
+  NOT_PAIRED: 'Не подключено',
+  OFFLINE: 'Сервер недоступен',
+  VERSION_UNSUPPORTED: 'Несовместимая версия',
+} as const;
+const websiteHealthLabels = {
+  DISABLED: 'Выключено',
+  ERROR: 'Ошибка публикации',
+  HEALTHY: 'Публикация работает',
+  NON_AUTHORITATIVE: 'Публикация запрещена для этого устройства',
+  NOT_PAIRED: 'Не подключено',
+  UNASSIGNED: 'Источник не выбран',
+  UNKNOWN: 'Не удалось проверить',
 } as const;
 
 function errorMessage(error: unknown): string {
@@ -238,6 +259,23 @@ export function IntegrationSettings() {
     mutationFn: () => getDesktopApi().integration.diagnose(getSessionToken()),
     onError: (error) => setNotice(errorMessage(error)),
     onSuccess: () => setNotice(undefined),
+  });
+  const copyDiagnostics = useMutation({
+    mutationFn: async () => {
+      const [diagnosticResult, currentStatus] = await Promise.all([
+        getDesktopApi().integration.diagnose(getSessionToken()),
+        getDesktopApi().integration.getStatus(getSessionToken()),
+      ]);
+      await navigator.clipboard.writeText(
+        buildIntegrationDiagnosticReport(currentStatus, diagnosticResult),
+      );
+      return currentStatus;
+    },
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: (currentStatus) => {
+      queryClient.setQueryData(queryKeys.integrationStatus, currentStatus);
+      setNotice('Диагностика скопирована. Отправьте этот текст разработчику.');
+    },
   });
   const selectAqsiDevice = useMutation({
     mutationFn: (deviceId: number) =>
@@ -411,6 +449,64 @@ export function IntegrationSettings() {
             </p>
           </div>
         </div>
+
+        {status.data ? (
+          <div
+            className="grid gap-3 rounded-2xl border border-border bg-background p-5 md:grid-cols-2 lg:grid-cols-4"
+            data-testid="sync-layer-diagnostics"
+          >
+            <div>
+              <p className="text-xs text-muted-foreground">Canonical CRM sync</p>
+              <p className="mt-1 text-sm font-semibold">
+                {canonicalHealthLabels[status.data.canonicalSyncHealth]}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Website publication</p>
+              <p className="mt-1 text-sm font-semibold">
+                {websiteHealthLabels[status.data.websitePublicationHealth]}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Последняя попытка sync</p>
+              <p className="mt-1 text-sm font-semibold">
+                {dateTime(status.data.lastAttemptedSync)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Последний health-check</p>
+              <p className="mt-1 text-sm font-semibold">
+                {dateTime(status.data.lastSuccessfulHealthCheck)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Последняя canonical sync</p>
+              <p className="mt-1 text-sm font-semibold">
+                {dateTime(status.data.lastCanonicalSyncSuccess)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Самая старая запись</p>
+              <p className="mt-1 text-sm font-semibold">{dateTime(status.data.oldestPendingAt)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Следующая попытка</p>
+              <p className="mt-1 text-sm font-semibold">{dateTime(status.data.nextRetryAt)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Текущая ошибка транспорта</p>
+              <p className="mt-1 break-words text-sm font-semibold">
+                {status.data.lastErrorCode ?? 'Нет'}
+                {status.data.lastErrorHttpStatus
+                  ? ` · HTTP ${String(status.data.lastErrorHttpStatus)}`
+                  : ''}
+              </p>
+              <p className="mt-1 break-all text-xs text-muted-foreground">
+                {status.data.lastErrorEndpoint ?? 'Endpoint не зафиксирован'}
+              </p>
+            </div>
+          </div>
+        ) : null}
 
         {status.data?.failedCount ? (
           <div className="space-y-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-5">
@@ -839,6 +935,14 @@ export function IntegrationSettings() {
           >
             <Stethoscope className="size-4" />
             {diagnostics.isPending ? 'Выполняется диагностика…' : 'Запустить диагностику'}
+          </Button>
+          <Button
+            disabled={copyDiagnostics.isPending}
+            onClick={() => copyDiagnostics.mutate()}
+            variant="outline"
+          >
+            <Copy className="size-4" />
+            {copyDiagnostics.isPending ? 'Собирается…' : 'Скопировать диагностику'}
           </Button>
           <Button disabled={preview.isFetching} onClick={() => void prepare()} variant="outline">
             <CloudCog className="size-4" /> Первичная синхронизация

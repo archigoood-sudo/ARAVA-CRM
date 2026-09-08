@@ -1783,6 +1783,39 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(JSON.stringify(status.failedItems)).not.toContain('failed-safe');
   });
 
+  it('keeps a reachable server healthy while poisoned rows remain item-level diagnostics', async () => {
+    await pair();
+    await database.syncOutbox.create({
+      data: {
+        entityId: 'poisoned-row',
+        entityType: 'TRIAL_APPOINTMENT',
+        idempotencyKey: 'poisoned-row-once',
+        lastAttemptAt: now,
+        lastErrorCode: 'INVALID_PAYLOAD',
+        nextAttemptAt: new Date(now.getTime() + 60_000),
+        status: 'FAILED',
+      },
+    });
+    await database.appSetting.upsert({
+      create: { key: 'integration.lastState', value: 'CONNECTED' },
+      update: { value: 'CONNECTED' },
+      where: { key: 'integration.lastState' },
+    });
+
+    const status = await integration.getStatus(ownerToken);
+
+    expect(status).toMatchObject({
+      canonicalSyncHealth: 'DEGRADED',
+      connectionState: 'CONNECTED',
+      failedCount: 1,
+      retryableFailedCount: 0,
+    });
+    expect(status.oldestPendingAt).toBeDefined();
+    expect(status.failedItems).toEqual([
+      expect.objectContaining({ entityType: 'TRIAL_APPOINTMENT', retryable: false }),
+    ]);
+  });
+
   it('returns complete safe results for offline, timeout and revoked-device failures', async () => {
     await pair();
     const offlineService = new IntegrationService(
@@ -1920,6 +1953,18 @@ describe('Sprint 4.5A multi-device integration', () => {
       update: { value: 'Старая ошибка' },
       where: { key: 'integration.lastError' },
     });
+    for (const [key, value] of [
+      ['integration.lastErrorAt', now.toISOString()],
+      ['integration.lastErrorCode', 'NETWORK_UNAVAILABLE'],
+      ['integration.lastErrorEndpoint', 'https://example.test/api/integration/v1/health'],
+      ['integration.lastErrorHttpStatus', '503'],
+    ] as const) {
+      await database.appSetting.upsert({
+        create: { key, value },
+        update: { value },
+        where: { key },
+      });
+    }
     const restarted = new IntegrationService(
       database,
       application,
@@ -1931,10 +1976,14 @@ describe('Sprint 4.5A multi-device integration', () => {
     const status = await restarted.getStatus(ownerToken);
 
     expect(status).toMatchObject({
+      canonicalSyncHealth: 'HEALTHY',
       connectionState: 'CONNECTED',
-      lastSuccessfulSync: now.toISOString(),
+      lastSuccessfulHealthCheck: now.toISOString(),
     });
     expect(status).not.toHaveProperty('lastError');
+    expect(status).not.toHaveProperty('lastErrorCode');
+    expect(status).not.toHaveProperty('lastErrorEndpoint');
+    expect(status).not.toHaveProperty('lastErrorHttpStatus');
   });
 
   it('rebases a rapid second mutation from the same device after a delayed acknowledgement', async () => {

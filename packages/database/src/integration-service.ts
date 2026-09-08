@@ -84,7 +84,13 @@ const WEBSITE_ENTITY_TYPES = [
 const SETTINGS = {
   baseUrl: 'integration.baseUrl',
   enabled: 'integration.enabled',
+  lastAttemptedSync: 'integration.lastAttemptedSync',
   lastError: 'integration.lastError',
+  lastErrorAt: 'integration.lastErrorAt',
+  lastErrorCode: 'integration.lastErrorCode',
+  lastErrorEndpoint: 'integration.lastErrorEndpoint',
+  lastErrorHttpStatus: 'integration.lastErrorHttpStatus',
+  lastSuccessfulHealthCheck: 'integration.lastSuccessfulHealthCheck',
   lastState: 'integration.lastState',
   lastSuccessfulSync: 'integration.lastSuccessfulSync',
   lastInboundSync: 'integration.lastInboundSync',
@@ -317,6 +323,7 @@ class IntegrationApiError extends Error {
     readonly retryable: boolean,
     message: string,
     readonly httpStatus?: number,
+    readonly endpoint?: string,
   ) {
     super(message);
     this.name = 'IntegrationApiError';
@@ -377,6 +384,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function latestTimestamp(...values: (string | undefined)[]): string | undefined {
+  return values
+    .filter(
+      (value): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value)),
+    )
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
 }
 
 function parseAqsiGatewayPayment(
@@ -1109,6 +1124,7 @@ export class IntegrationApiClient {
     context?: CrmChatRequestContext,
     allowEmptySuccess = false,
   ): Promise<unknown> {
+    const endpoint = this.endpoint(baseUrl, path);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const headers: Record<string, string> = {
@@ -1124,7 +1140,7 @@ export class IntegrationApiClient {
       );
     }
     try {
-      const response = await this.fetchImplementation(this.endpoint(baseUrl, path), {
+      const response = await this.fetchImplementation(endpoint, {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         headers,
         method,
@@ -1135,7 +1151,13 @@ export class IntegrationApiClient {
         payload = await response.json();
       } catch {
         if (response.ok && allowEmptySuccess) return undefined;
-        throw new IntegrationApiError('INVALID_RESPONSE', false, 'Сервер вернул неверный ответ.');
+        throw new IntegrationApiError(
+          'INVALID_RESPONSE',
+          false,
+          'Сервер вернул неверный ответ.',
+          undefined,
+          endpoint,
+        );
       }
       if (!response.ok) {
         const bodyRecord: ApiErrorBody = isRecord(payload) ? payload : {};
@@ -1146,15 +1168,28 @@ export class IntegrationApiClient {
           retryable,
           optionalString(bodyRecord.message) ?? 'Сервер отклонил запрос синхронизации.',
           response.status,
+          endpoint,
         );
       }
       return payload;
     } catch (error) {
       if (error instanceof IntegrationApiError) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new IntegrationApiError('TIMEOUT', true, 'Сервер не ответил вовремя.');
+        throw new IntegrationApiError(
+          'TIMEOUT',
+          true,
+          'Сервер не ответил вовремя.',
+          undefined,
+          endpoint,
+        );
       }
-      throw new IntegrationApiError('NETWORK_UNAVAILABLE', true, 'Нет соединения с сайтом.');
+      throw new IntegrationApiError(
+        'NETWORK_UNAVAILABLE',
+        true,
+        'Нет соединения с сайтом.',
+        undefined,
+        endpoint,
+      );
     } finally {
       clearTimeout(timeout);
     }
@@ -3437,6 +3472,15 @@ export class IntegrationService {
       lastInboundSync,
       lastOutboundSync,
       failedItems,
+      lastAttemptedSync,
+      lastErrorAt,
+      lastErrorCode,
+      lastErrorEndpoint,
+      lastErrorHttpStatus,
+      lastSuccessfulHealthCheck,
+      oldestPending,
+      nextRetry,
+      retryableFailedCount,
     ] = await Promise.all([
       this.credentials.getDeviceId(),
       this.credentials.getToken(),
@@ -3471,6 +3515,28 @@ export class IntegrationService {
         take: 20,
         where: { status: 'FAILED' },
       }),
+      this.setting(SETTINGS.lastAttemptedSync),
+      this.setting(SETTINGS.lastErrorAt),
+      this.setting(SETTINGS.lastErrorCode),
+      this.setting(SETTINGS.lastErrorEndpoint),
+      this.setting(SETTINGS.lastErrorHttpStatus),
+      this.setting(SETTINGS.lastSuccessfulHealthCheck),
+      this.database.syncOutbox.findFirst({
+        orderBy: { createdAt: 'asc' },
+        select: { createdAt: true },
+        where: { status: { in: ['PENDING', 'PROCESSING', 'FAILED'] } },
+      }),
+      this.database.syncOutbox.findFirst({
+        orderBy: { nextAttemptAt: 'asc' },
+        select: { nextAttemptAt: true },
+        where: { status: 'PENDING' },
+      }),
+      this.database.syncOutbox.count({
+        where: {
+          lastErrorCode: { in: [...RETRYABLE_SYNC_ERROR_CODES] },
+          status: 'FAILED',
+        },
+      }),
     ]);
     const count = (status: 'PENDING' | 'PROCESSING' | 'FAILED') =>
       counts.find((entry) => entry.status === status)?._count ?? 0;
@@ -3486,15 +3552,25 @@ export class IntegrationService {
     else if (!token) connectionState = 'NOT_PAIRED';
     else if (conflictCount > 0) connectionState = 'CONFLICT';
     else if (lastState === 'OFFLINE') connectionState = 'OFFLINE';
-    else if (failedCount > 0) connectionState = 'SYNC_ERROR';
     else if (pendingCount > 0 || processingCount > 0) connectionState = 'PENDING_CHANGES';
     else connectionState = 'CONNECTED';
+    let canonicalSyncHealth: IntegrationStatus['canonicalSyncHealth'];
+    if (!enabled) canonicalSyncHealth = 'DISABLED';
+    else if (!token) canonicalSyncHealth = 'NOT_PAIRED';
+    else if (connectionState === 'AUTH_ERROR') canonicalSyncHealth = 'AUTH_ERROR';
+    else if (connectionState === 'VERSION_UNSUPPORTED') canonicalSyncHealth = 'VERSION_UNSUPPORTED';
+    else if (connectionState === 'OFFLINE') canonicalSyncHealth = 'OFFLINE';
+    else if (connectionState === 'CONFLICT' || connectionState === 'RECONCILIATION_REQUIRED')
+      canonicalSyncHealth = 'CONFLICT';
+    else if (failedCount > 0) canonicalSyncHealth = 'DEGRADED';
+    else canonicalSyncHealth = 'HEALTHY';
     let devices: IntegrationDeviceSummary[] = [];
     let websiteAuthority: IntegrationWebsiteAuthorityStatus = {
       currentDeviceId: deviceId,
       isCurrentDeviceAuthoritative: false,
       state: 'UNASSIGNED',
     };
+    let websitePublicationProbeError: IntegrationStatus['websitePublicationProbeError'];
     if (enabled && token && baseUrl) {
       try {
         devices = await this.api.listDevices(baseUrl, deviceId, token);
@@ -3503,7 +3579,17 @@ export class IntegrationService {
       }
       try {
         websiteAuthority = await this.api.websiteAuthorityStatus(baseUrl, deviceId, token);
-      } catch {
+      } catch (error) {
+        const apiError =
+          error instanceof IntegrationApiError
+            ? error
+            : new IntegrationApiError('UNKNOWN', false, 'Статус публикации сайта недоступен.');
+        websitePublicationProbeError = {
+          code: apiError.errorCode,
+          ...(apiError.endpoint ? { endpoint: apiError.endpoint } : {}),
+          ...(apiError.httpStatus ? { httpStatus: apiError.httpStatus } : {}),
+          message: apiError.message,
+        };
         // Website authority diagnostics do not hide ordinary CRM device sync status.
       }
     }
@@ -3523,8 +3609,20 @@ export class IntegrationService {
       reason: safeSyncErrorMessage(item.lastErrorCode),
       retryable: RETRYABLE_SYNC_ERROR_CODES.has(item.lastErrorCode ?? ''),
     }));
+    let websitePublicationHealth: IntegrationStatus['websitePublicationHealth'];
+    if (!enabled) websitePublicationHealth = 'DISABLED';
+    else if (!token) websitePublicationHealth = 'NOT_PAIRED';
+    else if (websitePublicationProbeError) websitePublicationHealth = 'UNKNOWN';
+    else if (websiteAuthority.state === 'NON_AUTHORITATIVE')
+      websitePublicationHealth = 'NON_AUTHORITATIVE';
+    else if (websiteAuthority.state === 'UNASSIGNED') websitePublicationHealth = 'UNASSIGNED';
+    else if (websiteAuthority.lastError) websitePublicationHealth = 'ERROR';
+    else websitePublicationHealth = 'HEALTHY';
+    const lastCanonicalSyncSuccess = latestTimestamp(lastInboundSync, lastOutboundSync);
+    const parsedHttpStatus = Number(lastErrorHttpStatus);
     return {
       baseUrl: baseUrl ?? '',
+      canonicalSyncHealth,
       connectionState,
       conflictCount,
       ...(currentDevice?.displayName || currentDevice?.name
@@ -3536,18 +3634,37 @@ export class IntegrationService {
       failedCount,
       failedItems: safeFailedItems,
       isPaired: Boolean(token),
-      ...(lastError ? { lastError } : {}),
+      ...(lastAttemptedSync ? { lastAttemptedSync } : {}),
+      ...(lastCanonicalSyncSuccess ? { lastCanonicalSyncSuccess } : {}),
+      ...(lastError
+        ? {
+            lastError,
+            ...(lastErrorAt ? { lastErrorAt } : {}),
+            ...(lastErrorCode ? { lastErrorCode } : {}),
+            ...(lastErrorEndpoint ? { lastErrorEndpoint } : {}),
+            ...(Number.isInteger(parsedHttpStatus) && parsedHttpStatus > 0
+              ? { lastErrorHttpStatus: parsedHttpStatus }
+              : {}),
+          }
+        : {}),
+      ...(lastSuccessfulHealthCheck ? { lastSuccessfulHealthCheck } : {}),
       ...(lastInboundSync ? { lastInboundSync } : {}),
       ...(lastOutboundSync ? { lastOutboundSync } : {}),
       ...(lastSuccessfulSync ? { lastSuccessfulSync } : {}),
       inboundCursor: Number(inboundCursor ?? 0),
       pendingCount,
       processingCount,
+      ...(nextRetry?.nextAttemptAt ? { nextRetryAt: nextRetry.nextAttemptAt.toISOString() } : {}),
+      ...(oldestPending?.createdAt
+        ? { oldestPendingAt: oldestPending.createdAt.toISOString() }
+        : {}),
       recoveryBlocked: pendingCount + processingCount + failedCount > 0,
-      retryableFailedCount: safeFailedItems.filter(({ retryable }) => retryable).length,
+      retryableFailedCount,
       syncInProgress: this.processing,
       websiteAuthority,
       websitePendingCount,
+      websitePublicationHealth,
+      ...(websitePublicationProbeError ? { websitePublicationProbeError } : {}),
     };
   }
 
@@ -5038,7 +5155,7 @@ export class IntegrationService {
       const checkedAt = this.now().toISOString();
       await Promise.all([
         this.setSetting(SETTINGS.lastState, 'CONNECTED'),
-        this.setSetting(SETTINGS.lastSuccessfulSync, checkedAt),
+        this.setSetting(SETTINGS.lastSuccessfulHealthCheck, checkedAt),
         this.database.appSetting.deleteMany({ where: { key: SETTINGS.lastError } }),
       ]);
       await this.log(undefined, 'HEALTH', 'SUCCESS', 1, undefined, 'Соединение установлено.');
@@ -5358,6 +5475,7 @@ export class IntegrationService {
     if (enabled !== 'true' || !baseUrl || !token) return;
     this.processing = true;
     try {
+      await this.setSetting(SETTINGS.lastAttemptedSync, this.now().toISOString());
       await this.autoResolveOwnerConflictsSafely(baseUrl, deviceId, token);
       await this.pullWebActions(baseUrl, deviceId, token);
       await this.processTrainerAttendanceActions();
@@ -7146,10 +7264,28 @@ export class IntegrationService {
           ? 'VERSION_UNSUPPORTED'
           : apiError.errorCode === 'RECONCILIATION_REQUIRED'
             ? 'RECONCILIATION_REQUIRED'
-            : 'OFFLINE';
+            : apiError.errorCode === 'NETWORK_UNAVAILABLE' ||
+                apiError.errorCode === 'TIMEOUT' ||
+                apiError.errorCode === 'RATE_LIMITED' ||
+                apiError.errorCode === 'TEMPORARY_ERROR' ||
+                apiError.errorCode === 'HTTP_429' ||
+                /^HTTP_5\d\d$/u.test(apiError.errorCode)
+              ? 'OFFLINE'
+              : 'CONNECTED';
+    await this.database.appSetting.deleteMany({
+      where: { key: { in: [SETTINGS.lastErrorEndpoint, SETTINGS.lastErrorHttpStatus] } },
+    });
     await Promise.all([
       this.setSetting(SETTINGS.lastState, state),
       this.setSetting(SETTINGS.lastError, apiError.message.slice(0, 300)),
+      this.setSetting(SETTINGS.lastErrorAt, this.now().toISOString()),
+      this.setSetting(SETTINGS.lastErrorCode, apiError.errorCode),
+      ...(apiError.endpoint
+        ? [this.setSetting(SETTINGS.lastErrorEndpoint, apiError.endpoint)]
+        : []),
+      ...(apiError.httpStatus
+        ? [this.setSetting(SETTINGS.lastErrorHttpStatus, String(apiError.httpStatus))]
+        : []),
     ]);
   }
 
