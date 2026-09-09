@@ -38,7 +38,7 @@ import { useEffect, useState } from 'react';
 import { getDesktopApi } from '../../lib/desktop-api';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken } from '../../stores/auth-store';
-import { buildIntegrationDiagnosticReport } from './integration-diagnostic-report';
+import { buildIntegrationDiagnosticSummary } from './integration-diagnostic-report';
 
 const stateLabels: Record<IntegrationConnectionState, string> = {
   AUTH_ERROR: 'Требуется повторное подключение',
@@ -267,14 +267,14 @@ export function IntegrationSettings() {
         getDesktopApi().integration.getStatus(getSessionToken()),
       ]);
       await navigator.clipboard.writeText(
-        buildIntegrationDiagnosticReport(currentStatus, diagnosticResult),
+        buildIntegrationDiagnosticSummary(currentStatus, diagnosticResult),
       );
       return currentStatus;
     },
     onError: (error) => setNotice(errorMessage(error)),
     onSuccess: (currentStatus) => {
       queryClient.setQueryData(queryKeys.integrationStatus, currentStatus);
-      setNotice('Диагностика скопирована. Отправьте этот текст разработчику.');
+      setNotice('Краткая диагностика скопирована. Отправьте этот текст разработчику.');
     },
   });
   const selectAqsiDevice = useMutation({
@@ -947,7 +947,7 @@ export function IntegrationSettings() {
             variant="outline"
           >
             <Copy className="size-4" />
-            {copyDiagnostics.isPending ? 'Собирается…' : 'Скопировать диагностику'}
+            {copyDiagnostics.isPending ? 'Собирается…' : 'Скопировать сводку'}
           </Button>
           <Button disabled={preview.isFetching} onClick={() => void prepare()} variant="outline">
             <CloudCog className="size-4" /> Первичная синхронизация
