@@ -497,6 +497,37 @@ describe('Sprint 4.2B attention center', () => {
     );
   });
 
+  it('shows permanent outbox failures as a separate warning while the server is connected', async () => {
+    await database.appSetting.createMany({
+      data: [
+        { key: 'integration.enabled', value: 'true' },
+        { key: 'integration.lastState', value: 'CONNECTED' },
+      ],
+    });
+    await database.syncOutbox.createMany({
+      data: Array.from({ length: 3 }, (_, index) => ({
+        entityId: `permanent-${String(index)}`,
+        entityType: 'ATTENDANCE',
+        idempotencyKey: `permanent-${String(index)}`,
+        lastErrorCode: 'INVALID_PAYLOAD',
+        status: 'FAILED' as const,
+      })),
+    });
+
+    const items = await attention.listItems(ownerToken, { category: 'INTEGRATION' });
+
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        id: 'integration:failed-items',
+        severity: 'WARNING',
+        title: 'Есть необработанные ошибки синхронизации: 3',
+      }),
+    );
+    expect(items).not.toContainEqual(
+      expect.objectContaining({ title: 'Сервер синхронизации недоступен' }),
+    );
+  });
+
   it('shows immutable synchronization errors as diagnostics instead of manual conflicts', async () => {
     await database.appSetting.create({
       data: { key: 'integration.enabled', value: 'true' },

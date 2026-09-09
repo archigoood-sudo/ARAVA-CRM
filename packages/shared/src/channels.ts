@@ -3038,6 +3038,7 @@ export interface IntegrationStatus {
   syncInProgress: boolean;
   devices: IntegrationDeviceSummary[];
   websiteAuthority: IntegrationWebsiteAuthorityStatus;
+  websiteFailedCount?: number;
   websitePendingCount: number;
   websitePublicationHealth:
     | 'HEALTHY'
@@ -3076,13 +3077,19 @@ export interface IntegrationWebsiteReconciliationResult {
 }
 
 export interface IntegrationFailedSyncItem {
+  attemptCount?: number;
+  baseRevision?: number;
   createdAt: string;
   entityLabel: string;
   entityType: string;
   id: string;
   lastAttemptAt?: string;
+  lastErrorCode?: string;
+  operation?: string;
+  payloadVersion?: number;
   reason: string;
   retryable: boolean;
+  updatedAt?: string;
 }
 
 export type IntegrationDiagnosticLevel = 'WORKING' | 'WARNING' | 'ERROR';
@@ -3103,6 +3110,48 @@ export interface IntegrationDiagnostics {
     displayName?: string;
   };
   overall: 'HEALTHY' | 'WARNING' | 'ERROR';
+  permanentFailures: {
+    groups: IntegrationPermanentFailureGroup[];
+    items: IntegrationPermanentFailureEvidence[];
+    total: number;
+  };
+}
+
+export interface IntegrationPermanentFailureEvidence {
+  attemptCount: number;
+  baseRevision: number;
+  classification: 'UNCLASSIFIED';
+  createdAt: string;
+  entityId: string;
+  entityType: string;
+  failureCode: string;
+  failureDetail: string;
+  id: string;
+  lastAttemptAt?: string;
+  latestFailureLogAt?: string;
+  localDeviceId: string;
+  nextAttemptAt: string;
+  operation: string;
+  origin: 'INITIAL_SYNC' | 'WEBSITE_FULL_RECONCILIATION' | 'SPECIAL_OPERATION' | 'UNATTRIBUTED';
+  originKey: string;
+  payloadBytes: number;
+  payloadHash: string;
+  payloadKeys: string[];
+  payloadState: 'EMPTY' | 'MATERIALIZED' | 'INVALID_JSON';
+  payloadVersion: number;
+  updatedAt: string;
+}
+
+export interface IntegrationPermanentFailureGroup {
+  count: number;
+  createdAt: string;
+  entityType: string;
+  failureCode: string;
+  failureDetail: string;
+  operation: string;
+  origin: IntegrationPermanentFailureEvidence['origin'];
+  originKey: string;
+  payloadVersion: number;
 }
 
 export interface IntegrationDeviceSummary {

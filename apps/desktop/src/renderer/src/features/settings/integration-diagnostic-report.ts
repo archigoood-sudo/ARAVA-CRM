@@ -53,6 +53,7 @@ export function buildIntegrationDiagnosticReport(
     `Последняя полная синхронизация: ${value(authority.lastFullReconciliation)}`,
     `Текущая ошибка публикации: ${value(authority.lastError)}`,
     `Ожидающие website-операции: ${String(status.websitePendingCount)}`,
+    `Permanent FAILED website-related: ${String(status.websiteFailedCount ?? 0)}`,
   ];
   if (status.websitePublicationProbeError) {
     lines.push(
@@ -68,11 +69,62 @@ export function buildIntegrationDiagnosticReport(
       `${check.status} | ${check.id} | ${check.label} | ${check.detail}${check.action ? ` | Что делать: ${check.action}` : ''}`,
     );
   }
-  lines.push('', '[Failed outbox items]');
-  if (status.failedItems.length === 0) lines.push('нет');
-  for (const item of status.failedItems) {
+  lines.push(
+    '',
+    '[Permanent FAILED classification]',
+    `Всего: ${String(diagnostics.permanentFailures.total)}`,
+    'A already represented: НЕ КЛАССИФИЦИРОВАНО',
+    'B replayable local mutation: НЕ КЛАССИФИЦИРОВАНО',
+    'C invalid historical mutation: НЕ КЛАССИФИЦИРОВАНО',
+    'D incompatible/corrupt payload: НЕ КЛАССИФИЦИРОВАНО',
+    'Причина: требуется сравнение с canonical server journal/read model.',
+    '',
+    '[Permanent FAILED groups]',
+  );
+  if (diagnostics.permanentFailures.groups.length === 0) lines.push('нет');
+  for (const group of diagnostics.permanentFailures.groups) {
     lines.push(
-      `${item.id} | ${item.entityType} | ${item.entityLabel} | retryable=${item.retryable ? 'yes' : 'no'} | ${value(item.lastAttemptAt ?? item.createdAt)} | ${item.reason}`,
+      [
+        `count=${String(group.count)}`,
+        `origin=${group.origin}`,
+        `originKey=${group.originKey}`,
+        `createdAt=${group.createdAt}`,
+        `entityType=${group.entityType}`,
+        `operation=${group.operation}`,
+        `payloadVersion=${String(group.payloadVersion)}`,
+        `errorCode=${group.failureCode}`,
+        `persistedReason=${group.failureDetail}`,
+      ].join(' | '),
+    );
+  }
+  lines.push('', '[Permanent FAILED rows]');
+  if (diagnostics.permanentFailures.items.length === 0) lines.push('нет');
+  for (const item of diagnostics.permanentFailures.items) {
+    lines.push(
+      [
+        `outboxId=${item.id}`,
+        `entityType=${item.entityType}`,
+        `entityId=${item.entityId}`,
+        `operation=${item.operation}`,
+        `payloadVersion=${String(item.payloadVersion)}`,
+        `payloadState=${item.payloadState}`,
+        `payloadBytes=${String(item.payloadBytes)}`,
+        `payloadKeys=${item.payloadKeys.join(',') || 'none'}`,
+        `payloadHash=${item.payloadHash}`,
+        `baseRevision=${String(item.baseRevision)}`,
+        `attemptCount=${String(item.attemptCount)}`,
+        `createdAt=${item.createdAt}`,
+        `updatedAt=${item.updatedAt}`,
+        `lastAttemptAt=${value(item.lastAttemptAt)}`,
+        `nextAttemptAt=${item.nextAttemptAt}`,
+        `latestFailureLogAt=${value(item.latestFailureLogAt)}`,
+        `errorCode=${item.failureCode}`,
+        `persistedReason=${item.failureDetail}`,
+        `origin=${item.origin}`,
+        `originKey=${item.originKey}`,
+        `localDeviceId=${item.localDeviceId}`,
+        `classification=${item.classification}`,
+      ].join(' | '),
     );
   }
   return `${lines.join('\n')}\n`;

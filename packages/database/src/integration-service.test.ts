@@ -1729,7 +1729,7 @@ describe('Sprint 4.5A multi-device integration', () => {
     const unhealthy = await integration.diagnose(ownerToken);
     expect(unhealthy.overall).toBe('ERROR');
     expect(unhealthy.checks.find(({ id }) => id === 'outbox-failed')).toMatchObject({
-      status: 'ERROR',
+      status: 'WARNING',
     });
     expect(unhealthy.checks.find(({ id }) => id === 'conflicts')).toMatchObject({
       status: 'WORKING',
@@ -1785,15 +1785,29 @@ describe('Sprint 4.5A multi-device integration', () => {
 
   it('keeps a reachable server healthy while poisoned rows remain item-level diagnostics', async () => {
     await pair();
-    await database.syncOutbox.create({
+    const poisoned = await database.syncOutbox.create({
       data: {
+        attemptCount: 1,
         entityId: 'poisoned-row',
         entityType: 'TRIAL_APPOINTMENT',
-        idempotencyKey: 'poisoned-row-once',
+        idempotencyKey: `initial:${now.toISOString()}:0:TRIAL_APPOINTMENT:poisoned-row`,
         lastAttemptAt: now,
         lastErrorCode: 'INVALID_PAYLOAD',
         nextAttemptAt: new Date(now.getTime() + 60_000),
+        payloadJson: JSON.stringify({ id: 'poisoned-row', status: 'BOOKED' }),
         status: 'FAILED',
+      },
+    });
+    await database.syncLog.create({
+      data: {
+        attemptCount: 1,
+        entityId: poisoned.entityId,
+        entityType: poisoned.entityType,
+        errorCode: 'INVALID_PAYLOAD',
+        message: 'Сервер отклонил legacy payload пробного занятия.',
+        operation: 'UPSERT',
+        outboxId: poisoned.id,
+        result: 'FAILED',
       },
     });
     await database.appSetting.upsert({
@@ -1805,15 +1819,43 @@ describe('Sprint 4.5A multi-device integration', () => {
     const status = await integration.getStatus(ownerToken);
 
     expect(status).toMatchObject({
-      canonicalSyncHealth: 'DEGRADED',
+      canonicalSyncHealth: 'HEALTHY',
       connectionState: 'CONNECTED',
       failedCount: 1,
       retryableFailedCount: 0,
+      websiteFailedCount: 0,
+      websitePendingCount: 0,
     });
-    expect(status.oldestPendingAt).toBeDefined();
+    expect(status.oldestPendingAt).toBeUndefined();
     expect(status.failedItems).toEqual([
       expect.objectContaining({ entityType: 'TRIAL_APPOINTMENT', retryable: false }),
     ]);
+    const diagnostics = await integration.diagnose(ownerToken);
+    expect(diagnostics.checks.find(({ id }) => id === 'server')).toMatchObject({
+      status: 'WORKING',
+    });
+    expect(diagnostics.checks.find(({ id }) => id === 'outbox-failed')).toMatchObject({
+      status: 'WARNING',
+    });
+    expect(diagnostics.permanentFailures).toMatchObject({
+      groups: [
+        expect.objectContaining({
+          count: 1,
+          failureCode: 'INVALID_PAYLOAD',
+          origin: 'INITIAL_SYNC',
+        }),
+      ],
+      items: [
+        expect.objectContaining({
+          classification: 'UNCLASSIFIED',
+          entityId: 'poisoned-row',
+          failureDetail: 'Сервер отклонил legacy payload пробного занятия.',
+          origin: 'INITIAL_SYNC',
+          payloadState: 'MATERIALIZED',
+        }),
+      ],
+      total: 1,
+    });
   });
 
   it('returns complete safe results for offline, timeout and revoked-device failures', async () => {

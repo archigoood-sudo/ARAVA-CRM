@@ -3506,11 +3506,16 @@ export class IntegrationService {
       this.database.syncOutbox.findMany({
         orderBy: { updatedAt: 'desc' },
         select: {
+          attemptCount: true,
+          baseRevision: true,
           createdAt: true,
           entityType: true,
           id: true,
           lastAttemptAt: true,
           lastErrorCode: true,
+          operation: true,
+          payloadVersion: true,
+          updatedAt: true,
         },
         take: 20,
         where: { status: 'FAILED' },
@@ -3524,7 +3529,7 @@ export class IntegrationService {
       this.database.syncOutbox.findFirst({
         orderBy: { createdAt: 'asc' },
         select: { createdAt: true },
-        where: { status: { in: ['PENDING', 'PROCESSING', 'FAILED'] } },
+        where: { status: { in: ['PENDING', 'PROCESSING'] } },
       }),
       this.database.syncOutbox.findFirst({
         orderBy: { nextAttemptAt: 'asc' },
@@ -3562,7 +3567,6 @@ export class IntegrationService {
     else if (connectionState === 'OFFLINE') canonicalSyncHealth = 'OFFLINE';
     else if (connectionState === 'CONFLICT' || connectionState === 'RECONCILIATION_REQUIRED')
       canonicalSyncHealth = 'CONFLICT';
-    else if (failedCount > 0) canonicalSyncHealth = 'DEGRADED';
     else canonicalSyncHealth = 'HEALTHY';
     let devices: IntegrationDeviceSummary[] = [];
     let websiteAuthority: IntegrationWebsiteAuthorityStatus = {
@@ -3593,21 +3597,32 @@ export class IntegrationService {
         // Website authority diagnostics do not hide ordinary CRM device sync status.
       }
     }
-    const websitePendingCount = await this.database.syncOutbox.count({
-      where: {
-        entityType: { in: [...WEBSITE_ENTITY_TYPES] },
-        status: { in: ['PENDING', 'PROCESSING', 'FAILED'] },
-      },
-    });
+    const [websitePendingCount, websiteFailedCount] = await Promise.all([
+      this.database.syncOutbox.count({
+        where: {
+          entityType: { in: [...WEBSITE_ENTITY_TYPES] },
+          status: { in: ['PENDING', 'PROCESSING'] },
+        },
+      }),
+      this.database.syncOutbox.count({
+        where: { entityType: { in: [...WEBSITE_ENTITY_TYPES] }, status: 'FAILED' },
+      }),
+    ]);
     const currentDevice = devices.find((device) => device.deviceId === deviceId);
     const safeFailedItems = failedItems.map((item) => ({
+      attemptCount: item.attemptCount,
+      baseRevision: item.baseRevision,
       createdAt: item.createdAt.toISOString(),
       entityLabel: SYNC_ENTITY_LABELS[item.entityType] ?? 'Данные',
       entityType: item.entityType,
       id: item.id,
       ...(item.lastAttemptAt ? { lastAttemptAt: item.lastAttemptAt.toISOString() } : {}),
+      ...(item.lastErrorCode ? { lastErrorCode: item.lastErrorCode } : {}),
+      operation: item.operation,
+      payloadVersion: item.payloadVersion,
       reason: safeSyncErrorMessage(item.lastErrorCode),
       retryable: RETRYABLE_SYNC_ERROR_CODES.has(item.lastErrorCode ?? ''),
+      updatedAt: item.updatedAt.toISOString(),
     }));
     let websitePublicationHealth: IntegrationStatus['websitePublicationHealth'];
     if (!enabled) websitePublicationHealth = 'DISABLED';
@@ -3662,6 +3677,7 @@ export class IntegrationService {
       retryableFailedCount,
       syncInProgress: this.processing,
       websiteAuthority,
+      websiteFailedCount,
       websitePendingCount,
       websitePublicationHealth,
       ...(websitePublicationProbeError ? { websitePublicationProbeError } : {}),
@@ -3765,7 +3781,15 @@ export class IntegrationService {
   async diagnose(token: string): Promise<IntegrationDiagnostics> {
     const actor = await this.assertOwner(token);
     const checkedAt = this.now().toISOString();
-    const [deviceId, deviceToken, settings, outboxCounts, conflictCount] = await Promise.all([
+    const [
+      deviceId,
+      deviceToken,
+      settings,
+      outboxCounts,
+      conflictCount,
+      failedOutboxRows,
+      failedLogs,
+    ] = await Promise.all([
       this.credentials.getDeviceId(),
       this.credentials.getToken(),
       this.database.appSetting.findMany({ where: { key: { startsWith: 'integration.' } } }),
@@ -3780,6 +3804,37 @@ export class IntegrationService {
           status: 'OPEN',
         },
       }),
+      this.database.syncOutbox.findMany({
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: {
+          attemptCount: true,
+          baseRevision: true,
+          createdAt: true,
+          entityId: true,
+          entityType: true,
+          id: true,
+          idempotencyKey: true,
+          lastAttemptAt: true,
+          lastErrorCode: true,
+          nextAttemptAt: true,
+          operation: true,
+          payloadJson: true,
+          payloadVersion: true,
+          updatedAt: true,
+        },
+        where: { status: 'FAILED' },
+      }),
+      this.database.syncLog.findMany({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: {
+          createdAt: true,
+          errorCode: true,
+          message: true,
+          operation: true,
+          outboxId: true,
+        },
+        where: { outboxId: { not: null }, result: 'FAILED' },
+      }),
     ]);
     const values = new Map(settings.map(({ key, value }) => [key, value]));
     const count = (status: 'PENDING' | 'PROCESSING' | 'FAILED') =>
@@ -3791,6 +3846,98 @@ export class IntegrationService {
     const lastOutboundSync = values.get(SETTINGS.lastOutboundSync);
     const enabled = values.get(SETTINGS.enabled) === 'true';
     const baseUrl = values.get(SETTINGS.baseUrl);
+    const latestFailureLogByOutbox = new Map<string, (typeof failedLogs)[number]>();
+    for (const log of failedLogs) {
+      if (log.outboxId && !latestFailureLogByOutbox.has(log.outboxId))
+        latestFailureLogByOutbox.set(log.outboxId, log);
+    }
+    const permanentFailureItems: IntegrationDiagnostics['permanentFailures']['items'] =
+      failedOutboxRows.map((row) => {
+        let payloadKeys: string[] = [];
+        let payloadState: IntegrationDiagnostics['permanentFailures']['items'][number]['payloadState'] =
+          'EMPTY';
+        try {
+          const payload = JSON.parse(row.payloadJson) as unknown;
+          if (isRecord(payload)) payloadKeys = Object.keys(payload).sort();
+          if (row.payloadJson !== '{}') payloadState = 'MATERIALIZED';
+        } catch {
+          payloadState = 'INVALID_JSON';
+        }
+        let origin: IntegrationDiagnostics['permanentFailures']['items'][number]['origin'] =
+          'UNATTRIBUTED';
+        let originKey = `sha256:${createHash('sha256')
+          .update(row.idempotencyKey)
+          .digest('hex')
+          .slice(0, 16)}`;
+        if (row.idempotencyKey.startsWith('initial:')) {
+          origin = 'INITIAL_SYNC';
+          originKey = row.idempotencyKey.split(':').slice(0, 4).join(':');
+        } else if (row.idempotencyKey.startsWith('website-full:')) {
+          origin = 'WEBSITE_FULL_RECONCILIATION';
+          originKey = row.idempotencyKey.split(':').slice(0, 3).join(':');
+        } else if (row.entityType === 'ATTENDANCE_CHECKIN' || row.entityType === 'CHAT_MESSAGE') {
+          origin = 'SPECIAL_OPERATION';
+          originKey = row.entityType;
+        }
+        const failureLog = latestFailureLogByOutbox.get(row.id);
+        const failureCode = failureLog?.errorCode ?? row.lastErrorCode ?? 'UNKNOWN';
+        return {
+          attemptCount: row.attemptCount,
+          baseRevision: row.baseRevision,
+          classification: 'UNCLASSIFIED',
+          createdAt: row.createdAt.toISOString(),
+          entityId: row.entityId,
+          entityType: row.entityType,
+          failureCode,
+          failureDetail:
+            failureLog?.message ??
+            'Точная сохранённая причина отсутствует. Доступен только код ошибки.',
+          id: row.id,
+          ...(row.lastAttemptAt ? { lastAttemptAt: row.lastAttemptAt.toISOString() } : {}),
+          ...(failureLog ? { latestFailureLogAt: failureLog.createdAt.toISOString() } : {}),
+          localDeviceId: deviceId,
+          nextAttemptAt: row.nextAttemptAt.toISOString(),
+          operation: failureLog?.operation ?? row.operation,
+          origin,
+          originKey,
+          payloadBytes: Buffer.byteLength(row.payloadJson, 'utf8'),
+          payloadHash: createHash('sha256').update(row.payloadJson).digest('hex'),
+          payloadKeys,
+          payloadState,
+          payloadVersion: row.payloadVersion,
+          updatedAt: row.updatedAt.toISOString(),
+        };
+      });
+    const permanentFailureGroupMap = new Map<
+      string,
+      IntegrationDiagnostics['permanentFailures']['groups'][number]
+    >();
+    for (const item of permanentFailureItems) {
+      const key = JSON.stringify([
+        item.origin,
+        item.originKey,
+        item.createdAt,
+        item.entityType,
+        item.operation,
+        item.payloadVersion,
+        item.failureCode,
+        item.failureDetail,
+      ]);
+      const current = permanentFailureGroupMap.get(key);
+      if (current) current.count += 1;
+      else
+        permanentFailureGroupMap.set(key, {
+          count: 1,
+          createdAt: item.createdAt,
+          entityType: item.entityType,
+          failureCode: item.failureCode,
+          failureDetail: item.failureDetail,
+          operation: item.operation,
+          origin: item.origin,
+          originKey: item.originKey,
+          payloadVersion: item.payloadVersion,
+        });
+    }
     const checks: IntegrationDiagnosticCheck[] = [
       diagnosticCheck(
         'device-identity',
@@ -3821,10 +3968,10 @@ export class IntegrationService {
       failedCount > 0
         ? diagnosticCheck(
             'outbox-failed',
-            'Есть ошибки отправки',
-            'ERROR',
-            `${String(failedCount)} изменений завершились ошибкой.`,
-            'Запустите синхронизацию сейчас и проверьте результат.',
+            `Есть необработанные ошибки синхронизации: ${String(failedCount)}`,
+            'WARNING',
+            'Это permanent ошибки отдельных операций, а не признак недоступности сервера.',
+            'Скопируйте диагностику для безопасной классификации перед восстановлением.',
           )
         : diagnosticCheck(
             'outbox-failed',
@@ -4189,6 +4336,14 @@ export class IntegrationService {
       checks,
       device: { deviceId, ...(displayName ? { displayName } : {}) },
       overall,
+      permanentFailures: {
+        groups: [...permanentFailureGroupMap.values()].sort(
+          (left, right) =>
+            right.count - left.count || left.entityType.localeCompare(right.entityType),
+        ),
+        items: permanentFailureItems,
+        total: permanentFailureItems.length,
+      },
     };
   }
 

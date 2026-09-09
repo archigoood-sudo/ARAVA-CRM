@@ -509,14 +509,15 @@ export function IntegrationSettings() {
         ) : null}
 
         {status.data?.failedCount ? (
-          <div className="space-y-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-5">
+          <div className="space-y-3 rounded-2xl border border-warning/30 bg-warning/5 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="font-semibold">
-                  Не удалось отправить {String(status.data.failedCount)} изменений
+                  Есть необработанные ошибки синхронизации: {String(status.data.failedCount)}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Данные сохранены локально. Временные ошибки можно безопасно повторить.
+                  Сервер может быть доступен и текущая синхронизация может работать. Permanent
+                  ошибки требуют диагностики до безопасного восстановления.
                 </p>
               </div>
               <Button
@@ -537,6 +538,10 @@ export function IntegrationSettings() {
                   </span>
                 </div>
                 <p className="mt-1 text-muted-foreground">{item.reason}</p>
+                <p className="mt-1 break-all text-xs text-muted-foreground">
+                  {item.entityType} / {item.operation ?? 'операция не указана'}
+                  {item.lastErrorCode ? ` / ${item.lastErrorCode}` : ''}
+                </p>
               </div>
             ))}
           </div>

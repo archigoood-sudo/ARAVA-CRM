@@ -885,15 +885,16 @@ export class AttentionService {
           });
         else if (failedSync >= 3)
           add({
-            actionLabel: 'Открыть журнал синхронизации',
+            actionLabel: 'Открыть диагностику',
             actionRoute: '/settings#integration',
             category: 'INTEGRATION',
-            description: `Не отправлены отдельные записи: ${String(failedSync)}. Сервер может быть доступен; причины показаны в диагностике очереди.`,
+            description:
+              'Canonical sync может продолжать работать. Перед восстановлением нужна классификация permanent ошибок.',
             entityId: 'integration-failed-items',
             entityType: 'Integration',
             id: 'integration:failed-items',
-            severity: failedSync >= 10 ? 'CRITICAL' : 'WARNING',
-            title: 'Не отправлены отдельные изменения',
+            severity: 'WARNING',
+            title: `Есть необработанные ошибки синхронизации: ${String(failedSync)}`,
           });
       }
     }
