@@ -349,6 +349,8 @@ export const IPC_CHANNELS = {
   globalSearch: 'global-search:query',
   integrationConfirmInitialSync: 'integration:confirm-initial-sync',
   integrationDiagnose: 'integration:diagnose',
+  integrationPreviewPermanentFailureRecovery: 'integration:preview-permanent-failure-recovery',
+  integrationRecoverPermanentFailures: 'integration:recover-permanent-failures',
   integrationDataChanged: 'integration:data-changed',
   integrationListConflicts: 'integration:list-conflicts',
   integrationResolveConflict: 'integration:resolve-conflict',
@@ -3117,6 +3119,39 @@ export interface IntegrationDiagnostics {
   };
 }
 
+export type IntegrationPermanentFailureClassification = 'A' | 'B' | 'C' | 'D';
+
+export interface IntegrationPermanentFailureBucket {
+  byEntity: { count: number; entityType: string }[];
+  total: number;
+}
+
+export interface IntegrationPermanentFailurePreview {
+  checkedAt: string;
+  classifications: Record<
+    IntegrationPermanentFailureClassification,
+    IntegrationPermanentFailureBucket
+  >;
+  failedRows: number;
+  reasons: {
+    classification: IntegrationPermanentFailureClassification;
+    count: number;
+    entityType: string;
+    reason: string;
+  }[];
+}
+
+export interface IntegrationPermanentFailureRecoveryResult {
+  after: IntegrationPermanentFailurePreview;
+  batchId: string;
+  before: IntegrationPermanentFailurePreview;
+  heldD: number;
+  quarantinedC: number;
+  replayedB: number;
+  replayedEntities: number;
+  resolvedA: number;
+}
+
 export interface IntegrationPermanentFailureEvidence {
   attemptCount: number;
   baseRevision: number;
@@ -3638,6 +3673,8 @@ export interface AravaDesktopApi {
     claimWebsiteAuthority: (token: string) => Promise<IntegrationStatus>;
     confirmInitialSync: (token: string) => Promise<IntegrationStatus>;
     diagnose: (token: string) => Promise<IntegrationDiagnostics>;
+    previewPermanentFailureRecovery: (token: string) => Promise<IntegrationPermanentFailurePreview>;
+    recoverPermanentFailures: (token: string) => Promise<IntegrationPermanentFailureRecoveryResult>;
     onDataChanged: (listener: (entityType: string) => void) => () => void;
     listConflicts: (token: string) => Promise<IntegrationConflictSummary[]>;
     resolveConflict: (

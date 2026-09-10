@@ -166,6 +166,7 @@ export function IntegrationSettings() {
   const [editingDisplayName, setEditingDisplayName] = useState('');
   const [revokingDeviceId, setRevokingDeviceId] = useState<string>();
   const [recoveryConfirmationOpen, setRecoveryConfirmationOpen] = useState(false);
+  const [failureRecoveryConfirmationOpen, setFailureRecoveryConfirmationOpen] = useState(false);
   const [authorityConfirmationOpen, setAuthorityConfirmationOpen] = useState(false);
   const status = useQuery({
     queryFn: () => getDesktopApi().integration.getStatus(getSessionToken()),
@@ -275,6 +276,23 @@ export function IntegrationSettings() {
     onSuccess: (currentStatus) => {
       queryClient.setQueryData(queryKeys.integrationStatus, currentStatus);
       setNotice('Краткая диагностика скопирована. Отправьте этот текст разработчику.');
+    },
+  });
+  const failureRecoveryPreview = useMutation({
+    mutationFn: () =>
+      getDesktopApi().integration.previewPermanentFailureRecovery(getSessionToken()),
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: () => setNotice('Проверка завершена. До подтверждения данные не изменяются.'),
+  });
+  const permanentFailureRecovery = useMutation({
+    mutationFn: () => getDesktopApi().integration.recoverPermanentFailures(getSessionToken()),
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: async (result) => {
+      setFailureRecoveryConfirmationOpen(false);
+      setNotice(
+        `Безопасное восстановление завершено: A ${String(result.resolvedA)}, B ${String(result.replayedB)}, C ${String(result.quarantinedC)}, D/HOLD ${String(result.heldD)}.`,
+      );
+      await refresh();
     },
   });
   const selectAqsiDevice = useMutation({
@@ -949,6 +967,16 @@ export function IntegrationSettings() {
             <Copy className="size-4" />
             {copyDiagnostics.isPending ? 'Собирается…' : 'Скопировать сводку'}
           </Button>
+          <Button
+            disabled={!status.data?.isPaired || failureRecoveryPreview.isPending}
+            onClick={() => failureRecoveryPreview.mutate()}
+            variant="outline"
+          >
+            <ShieldCheck className="size-4" />
+            {failureRecoveryPreview.isPending
+              ? 'Проверяем старые ошибки…'
+              : 'Проверить старые ошибки'}
+          </Button>
           <Button disabled={preview.isFetching} onClick={() => void prepare()} variant="outline">
             <CloudCog className="size-4" /> Первичная синхронизация
           </Button>
@@ -981,6 +1009,97 @@ export function IntegrationSettings() {
             {showLog ? 'Скрыть журнал' : 'Журнал синхронизации'}
           </Button>
         </div>
+
+        {(() => {
+          const result = permanentFailureRecovery.data?.after ?? failureRecoveryPreview.data;
+          if (!result) return null;
+          const safeCount =
+            result.classifications.A.total +
+            result.classifications.B.total +
+            result.classifications.C.total;
+          return (
+            <div
+              className="space-y-4 rounded-2xl border border-border bg-muted/20 p-5"
+              data-testid="permanent-failure-recovery-preview"
+            >
+              <div>
+                <h3 className="text-lg font-semibold">Проверка старых ошибок</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Dry-run проверил {result.failedRows} FAILED-записей. Исходные старые payload не
+                  переотправляются.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {(['A', 'B', 'C', 'D'] as const).map((classification) => (
+                  <div className="rounded-xl border bg-background p-3" key={classification}>
+                    <div className="text-sm text-muted-foreground">
+                      {classification === 'A'
+                        ? 'A · Уже на сервере'
+                        : classification === 'B'
+                          ? 'B · Можно восстановить'
+                          : classification === 'C'
+                            ? 'C · Устарело'
+                            : 'D · Ручная проверка'}
+                    </div>
+                    <div className="mt-1 text-2xl font-semibold">
+                      {result.classifications[classification].total}
+                    </div>
+                    <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                      {result.classifications[classification].byEntity.map((entry) => (
+                        <div className="flex justify-between gap-3" key={entry.entityType}>
+                          <span>{entityLabels[entry.entityType] ?? entry.entityType}</span>
+                          <span>{entry.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-muted-foreground">
+                  D/HOLD не изменяется. Финансовые ledger-записи восстанавливаются только по
+                  доказанной idempotent identity.
+                </p>
+                {safeCount > 0 ? (
+                  <Button
+                    disabled={permanentFailureRecovery.isPending}
+                    onClick={() => setFailureRecoveryConfirmationOpen(true)}
+                  >
+                    Восстановить безопасные
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          );
+        })()}
+
+        <Dialog
+          closeLabel="Закрыть"
+          description="A будет помечено как уже представленное на сервере, B отправлено заново через текущий serializer, C помещено в карантин, D останется без изменений."
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setFailureRecoveryConfirmationOpen(false)} variant="outline">
+                Отмена
+              </Button>
+              <Button
+                disabled={permanentFailureRecovery.isPending}
+                onClick={() => permanentFailureRecovery.mutate()}
+              >
+                {permanentFailureRecovery.isPending
+                  ? 'Восстанавливаем…'
+                  : 'Подтвердить восстановление'}
+              </Button>
+            </div>
+          }
+          onClose={() => setFailureRecoveryConfirmationOpen(false)}
+          open={failureRecoveryConfirmationOpen}
+          title="Восстановить безопасные ошибки?"
+        >
+          <p className="text-sm text-muted-foreground">
+            Оригинальные MATERIALIZED/v1 payload не переотправляются. Операция аудируется и после
+            завершения автоматически повторяет canonical-сверку.
+          </p>
+        </Dialog>
 
         <Dialog
           closeLabel="Закрыть"

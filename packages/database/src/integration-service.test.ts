@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   closeDatabase,
@@ -3071,6 +3071,150 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(await database.danceGroup.findUniqueOrThrow({ where: { id: group.id } })).toMatchObject({
       coachId: trainerB.id,
     });
+  });
+
+  it('classifies permanent failures without mutation and recovers only deterministic classes', async () => {
+    await pair();
+    const branchA = await application.createBranch(ownerToken, { name: 'Уже на сервере' });
+    await integration.processPending();
+    const branchB = await application.createBranch(ownerToken, { name: 'Нужно восстановить' });
+    const branchD = await application.createBranch(ownerToken, { name: 'Локальная версия' });
+    const outboxes = await database.syncOutbox.findMany({
+      where: { entityId: { in: [branchA.id, branchB.id, branchD.id] } },
+    });
+    for (const row of outboxes) {
+      await database.syncOutbox.update({
+        data: {
+          lastErrorCode: 'VALIDATION_ERROR',
+          payloadJson: JSON.stringify({ id: row.entityId, legacyUnknownField: true }),
+          payloadVersion: 1,
+          status: 'FAILED',
+        },
+        where: { id: row.id },
+      });
+    }
+    await database.syncOutbox.create({
+      data: {
+        entityId: 'deleted-room',
+        entityType: 'ROOM',
+        idempotencyKey: 'legacy-deleted-room',
+        lastErrorCode: 'VALIDATION_ERROR',
+        nextAttemptAt: now,
+        operation: 'UPSERT',
+        payloadJson: JSON.stringify({ id: 'deleted-room', legacyUnknownField: true }),
+        payloadVersion: 1,
+        status: 'FAILED',
+        updatedAt: now,
+      },
+    });
+    canonical.set(`BRANCH:${branchD.id}`, {
+      operation: 'UPSERT',
+      payload: {
+        ...(await integration.safePayload('BRANCH', branchD.id)),
+        name: 'Серверная версия',
+      },
+      revision: 1,
+      sequence: 10_000,
+    });
+    const ledgerPayload = {
+      amountDelta: null,
+      attendanceId: 'attendance-stable',
+      comment: null,
+      createdAt: now.toISOString(),
+      id: 'local-ledger-equivalent',
+      lessonDelta: 1,
+      lessonId: null,
+      periodEndsAt: null,
+      periodStartsAt: null,
+      reversesLedgerId: null,
+      studentId: 'student-stable',
+      subscriptionId: 'subscription-stable',
+      type: 'LESSON_WRITE_OFF',
+    };
+    await database.syncOutbox.create({
+      data: {
+        entityId: 'local-ledger-equivalent',
+        entityType: 'SUBSCRIPTION_LEDGER',
+        idempotencyKey: 'legacy-equivalent-ledger',
+        lastErrorCode: 'VALIDATION_ERROR',
+        nextAttemptAt: now,
+        operation: 'UPSERT',
+        payloadJson: JSON.stringify({ id: 'local-ledger-equivalent', legacyUnknownField: true }),
+        payloadVersion: 1,
+        status: 'FAILED',
+        updatedAt: now,
+      },
+    });
+    canonical.set('SUBSCRIPTION_LEDGER:server-ledger-equivalent', {
+      operation: 'UPSERT',
+      payload: { ...ledgerPayload, id: 'server-ledger-equivalent' },
+      revision: 1,
+      sequence: 10_001,
+    });
+    const originalSafePayload = integration.safePayload.bind(integration);
+    const safePayloadSpy = vi
+      .spyOn(integration, 'safePayload')
+      .mockImplementation((entityType, entityId) =>
+        entityType === 'SUBSCRIPTION_LEDGER' && entityId === 'local-ledger-equivalent'
+          ? Promise.resolve(ledgerPayload)
+          : originalSafePayload(entityType, entityId),
+      );
+
+    const failedBefore = await database.syncOutbox.findMany({
+      orderBy: { id: 'asc' },
+      select: { id: true, payloadJson: true, status: true },
+      where: { status: 'FAILED' },
+    });
+    const preview = await integration.previewPermanentFailureRecovery(ownerToken);
+    expect(preview.classifications).toMatchObject({
+      A: { total: 2 },
+      B: { total: 1 },
+      C: { total: 1 },
+      D: { total: 1 },
+    });
+    expect(
+      await database.syncOutbox.findMany({
+        orderBy: { id: 'asc' },
+        select: { id: true, payloadJson: true, status: true },
+        where: { status: 'FAILED' },
+      }),
+    ).toEqual(failedBefore);
+
+    received.length = 0;
+    const recovery = await integration.recoverPermanentFailures(ownerToken);
+    expect(recovery).toMatchObject({
+      heldD: 1,
+      quarantinedC: 1,
+      replayedB: 1,
+      replayedEntities: 1,
+      resolvedA: 2,
+    });
+    expect(await database.syncOutbox.count({ where: { status: 'FAILED' } })).toBe(1);
+    const replayedOperations = received
+      .filter(({ method, path }) => method === 'POST' && path === '/api/integration/v1/sync/batch')
+      .flatMap(({ operations }) =>
+        Array.isArray(operations) ? (operations as Record<string, unknown>[]) : [],
+      );
+    expect(replayedOperations).toHaveLength(1);
+    const expectedPayload = JSON.parse(
+      JSON.stringify(await integration.safePayload('BRANCH', branchB.id)),
+    ) as Record<string, unknown>;
+    expect(replayedOperations[0]).toMatchObject({
+      entityId: branchB.id,
+      entityType: 'BRANCH',
+      payload: expectedPayload,
+    });
+    expect(JSON.stringify(replayedOperations)).not.toContain('legacyUnknownField');
+
+    received.length = 0;
+    const repeated = await integration.recoverPermanentFailures(ownerToken);
+    expect(repeated.replayedB).toBe(0);
+    expect(
+      received.filter(
+        ({ method, path }) => method === 'POST' && path === '/api/integration/v1/sync/batch',
+      ),
+    ).toHaveLength(0);
+    safePayloadSpy.mockRestore();
   });
 
   it('allows ADMIN to observe sync health but keeps configuration OWNER-only and denies COACH', async () => {

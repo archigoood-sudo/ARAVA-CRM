@@ -19,6 +19,9 @@ import type {
   IntegrationConflictSummary,
   IntegrationDiagnosticCheck,
   IntegrationDiagnostics,
+  IntegrationPermanentFailureClassification,
+  IntegrationPermanentFailurePreview,
+  IntegrationPermanentFailureRecoveryResult,
   IntegrationDeviceSummary,
   IntegrationLogEntry,
   IntegrationJournalMaintenanceResult,
@@ -2566,6 +2569,152 @@ const ENTITY_PRIORITY: Record<SyncEntityType, number> = {
   PUBLICATION: 160,
 };
 
+interface PermanentFailureCandidate {
+  classification: IntegrationPermanentFailureClassification;
+  dependencyKeys: string[];
+  entityId: string;
+  entityType: SyncEntityType;
+  outboxIds: string[];
+  payload: Record<string, unknown>;
+  payloadHash: string;
+  reason: string;
+  resolvedEquivalentLedger: boolean;
+}
+
+function recoveryEntityKey(entityType: string, entityId: string): string {
+  return `${entityType}:${entityId}`;
+}
+
+function canonicalComparisonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalComparisonValue);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, entry]) => entry !== null && entry !== undefined)
+      .map(([key, entry]) => [key, canonicalComparisonValue(entry)]),
+  );
+}
+
+function recoveryPayloadHash(payload: Record<string, unknown>): string {
+  return createHash('sha256')
+    .update(stableJson(canonicalComparisonValue(payload)))
+    .digest('hex');
+}
+
+function payloadDependencyKeys(
+  entityType: SyncEntityType,
+  payload: Record<string, unknown>,
+): string[] {
+  const keys = new Set<string>();
+  const add = (type: SyncEntityType, value: unknown) => {
+    if (typeof value === 'string' && value) keys.add(recoveryEntityKey(type, value));
+  };
+  const addMany = (type: SyncEntityType, value: unknown) => {
+    if (Array.isArray(value)) for (const item of value) add(type, item);
+  };
+  switch (entityType) {
+    case 'ROOM':
+      add('BRANCH', payload.branchId);
+      break;
+    case 'TRAINER':
+      addMany('BRANCH', payload.branchIds);
+      break;
+    case 'GROUP':
+      add('BRANCH', payload.branchId);
+      add('TRAINER', payload.coachId);
+      add('TRAINER', payload.assistantCoachId);
+      break;
+    case 'STUDENT_IDENTITY':
+      add('BRANCH', payload.branchId);
+      break;
+    case 'STUDENT_CONTACT':
+    case 'CARD':
+    case 'STUDENT_NOTE':
+      add('STUDENT_IDENTITY', payload.studentId);
+      break;
+    case 'GROUP_MEMBERSHIP':
+      add('STUDENT_IDENTITY', payload.studentId);
+      add('GROUP', payload.groupId);
+      break;
+    case 'SCHEDULE':
+      add('BRANCH', payload.branchId);
+      add('GROUP', payload.groupId);
+      add('TRAINER', payload.coachId);
+      add('ROOM', payload.roomId);
+      break;
+    case 'LESSON':
+      add('BRANCH', payload.branchId);
+      add('GROUP', payload.groupId);
+      add('TRAINER', payload.coachId);
+      add('ROOM', payload.roomId);
+      add('SCHEDULE', payload.scheduleTemplateId);
+      add('LESSON', payload.makeupForLessonId);
+      break;
+    case 'SUBSTITUTION':
+      add('LESSON', payload.lessonId);
+      add('TRAINER', payload.originalTrainerId);
+      add('TRAINER', payload.substituteTrainerId);
+      break;
+    case 'TARIFF':
+      add('BRANCH', payload.branchId);
+      break;
+    case 'SUBSCRIPTION':
+      add('STUDENT_IDENTITY', payload.studentId);
+      add('TARIFF', payload.tariffId);
+      add('BRANCH', payload.branchId);
+      add('SUBSCRIPTION', payload.sequenceAfterSubscriptionId);
+      break;
+    case 'ATTENDANCE':
+      add('LESSON', payload.lessonId);
+      add('STUDENT_IDENTITY', payload.studentId);
+      break;
+    case 'SUBSCRIPTION_LEDGER':
+      add('SUBSCRIPTION', payload.subscriptionId);
+      add('STUDENT_IDENTITY', payload.studentId);
+      add('LESSON', payload.lessonId);
+      add('SUBSCRIPTION_LEDGER', payload.reversesLedgerId);
+      break;
+    case 'TRIAL_APPOINTMENT':
+      add('STUDENT_IDENTITY', payload.studentId);
+      add('GROUP', payload.groupId);
+      add('LESSON', payload.lessonId);
+      break;
+    default:
+      break;
+  }
+  return [...keys];
+}
+
+function ledgerIdentity(payload: Record<string, unknown>): string | undefined {
+  if (
+    payload.type === 'LESSON_WRITE_OFF' &&
+    typeof payload.subscriptionId === 'string' &&
+    typeof payload.attendanceId === 'string' &&
+    payload.attendanceId
+  ) {
+    return `write-off:${payload.subscriptionId}:${payload.attendanceId}`;
+  }
+  if (payload.type === 'REVERSAL' && typeof payload.reversesLedgerId === 'string') {
+    return `reversal:${payload.reversesLedgerId}`;
+  }
+  return undefined;
+}
+
+function ledgerEffect(payload: Record<string, unknown>): unknown {
+  return canonicalComparisonValue({
+    amountDelta: payload.amountDelta,
+    attendanceId: payload.attendanceId,
+    lessonDelta: payload.lessonDelta,
+    lessonId: payload.lessonId,
+    periodEndsAt: payload.periodEndsAt,
+    periodStartsAt: payload.periodStartsAt,
+    reversesLedgerId: payload.reversesLedgerId,
+    studentId: payload.studentId,
+    subscriptionId: payload.subscriptionId,
+    type: payload.type,
+  });
+}
+
 export class IntegrationService {
   private processing = false;
   private readonly finance: FinanceService;
@@ -3776,6 +3925,412 @@ export class IntegrationService {
       `Полностью синхронизировано записей сайта: ${String(processed)}.`,
     );
     return { completedAt, processed, reconciliationId, websiteAuthority: lastAuthority };
+  }
+
+  private permanentFailurePreview(
+    candidates: PermanentFailureCandidate[],
+  ): IntegrationPermanentFailurePreview {
+    const classifications = Object.fromEntries(
+      (['A', 'B', 'C', 'D'] as const).map((classification) => {
+        const matching = candidates.filter((item) => item.classification === classification);
+        const byEntity = new Map<string, number>();
+        for (const item of matching)
+          byEntity.set(
+            item.entityType,
+            (byEntity.get(item.entityType) ?? 0) + item.outboxIds.length,
+          );
+        return [
+          classification,
+          {
+            byEntity: [...byEntity.entries()]
+              .map(([entityType, count]) => ({ count, entityType }))
+              .sort((left, right) => left.entityType.localeCompare(right.entityType)),
+            total: matching.reduce((sum, item) => sum + item.outboxIds.length, 0),
+          },
+        ];
+      }),
+    ) as IntegrationPermanentFailurePreview['classifications'];
+    const reasonCounts = new Map<string, IntegrationPermanentFailurePreview['reasons'][number]>();
+    for (const item of candidates) {
+      const key = `${item.classification}:${item.entityType}:${item.reason}`;
+      const existing = reasonCounts.get(key);
+      if (existing) existing.count += item.outboxIds.length;
+      else
+        reasonCounts.set(key, {
+          classification: item.classification,
+          count: item.outboxIds.length,
+          entityType: item.entityType,
+          reason: item.reason,
+        });
+    }
+    return {
+      checkedAt: this.now().toISOString(),
+      classifications,
+      failedRows: candidates.reduce((sum, item) => sum + item.outboxIds.length, 0),
+      reasons: [...reasonCounts.values()].sort(
+        (left, right) =>
+          left.classification.localeCompare(right.classification) ||
+          left.entityType.localeCompare(right.entityType) ||
+          left.reason.localeCompare(right.reason),
+      ),
+    };
+  }
+
+  private async classifyPermanentFailures(): Promise<{
+    candidates: PermanentFailureCandidate[];
+    preview: IntegrationPermanentFailurePreview;
+  }> {
+    const connection = await this.integrationConnection();
+    const failed = await this.database.syncOutbox.findMany({
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { entityId: true, entityType: true, id: true },
+      where: {
+        OR: [
+          { lastErrorCode: null },
+          { lastErrorCode: { notIn: [...RETRYABLE_SYNC_ERROR_CODES] } },
+        ],
+        status: 'FAILED',
+      },
+    });
+    const grouped = new Map<string, (typeof failed)[number][]>();
+    for (const row of failed) {
+      const key = recoveryEntityKey(row.entityType, row.entityId);
+      grouped.set(key, [...(grouped.get(key) ?? []), row]);
+    }
+    const supportedTypes = [...INBOUND_ENTITY_TYPES];
+    const snapshot = await this.fetchCanonicalSnapshotForTypes(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      supportedTypes,
+    );
+    const serverByKey = new Map<string, InboundChange>();
+    for (const change of snapshot) {
+      const key = recoveryEntityKey(change.entityType, change.entityId);
+      const previous = serverByKey.get(key);
+      if (!previous || change.revision > previous.revision) serverByKey.set(key, change);
+    }
+    const serverLedgers = snapshot.filter(
+      (change) => change.entityType === 'SUBSCRIPTION_LEDGER' && change.operation === 'UPSERT',
+    );
+    const candidates: PermanentFailureCandidate[] = [];
+    for (const [key, rows] of grouped) {
+      const first = rows[0];
+      if (!first || !INBOUND_ENTITY_TYPES.has(first.entityType as InboundChange['entityType'])) {
+        candidates.push({
+          classification: 'D',
+          dependencyKeys: [],
+          entityId: first?.entityId ?? key,
+          entityType: (first?.entityType ?? 'CHAT_MESSAGE') as SyncEntityType,
+          outboxIds: rows.map(({ id }) => id),
+          payload: {},
+          payloadHash: '',
+          reason: 'Тип сущности не поддерживает безопасную canonical-сверку.',
+          resolvedEquivalentLedger: false,
+        });
+        continue;
+      }
+      const entityType = first.entityType as SyncEntityType;
+      let payload: Record<string, unknown>;
+      try {
+        payload = await this.safePayload(entityType, first.entityId);
+      } catch {
+        candidates.push({
+          classification: 'D',
+          dependencyKeys: [],
+          entityId: first.entityId,
+          entityType,
+          outboxIds: rows.map(({ id }) => id),
+          payload: {},
+          payloadHash: '',
+          reason: 'Текущую локальную сущность нельзя сериализовать безопасно.',
+          resolvedEquivalentLedger: false,
+        });
+        continue;
+      }
+      const server = serverByKey.get(key);
+      const localMissing = payload.missing === true;
+      let classification: IntegrationPermanentFailureClassification;
+      let reason: string;
+      let resolvedEquivalentLedger = false;
+      if (localMissing) {
+        if (!server) {
+          classification = 'C';
+          reason = 'Сущность отсутствует локально и на сервере; старая мутация устарела.';
+        } else if (server.operation === 'ARCHIVE') {
+          classification = 'A';
+          reason = 'Удаление сущности уже отражено в canonical-состоянии сервера.';
+        } else {
+          classification = 'D';
+          reason = 'Локальная сущность отсутствует, но сервер хранит активную версию.';
+        }
+      } else if (server?.operation === 'UPSERT') {
+        if (
+          stableJson(canonicalComparisonValue(payload)) ===
+          stableJson(canonicalComparisonValue(server.payload))
+        ) {
+          classification = 'A';
+          reason = 'Текущая эквивалентная сущность уже существует на сервере.';
+        } else {
+          classification = 'D';
+          reason = 'Локальная и серверная canonical-версии расходятся.';
+        }
+      } else if (server?.operation === 'ARCHIVE') {
+        classification = 'D';
+        reason = 'Серверная сущность архивирована, а локальная версия активна.';
+      } else if (entityType === 'SUBSCRIPTION_LEDGER') {
+        const identity = ledgerIdentity(payload);
+        if (!identity) {
+          classification = 'D';
+          reason = 'У ledger-записи нет безопасной canonical identity для idempotent replay.';
+        } else {
+          const equivalent = serverLedgers.find(
+            (change) => ledgerIdentity(change.payload) === identity,
+          );
+          if (!equivalent) {
+            classification = 'B';
+            reason = 'Ledger-эффект отсутствует на сервере и имеет безопасную identity.';
+          } else if (
+            stableJson(ledgerEffect(payload)) === stableJson(ledgerEffect(equivalent.payload))
+          ) {
+            classification = 'A';
+            reason = 'Эквивалентный ledger-эффект уже существует на сервере.';
+            resolvedEquivalentLedger = equivalent.entityId !== first.entityId;
+          } else {
+            classification = 'D';
+            reason = 'Canonical identity ledger совпала, но финансовый эффект расходится.';
+          }
+        }
+      } else {
+        classification = 'B';
+        reason = 'Текущая локальная сущность отсутствует на сервере и пригодна к восстановлению.';
+      }
+      candidates.push({
+        classification,
+        dependencyKeys: localMissing ? [] : payloadDependencyKeys(entityType, payload),
+        entityId: first.entityId,
+        entityType,
+        outboxIds: rows.map(({ id }) => id),
+        payload,
+        payloadHash: recoveryPayloadHash(payload),
+        reason,
+        resolvedEquivalentLedger,
+      });
+    }
+    const candidateByKey = new Map(
+      candidates.map((candidate) => [
+        recoveryEntityKey(candidate.entityType, candidate.entityId),
+        candidate,
+      ]),
+    );
+    const dependencyPayloads = new Map<string, Record<string, unknown>>();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const candidate of candidates) {
+        if (candidate.classification !== 'B') continue;
+        for (const dependencyKey of candidate.dependencyKeys) {
+          if (dependencyKey === recoveryEntityKey(candidate.entityType, candidate.entityId))
+            continue;
+          const dependencyCandidate = candidateByKey.get(dependencyKey);
+          if (dependencyCandidate?.classification === 'C') {
+            candidate.classification = 'C';
+            candidate.reason = 'Обязательная родительская сущность доказанно отсутствует.';
+            changed = true;
+            break;
+          }
+          if (dependencyCandidate?.classification === 'D') {
+            candidate.classification = 'D';
+            candidate.reason = 'Родительская сущность требует ручной проверки.';
+            changed = true;
+            break;
+          }
+          if (dependencyCandidate) continue;
+          const serverDependency = serverByKey.get(dependencyKey);
+          if (serverDependency?.operation === 'UPSERT') continue;
+          const separator = dependencyKey.indexOf(':');
+          const dependencyType = dependencyKey.slice(0, separator) as SyncEntityType;
+          const dependencyId = dependencyKey.slice(separator + 1);
+          let dependencyPayload = dependencyPayloads.get(dependencyKey);
+          if (!dependencyPayload) {
+            try {
+              dependencyPayload = await this.safePayload(dependencyType, dependencyId);
+            } catch {
+              candidate.classification = 'D';
+              candidate.reason = 'Родительскую сущность нельзя проверить безопасно.';
+              changed = true;
+              break;
+            }
+            dependencyPayloads.set(dependencyKey, dependencyPayload);
+          }
+          if (dependencyPayload.missing === true && !serverDependency) {
+            candidate.classification = 'C';
+            candidate.reason =
+              'Обязательная родительская сущность отсутствует локально и на сервере.';
+          } else {
+            candidate.classification = 'D';
+            candidate.reason = 'Родительская сущность не синхронизирована и не входит в recovery.';
+          }
+          changed = true;
+          break;
+        }
+      }
+    }
+    return { candidates, preview: this.permanentFailurePreview(candidates) };
+  }
+
+  async previewPermanentFailureRecovery(
+    token: string,
+  ): Promise<IntegrationPermanentFailurePreview> {
+    await this.assertOwner(token);
+    return (await this.classifyPermanentFailures()).preview;
+  }
+
+  async recoverPermanentFailures(
+    token: string,
+  ): Promise<IntegrationPermanentFailureRecoveryResult> {
+    const actor = await this.assertOwner(token);
+    const batchId = randomUUID();
+    const { candidates, preview: before } = await this.classifyPermanentFailures();
+    const resolved = candidates.filter(
+      ({ classification }) => classification === 'A' || classification === 'C',
+    );
+    for (const candidate of resolved) {
+      await this.database.syncOutbox.updateMany({
+        data: { status: 'SYNCED', syncedAt: this.now() },
+        where: { id: { in: candidate.outboxIds }, status: 'FAILED' },
+      });
+      await this.database.syncLog.createMany({
+        data: candidate.outboxIds.map((outboxId) => ({
+          attemptCount: 0,
+          entityId: candidate.entityId,
+          entityType: candidate.entityType,
+          message: `batch=${batchId}; class=${candidate.classification}; ${candidate.reason}`,
+          operation: 'HISTORICAL_FAILURE_RECOVERY',
+          outboxId,
+          result:
+            candidate.classification === 'C'
+              ? 'QUARANTINED'
+              : candidate.resolvedEquivalentLedger
+                ? 'RESOLVED_EQUIVALENT'
+                : 'RESOLVED',
+        })),
+      });
+    }
+    const remaining = new Map(
+      candidates
+        .filter(({ classification }) => classification === 'B')
+        .map((candidate) => [
+          recoveryEntityKey(candidate.entityType, candidate.entityId),
+          candidate,
+        ]),
+    );
+    let replayedB = 0;
+    let replayedEntities = 0;
+    const blockedDependencies = new Set<string>();
+    while (remaining.size > 0) {
+      const ready = [...remaining.entries()]
+        .filter(([, candidate]) =>
+          candidate.dependencyKeys.every(
+            (dependencyKey) =>
+              !remaining.has(dependencyKey) && !blockedDependencies.has(dependencyKey),
+          ),
+        )
+        .sort(
+          ([, left], [, right]) =>
+            ENTITY_PRIORITY[left.entityType] - ENTITY_PRIORITY[right.entityType] ||
+            left.entityId.localeCompare(right.entityId),
+        );
+      if (ready.length === 0) break;
+      const freshIds = new Map<string, string>();
+      for (const [key, candidate] of ready) {
+        const id = randomUUID();
+        freshIds.set(key, id);
+        await this.database.syncOutbox.create({
+          data: {
+            entityId: candidate.entityId,
+            entityType: candidate.entityType,
+            id,
+            idempotencyKey: `historical-recovery:${createHash('sha256')
+              .update(`${key}:${candidate.payloadHash}`)
+              .digest('hex')}`,
+            nextAttemptAt: this.now(),
+            operation: 'UPSERT',
+            payloadJson: '{}',
+            payloadVersion: 2,
+            updatedAt: this.now(),
+          },
+        });
+      }
+      let previousPending = Number.POSITIVE_INFINITY;
+      for (let pass = 0; pass < Math.ceil(ready.length / INTEGRATION_BATCH_SIZE) + 2; pass += 1) {
+        const pending = await this.database.syncOutbox.count({
+          where: { id: { in: [...freshIds.values()] }, status: 'PENDING' },
+        });
+        if (pending === 0 || pending >= previousPending) break;
+        previousPending = pending;
+        await this.processPending();
+      }
+      const freshRows = await this.database.syncOutbox.findMany({
+        select: { id: true, status: true },
+        where: { id: { in: [...freshIds.values()] } },
+      });
+      const statusById = new Map(freshRows.map(({ id, status }) => [id, status]));
+      for (const [key, candidate] of ready) {
+        const freshId = freshIds.get(key);
+        if (freshId && statusById.get(freshId) === 'SYNCED') {
+          await this.database.syncOutbox.updateMany({
+            data: { status: 'SYNCED', syncedAt: this.now() },
+            where: { id: { in: candidate.outboxIds }, status: 'FAILED' },
+          });
+          await this.database.syncLog.createMany({
+            data: candidate.outboxIds.map((outboxId) => ({
+              attemptCount: 0,
+              entityId: candidate.entityId,
+              entityType: candidate.entityType,
+              message: `batch=${batchId}; class=B; replayOutboxId=${freshId}`,
+              operation: 'HISTORICAL_FAILURE_RECOVERY',
+              outboxId,
+              result: 'RECOVERED',
+            })),
+          });
+          replayedB += candidate.outboxIds.length;
+          replayedEntities += 1;
+        } else {
+          blockedDependencies.add(key);
+        }
+        remaining.delete(key);
+      }
+    }
+    await this.database.auditLog.create({
+      data: {
+        action: 'INTEGRATION_HISTORICAL_FAILURE_RECOVERY',
+        actorUserId: actor.id,
+        detail: JSON.stringify({
+          batchId,
+          before: Object.fromEntries(
+            Object.entries(before.classifications).map(([key, value]) => [key, value.total]),
+          ),
+          quarantinedC: before.classifications.C.total,
+          replayedB,
+          replayedEntities,
+          resolvedA: before.classifications.A.total,
+        }),
+        entityId: batchId,
+        entityType: 'SyncOutboxRecovery',
+      },
+    });
+    const after = (await this.classifyPermanentFailures()).preview;
+    return {
+      after,
+      batchId,
+      before,
+      heldD: after.classifications.D.total,
+      quarantinedC: before.classifications.C.total,
+      replayedB,
+      replayedEntities,
+      resolvedA: before.classifications.A.total,
+    };
   }
 
   async diagnose(token: string): Promise<IntegrationDiagnostics> {
@@ -5569,9 +6124,27 @@ export class IntegrationService {
       ...trials.map(({ id }) => ({ entityId: id, entityType: 'TRIAL_APPOINTMENT' as const })),
       ...notes.map(({ id }) => ({ entityId: id, entityType: 'STUDENT_NOTE' as const })),
     ];
+    const resolvedEquivalentLedgers = new Set(
+      (
+        await this.database.syncLog.findMany({
+          select: { entityId: true },
+          where: {
+            entityId: { not: null },
+            entityType: 'SUBSCRIPTION_LEDGER',
+            result: 'RESOLVED_EQUIVALENT',
+          },
+        })
+      )
+        .map(({ entityId }) => entityId)
+        .filter((entityId): entityId is string => Boolean(entityId)),
+    );
+    const queueRows = rows.filter(
+      ({ entityId, entityType }) =>
+        entityType !== 'SUBSCRIPTION_LEDGER' || !resolvedEquivalentLedgers.has(entityId),
+    );
     const timestamp = this.now().toISOString();
     await this.database.syncOutbox.createMany({
-      data: rows.map((row, index) => ({
+      data: queueRows.map((row, index) => ({
         ...row,
         idempotencyKey: `initial:${timestamp}:${String(index)}:${row.entityType}:${row.entityId}`,
         nextAttemptAt: this.now(),
@@ -5585,7 +6158,7 @@ export class IntegrationService {
       'QUEUED',
       0,
       undefined,
-      `Подготовлено операций: ${String(rows.length)}.`,
+      `Подготовлено операций: ${String(queueRows.length)}.`,
     );
   }
 
