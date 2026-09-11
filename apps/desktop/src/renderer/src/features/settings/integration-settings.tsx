@@ -282,7 +282,10 @@ export function IntegrationSettings() {
     mutationFn: () =>
       getDesktopApi().integration.previewPermanentFailureRecovery(getSessionToken()),
     onError: (error) => setNotice(errorMessage(error)),
-    onSuccess: () => setNotice('Проверка завершена. До подтверждения данные не изменяются.'),
+    onSuccess: () => {
+      setFailureRecoveryConfirmationOpen(false);
+      setNotice('Проверка завершена. До подтверждения данные не изменяются.');
+    },
   });
   const permanentFailureRecovery = useMutation({
     mutationFn: () => getDesktopApi().integration.recoverPermanentFailures(getSessionToken()),
@@ -1060,7 +1063,7 @@ export function IntegrationSettings() {
                   D/HOLD не изменяется. Финансовые ledger-записи восстанавливаются только по
                   доказанной idempotent identity.
                 </p>
-                {safeCount > 0 ? (
+                {safeCount > 0 && !failureRecoveryConfirmationOpen ? (
                   <Button
                     disabled={permanentFailureRecovery.isPending}
                     onClick={() => setFailureRecoveryConfirmationOpen(true)}
@@ -1069,37 +1072,40 @@ export function IntegrationSettings() {
                   </Button>
                 ) : null}
               </div>
+              {failureRecoveryConfirmationOpen ? (
+                <section
+                  aria-label="Подтверждение безопасного восстановления"
+                  className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"
+                  data-testid="permanent-failure-recovery-confirmation"
+                >
+                  <p className="font-semibold">Восстановить безопасные ошибки?</p>
+                  <p>
+                    A будет помечено как уже представленное на сервере, B отправлено заново через
+                    текущий serializer, C помещено в карантин, D останется без изменений.
+                    Оригинальные MATERIALIZED/v1 payload не переотправляются.
+                  </p>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      disabled={permanentFailureRecovery.isPending}
+                      onClick={() => setFailureRecoveryConfirmationOpen(false)}
+                      variant="outline"
+                    >
+                      Отмена
+                    </Button>
+                    <Button
+                      disabled={permanentFailureRecovery.isPending}
+                      onClick={() => permanentFailureRecovery.mutate()}
+                    >
+                      {permanentFailureRecovery.isPending
+                        ? 'Восстанавливаем…'
+                        : 'Подтвердить восстановление'}
+                    </Button>
+                  </div>
+                </section>
+              ) : null}
             </div>
           );
         })()}
-
-        <Dialog
-          closeLabel="Закрыть"
-          description="A будет помечено как уже представленное на сервере, B отправлено заново через текущий serializer, C помещено в карантин, D останется без изменений."
-          footer={
-            <div className="flex justify-end gap-2">
-              <Button onClick={() => setFailureRecoveryConfirmationOpen(false)} variant="outline">
-                Отмена
-              </Button>
-              <Button
-                disabled={permanentFailureRecovery.isPending}
-                onClick={() => permanentFailureRecovery.mutate()}
-              >
-                {permanentFailureRecovery.isPending
-                  ? 'Восстанавливаем…'
-                  : 'Подтвердить восстановление'}
-              </Button>
-            </div>
-          }
-          onClose={() => setFailureRecoveryConfirmationOpen(false)}
-          open={failureRecoveryConfirmationOpen}
-          title="Восстановить безопасные ошибки?"
-        >
-          <p className="text-sm text-muted-foreground">
-            Оригинальные MATERIALIZED/v1 payload не переотправляются. Операция аудируется и после
-            завершения автоматически повторяет canonical-сверку.
-          </p>
-        </Dialog>
 
         <Dialog
           closeLabel="Закрыть"
