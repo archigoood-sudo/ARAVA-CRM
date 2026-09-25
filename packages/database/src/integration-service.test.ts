@@ -3217,6 +3217,66 @@ describe('Sprint 4.5A multi-device integration', () => {
     safePayloadSpy.mockRestore();
   });
 
+  it('uses canonical server revision to distinguish recoverable B from protected C/D', async () => {
+    await pair();
+    const updateBranch = await application.createBranch(ownerToken, { name: 'Локально новее' });
+    const archiveBranch = await application.createBranch(ownerToken, { name: 'Архивировать' });
+    const rows = await database.syncOutbox.findMany({
+      where: { entityId: { in: [updateBranch.id, archiveBranch.id] } },
+    });
+    for (const row of rows) {
+      await database.syncOutbox.update({
+        data: {
+          baseRevision: 1,
+          lastErrorCode: 'VALIDATION_ERROR',
+          operation: row.entityId === archiveBranch.id ? 'ARCHIVE' : 'UPSERT',
+          payloadJson: JSON.stringify({ id: row.entityId, legacyUnknownField: true }),
+          payloadVersion: 1,
+          status: 'FAILED',
+        },
+        where: { id: row.id },
+      });
+    }
+    canonical.set(`BRANCH:${updateBranch.id}`, {
+      operation: 'UPSERT',
+      payload: { ...(await integration.safePayload('BRANCH', updateBranch.id)), name: 'База' },
+      revision: 1,
+      sequence: 11_000,
+    });
+    canonical.set(`BRANCH:${archiveBranch.id}`, {
+      operation: 'UPSERT',
+      payload: await integration.safePayload('BRANCH', archiveBranch.id),
+      revision: 1,
+      sequence: 11_001,
+    });
+    const failedBefore = await database.syncOutbox.findMany({
+      orderBy: { id: 'asc' },
+      select: { id: true, operation: true, payloadJson: true, status: true },
+      where: { status: 'FAILED' },
+    });
+
+    const safePreview = await integration.previewPermanentFailureRecovery(ownerToken);
+    expect(safePreview.classifications.B.total).toBe(2);
+    expect(
+      await database.syncOutbox.findMany({
+        orderBy: { id: 'asc' },
+        select: { id: true, operation: true, payloadJson: true, status: true },
+        where: { status: 'FAILED' },
+      }),
+    ).toEqual(failedBefore);
+
+    canonical.set(`BRANCH:${updateBranch.id}`, {
+      operation: 'UPSERT',
+      payload: { ...(await integration.safePayload('BRANCH', updateBranch.id)), name: 'Новее' },
+      revision: 2,
+      sequence: 11_002,
+    });
+    canonical.delete(`BRANCH:${archiveBranch.id}`);
+    const protectedPreview = await integration.previewPermanentFailureRecovery(ownerToken);
+    expect(protectedPreview.classifications.C.total).toBe(1);
+    expect(protectedPreview.classifications.D.total).toBe(1);
+  });
+
   it('allows ADMIN to observe sync health but keeps configuration OWNER-only and denies COACH', async () => {
     const branch = await application.createBranch(ownerToken, { name: 'Доступ' });
     for (const role of ['ADMIN', 'COACH'] as const) {

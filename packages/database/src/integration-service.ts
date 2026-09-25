@@ -63,6 +63,7 @@ import {
   AUTO_RESOLVE_LWW_ENTITY_TYPES,
   isAutoResolvableLwwEntityType,
 } from './sync-conflict-policy';
+import { materializeSyncMutation } from './sync-payload-contract';
 
 export const INTEGRATION_API_VERSION = 'v1';
 export const INTEGRATION_BATCH_SIZE = 25;
@@ -2575,6 +2576,7 @@ interface PermanentFailureCandidate {
   entityId: string;
   entityType: SyncEntityType;
   outboxIds: string[];
+  operation: SyncOperation;
   payload: Record<string, unknown>;
   payloadHash: string;
   reason: string;
@@ -3983,7 +3985,14 @@ export class IntegrationService {
     const connection = await this.integrationConnection();
     const failed = await this.database.syncOutbox.findMany({
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { entityId: true, entityType: true, id: true },
+      select: {
+        baseRevision: true,
+        createdAt: true,
+        entityId: true,
+        entityType: true,
+        id: true,
+        operation: true,
+      },
       where: {
         OR: [
           { lastErrorCode: null },
@@ -4022,6 +4031,7 @@ export class IntegrationService {
           dependencyKeys: [],
           entityId: first?.entityId ?? key,
           entityType: (first?.entityType ?? 'CHAT_MESSAGE') as SyncEntityType,
+          operation: rows.at(-1)?.operation ?? 'UPSERT',
           outboxIds: rows.map(({ id }) => id),
           payload: {},
           payloadHash: '',
@@ -4040,6 +4050,7 @@ export class IntegrationService {
           dependencyKeys: [],
           entityId: first.entityId,
           entityType,
+          operation: rows.at(-1)?.operation ?? 'UPSERT',
           outboxIds: rows.map(({ id }) => id),
           payload: {},
           payloadHash: '',
@@ -4050,19 +4061,57 @@ export class IntegrationService {
       }
       const server = serverByKey.get(key);
       const localMissing = payload.missing === true;
+      const latest = rows.at(-1) ?? first;
+      const operation: SyncOperation = localMissing ? 'ARCHIVE' : latest.operation;
+      const canonicalPayload =
+        operation === 'ARCHIVE' ? { id: first.entityId, missing: true } : payload;
       let classification: IntegrationPermanentFailureClassification;
       let reason: string;
       let resolvedEquivalentLedger = false;
-      if (localMissing) {
+      if (operation === 'ARCHIVE') {
         if (!server) {
           classification = 'C';
-          reason = 'Сущность отсутствует локально и на сервере; старая мутация устарела.';
+          reason = 'Сущность уже отсутствует локально и на сервере; ARCHIVE устарел.';
         } else if (server.operation === 'ARCHIVE') {
           classification = 'A';
           reason = 'Удаление сущности уже отражено в canonical-состоянии сервера.';
+        } else if (server.revision === latest.baseRevision) {
+          classification = 'B';
+          reason = 'ARCHIVE основан на текущей server revision и безопасен для повторной отправки.';
         } else {
           classification = 'D';
-          reason = 'Локальная сущность отсутствует, но сервер хранит активную версию.';
+          reason = 'Серверная сущность изменилась после базы ARCHIVE; требуется ручная проверка.';
+        }
+      } else if (entityType === 'SUBSCRIPTION_LEDGER') {
+        const sameEntityEquivalent =
+          server?.operation === 'UPSERT' &&
+          stableJson(ledgerEffect(payload)) === stableJson(ledgerEffect(server.payload));
+        const identity = ledgerIdentity(payload);
+        const equivalent = identity
+          ? serverLedgers.find((change) => ledgerIdentity(change.payload) === identity)
+          : undefined;
+        if (sameEntityEquivalent) {
+          classification = 'A';
+          reason = 'Тот же ledger-эффект уже существует на сервере.';
+        } else if (!identity) {
+          classification = 'D';
+          reason = 'У ledger-записи нет безопасной canonical identity для idempotent replay.';
+        } else if (equivalent) {
+          if (stableJson(ledgerEffect(payload)) === stableJson(ledgerEffect(equivalent.payload))) {
+            classification = 'A';
+            reason = 'Эквивалентный ledger-эффект уже существует на сервере.';
+            resolvedEquivalentLedger = equivalent.entityId !== first.entityId;
+          } else {
+            classification = 'D';
+            reason = 'Canonical identity ledger совпала, но финансовый эффект расходится.';
+          }
+        } else if (server) {
+          classification = 'D';
+          reason =
+            'Сервер хранит другую запись с тем же ledger ID; автоматический replay запрещён.';
+        } else {
+          classification = 'B';
+          reason = 'Ledger-эффект отсутствует на сервере и имеет безопасную identity.';
         }
       } else if (server?.operation === 'UPSERT') {
         if (
@@ -4071,48 +4120,31 @@ export class IntegrationService {
         ) {
           classification = 'A';
           reason = 'Текущая эквивалентная сущность уже существует на сервере.';
+        } else if (server.revision === latest.baseRevision) {
+          classification = 'B';
+          reason =
+            'Серверная версия является базой локального изменения; current-schema UPSERT безопасен.';
         } else {
           classification = 'D';
-          reason = 'Локальная и серверная canonical-версии расходятся.';
+          reason = 'Серверная revision новее базы локальной мутации; требуется ручная проверка.';
         }
       } else if (server?.operation === 'ARCHIVE') {
         classification = 'D';
         reason = 'Серверная сущность архивирована, а локальная версия активна.';
-      } else if (entityType === 'SUBSCRIPTION_LEDGER') {
-        const identity = ledgerIdentity(payload);
-        if (!identity) {
-          classification = 'D';
-          reason = 'У ledger-записи нет безопасной canonical identity для idempotent replay.';
-        } else {
-          const equivalent = serverLedgers.find(
-            (change) => ledgerIdentity(change.payload) === identity,
-          );
-          if (!equivalent) {
-            classification = 'B';
-            reason = 'Ledger-эффект отсутствует на сервере и имеет безопасную identity.';
-          } else if (
-            stableJson(ledgerEffect(payload)) === stableJson(ledgerEffect(equivalent.payload))
-          ) {
-            classification = 'A';
-            reason = 'Эквивалентный ledger-эффект уже существует на сервере.';
-            resolvedEquivalentLedger = equivalent.entityId !== first.entityId;
-          } else {
-            classification = 'D';
-            reason = 'Canonical identity ledger совпала, но финансовый эффект расходится.';
-          }
-        }
       } else {
         classification = 'B';
         reason = 'Текущая локальная сущность отсутствует на сервере и пригодна к восстановлению.';
       }
       candidates.push({
         classification,
-        dependencyKeys: localMissing ? [] : payloadDependencyKeys(entityType, payload),
+        dependencyKeys:
+          operation === 'ARCHIVE' ? [] : payloadDependencyKeys(entityType, canonicalPayload),
         entityId: first.entityId,
         entityType,
         outboxIds: rows.map(({ id }) => id),
-        payload,
-        payloadHash: recoveryPayloadHash(payload),
+        operation,
+        payload: canonicalPayload,
+        payloadHash: recoveryPayloadHash(canonicalPayload),
         reason,
         resolvedEquivalentLedger,
       });
@@ -4255,7 +4287,7 @@ export class IntegrationService {
               .update(`${key}:${candidate.payloadHash}`)
               .digest('hex')}`,
             nextAttemptAt: this.now(),
-            operation: 'UPSERT',
+            operation: candidate.operation,
             payloadJson: '{}',
             payloadVersion: 2,
             updatedAt: this.now(),
@@ -8047,14 +8079,22 @@ export class IntegrationService {
     baseRevision: number,
   ): Promise<SyncEntityEnvelope> {
     const payload = await this.safePayload(entityType, entityId);
+    const materialized = materializeSyncMutation(entityType, entityId, operation, payload);
+    if (materialized.unknownFields.length > 0) {
+      throw new IntegrationApiError(
+        'INVALID_PAYLOAD',
+        false,
+        `Canonical payload ${entityType} содержит неподдерживаемые поля: ${materialized.unknownFields.join(', ')}.`,
+      );
+    }
     const updatedAt = optionalString(payload.updatedAt) ?? this.now().toISOString();
     return {
       baseRevision,
       entityId,
       entityType,
       idempotencyKey,
-      operation: payload.missing === true ? 'ARCHIVE' : operation,
-      payload: operation === 'ARCHIVE' ? { id: entityId, missing: true } : payload,
+      operation: materialized.operation,
+      payload: materialized.payload,
       updatedAt,
       version: updatedAt,
     };
