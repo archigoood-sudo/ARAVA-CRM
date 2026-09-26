@@ -95,7 +95,12 @@ $metadataPath = Join-Path (Split-Path $updatedExecutable -Parent) 'resources\\ap
 if (-not (Test-Path $metadataPath)) {
   throw 'The current installer did not include app-metadata.json'
 }
-$installedVersion = (Get-Content $metadataPath -Raw | ConvertFrom-Json).version
+$metadata = Get-Content $metadataPath -Raw | ConvertFrom-Json
+$installedVersion = $metadata.appVersion
+if ([string]::IsNullOrWhiteSpace($installedVersion)) {
+  $metadataKeys = ($metadata.PSObject.Properties.Name | Sort-Object) -join ', '
+  throw "The current installer version metadata is missing appVersion. Available keys: $metadataKeys"
+}
 if ($installedVersion -ne $ExpectedVersion) {
   throw "The current installer version '$installedVersion' does not match expected '$ExpectedVersion'"
 }
