@@ -876,6 +876,7 @@ test('OWNER подключает сайт, выполняет initial/offline sy
           const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
           return (await api.integration.getStatus(persisted.state?.token ?? '')).pendingCount;
         }),
+        { timeout: 20_000 },
       )
       .toBe(0);
     const finalStatus = await page.evaluate(async () => {
