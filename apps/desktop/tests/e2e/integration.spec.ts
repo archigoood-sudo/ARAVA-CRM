@@ -868,14 +868,15 @@ test('OWNER подключает сайт, выполняет initial/offline sy
     await page.getByRole('button', { name: /Синхронизировать сейчас/u }).click();
     await expect.poll(() => receivedOperations).toBeGreaterThan(0);
     await expect
-      .poll(async () =>
-        page.evaluate(async () => {
-          const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
-            state?: { token?: string };
-          };
-          const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
-          return (await api.integration.getStatus(persisted.state?.token ?? '')).pendingCount;
-        }),
+      .poll(
+        async () =>
+          page.evaluate(async () => {
+            const persisted = JSON.parse(localStorage.getItem('arava-auth') ?? '{}') as {
+              state?: { token?: string };
+            };
+            const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+            return (await api.integration.getStatus(persisted.state?.token ?? '')).pendingCount;
+          }),
         { timeout: 20_000 },
       )
       .toBe(0);
