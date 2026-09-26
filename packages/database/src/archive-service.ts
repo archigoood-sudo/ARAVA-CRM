@@ -736,7 +736,7 @@ export class ArchiveService {
         await this.deleteGroup(transaction, id);
         break;
       case 'BRANCH':
-        await this.deleteBranch(transaction, actorId, id);
+        await this.deleteBranch(transaction, id);
         break;
       case 'ROOM':
         await this.deleteRoom(transaction, id);
@@ -1065,11 +1065,7 @@ export class ArchiveService {
     await transaction.publication.delete({ where: { id } });
   }
 
-  private async deleteBranch(
-    transaction: Prisma.TransactionClient,
-    actorId: string,
-    id: string,
-  ): Promise<void> {
+  private async deleteBranch(transaction: Prisma.TransactionClient, id: string): Promise<void> {
     const students = await transaction.student.findMany({
       select: { id: true },
       where: { branchId: id },
@@ -1115,7 +1111,6 @@ export class ArchiveService {
     await transaction.auditLog.deleteMany({ where: { entityId: id } });
     await this.deleteSyncRecords(transaction, id);
     await transaction.branch.delete({ where: { id } });
-    void actorId;
   }
 
   private async deleteSyncRecords(

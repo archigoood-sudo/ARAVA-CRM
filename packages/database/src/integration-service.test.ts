@@ -92,6 +92,8 @@ describe('Sprint 4.5A multi-device integration', () => {
   let now: Date;
   let ownerToken: string;
   let received: Record<string, unknown>[];
+  let rejectRecovery: boolean;
+  let rejectRecoveryEntityId: string | undefined;
   let server: Server;
   let serverUrl: string;
 
@@ -129,6 +131,8 @@ describe('Sprint 4.5A multi-device integration', () => {
     managedConflicts = [];
     now = new Date('2030-08-18T10:00:00.000Z');
     received = [];
+    rejectRecovery = false;
+    rejectRecoveryEntityId = undefined;
     server = createServer(async (request, response) => {
       const methodWithBody =
         request.method === 'POST' || request.method === 'PATCH' || request.method === 'PUT';
@@ -142,6 +146,21 @@ describe('Sprint 4.5A multi-device integration', () => {
         path: request.url,
         ...requestBody,
       });
+      if (
+        request.url?.endsWith('/sync/batch') &&
+        (rejectRecovery ||
+          (rejectRecoveryEntityId &&
+            Array.isArray(requestBody.operations) &&
+            requestBody.operations.some(
+              (operation) =>
+                typeof operation === 'object' &&
+                operation !== null &&
+                (operation as Record<string, unknown>).entityId === rejectRecoveryEntityId,
+            )))
+      ) {
+        json(response, 400, { code: 'VALIDATION_ERROR', message: 'recovery rejected' });
+        return;
+      }
       if (request.url?.endsWith('/pair')) {
         json(response, 200, {
           apiVersion: 'v1',
@@ -3181,7 +3200,10 @@ describe('Sprint 4.5A multi-device integration', () => {
     ).toEqual(failedBefore);
 
     received.length = 0;
-    const recovery = await integration.recoverPermanentFailures(ownerToken);
+    const recovery = await integration.recoverPermanentFailures(
+      ownerToken,
+      preview.snapshotId ?? '',
+    );
     expect(recovery).toMatchObject({
       heldD: 1,
       quarantinedC: 1,
@@ -3207,7 +3229,10 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(JSON.stringify(replayedOperations)).not.toContain('legacyUnknownField');
 
     received.length = 0;
-    const repeated = await integration.recoverPermanentFailures(ownerToken);
+    const repeated = await integration.recoverPermanentFailures(
+      ownerToken,
+      recovery.after.snapshotId ?? '',
+    );
     expect(repeated.replayedB).toBe(0);
     expect(
       received.filter(
@@ -3313,7 +3338,8 @@ describe('Sprint 4.5A multi-device integration', () => {
     }
     received.length = 0;
 
-    const result = await integration.recoverPermanentFailures(ownerToken);
+    const preview = await integration.previewPermanentFailureRecovery(ownerToken);
+    const result = await integration.recoverPermanentFailures(ownerToken, preview.snapshotId ?? '');
 
     expect(result).toMatchObject({
       attemptedB: branches.length,
@@ -3335,6 +3361,96 @@ describe('Sprint 4.5A multi-device integration', () => {
       });
     expect(recoveryOperations).toHaveLength(branches.length);
     expect(recoveryOperations.every((operation) => operation.baseRevision === 7)).toBe(true);
+  });
+
+  it('holds a stale B snapshot when server state changes before recovery', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Stale recovery' });
+    const row = await database.syncOutbox.findFirstOrThrow({ where: { entityId: branch.id } });
+    await database.syncOutbox.update({
+      data: { lastErrorCode: 'VALIDATION_ERROR', status: 'FAILED' },
+      where: { id: row.id },
+    });
+    const preview = await integration.previewPermanentFailureRecovery(ownerToken);
+    expect(preview.classifications.B.total).toBe(1);
+    canonical.set(`BRANCH:${branch.id}`, {
+      operation: 'UPSERT',
+      payload: await integration.safePayload('BRANCH', branch.id),
+      revision: 1,
+      sequence: 30_000,
+    });
+    received.length = 0;
+    const result = await integration.recoverPermanentFailures(ownerToken, preview.snapshotId ?? '');
+    expect(result.changedToHold).toBe(1);
+    expect(result.replayedB).toBe(0);
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+      status: 'FAILED',
+    });
+    expect(received.filter(({ path }) => path === '/api/integration/v1/sync/batch')).toHaveLength(
+      0,
+    );
+  });
+
+  it('rejects an older snapshot after a newer dry-run without touching failures', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Old snapshot' });
+    const row = await database.syncOutbox.findFirstOrThrow({ where: { entityId: branch.id } });
+    await database.syncOutbox.update({
+      data: { lastErrorCode: 'VALIDATION_ERROR', status: 'FAILED' },
+      where: { id: row.id },
+    });
+    const first = await integration.previewPermanentFailureRecovery(ownerToken);
+    const second = await integration.previewPermanentFailureRecovery(ownerToken);
+    expect(first.snapshotId).not.toBe(second.snapshotId);
+    await expect(
+      integration.recoverPermanentFailures(ownerToken, first.snapshotId ?? ''),
+    ).rejects.toThrow('Снимок проверки устарел');
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+      status: 'FAILED',
+    });
+  });
+
+  it('keeps one original FAILED row when current-schema recovery is rejected', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Rejected recovery' });
+    const row = await database.syncOutbox.findFirstOrThrow({ where: { entityId: branch.id } });
+    await database.syncOutbox.update({
+      data: { lastErrorCode: 'VALIDATION_ERROR', status: 'FAILED' },
+      where: { id: row.id },
+    });
+    const preview = await integration.previewPermanentFailureRecovery(ownerToken);
+    rejectRecovery = true;
+    const result = await integration.recoverPermanentFailures(ownerToken, preview.snapshotId ?? '');
+    expect(result.failedB).toBe(1);
+    expect(result.replayedB).toBe(0);
+    expect(result.failureGroups).toEqual(
+      expect.arrayContaining([expect.objectContaining({ errorCode: 'VALIDATION_ERROR' })]),
+    );
+    expect(await database.syncOutbox.count({ where: { entityId: branch.id } })).toBe(1);
+    expect(await database.syncOutbox.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+      status: 'FAILED',
+    });
+  });
+
+  it('continues after one rejected B without generating any additional FAILED rows', async () => {
+    await pair();
+    const first = await application.createBranch(ownerToken, { name: 'First recovery' });
+    const second = await application.createBranch(ownerToken, { name: 'Second recovery' });
+    const rows = await database.syncOutbox.findMany({
+      where: { entityId: { in: [first.id, second.id] } },
+    });
+    for (const row of rows) {
+      await database.syncOutbox.update({
+        data: { lastErrorCode: 'VALIDATION_ERROR', status: 'FAILED' },
+        where: { id: row.id },
+      });
+    }
+    const preview = await integration.previewPermanentFailureRecovery(ownerToken);
+    rejectRecoveryEntityId = first.id;
+    const result = await integration.recoverPermanentFailures(ownerToken, preview.snapshotId ?? '');
+    expect(result).toMatchObject({ attemptedB: 2, failedB: 1, replayedB: 1 });
+    expect(await database.syncOutbox.count({ where: { status: 'FAILED' } })).toBe(1);
+    expect(await database.syncOutbox.count()).toBe(rows.length);
   });
 
   it('allows ADMIN to observe sync health but keeps configuration OWNER-only and denies COACH', async () => {

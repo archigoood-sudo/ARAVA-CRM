@@ -665,8 +665,11 @@ export function createIpcHandlers(
       requireIntegration().diagnosePermanentFailureRecovery(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationPreviewPermanentFailureRecovery]: (unsafeToken) =>
       requireIntegration().previewPermanentFailureRecovery(sessionTokenSchema.parse(unsafeToken)),
-    [IPC_CHANNELS.integrationRecoverPermanentFailures]: (unsafeToken) =>
-      requireIntegration().recoverPermanentFailures(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationRecoverPermanentFailures]: (unsafeToken, unsafeSnapshotId) =>
+      requireIntegration().recoverPermanentFailures(
+        sessionTokenSchema.parse(unsafeToken),
+        z.string().uuid().parse(unsafeSnapshotId),
+      ),
     [IPC_CHANNELS.integrationUpdateSettings]: (unsafeToken, unsafeInput) =>
       requireIntegration().updateSettings(
         sessionTokenSchema.parse(unsafeToken),

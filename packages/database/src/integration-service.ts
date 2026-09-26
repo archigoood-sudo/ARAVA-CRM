@@ -2606,6 +2606,27 @@ function recoveryPayloadHash(payload: Record<string, unknown>): string {
     .digest('hex');
 }
 
+const PERMANENT_FAILURE_SNAPSHOT_SETTING = 'integration.permanent-failure-snapshot';
+
+interface PermanentFailureSnapshotRow {
+  failedRowId: string;
+  entityType: string;
+  entityId: string;
+  classification: IntegrationPermanentFailureClassification;
+  reason: string;
+  baseRevision: number;
+  payloadHash: string;
+  serverState: string;
+  dependencyState: string;
+  checkedAt: string;
+}
+
+interface PermanentFailureSnapshot {
+  id: string;
+  preview: IntegrationPermanentFailurePreview;
+  rows: PermanentFailureSnapshotRow[];
+}
+
 function payloadDependencyKeys(
   entityType: SyncEntityType,
   payload: Record<string, unknown>,
@@ -3984,6 +4005,7 @@ export class IntegrationService {
   private async classifyPermanentFailures(): Promise<{
     candidates: PermanentFailureCandidate[];
     preview: IntegrationPermanentFailurePreview;
+    serverByKey: Map<string, InboundChange>;
   }> {
     const connection = await this.integrationConnection();
     const failed = await this.database.syncOutbox.findMany({
@@ -4214,14 +4236,78 @@ export class IntegrationService {
         }
       }
     }
-    return { candidates, preview: this.permanentFailurePreview(candidates) };
+    return { candidates, preview: this.permanentFailurePreview(candidates), serverByKey };
+  }
+
+  private permanentFailureEvidence(
+    candidate: PermanentFailureCandidate,
+    serverByKey: Map<string, InboundChange>,
+  ): Pick<PermanentFailureSnapshotRow, 'serverState' | 'dependencyState'> {
+    const direct = serverByKey.get(recoveryEntityKey(candidate.entityType, candidate.entityId));
+    const identity =
+      candidate.entityType === 'SUBSCRIPTION_LEDGER'
+        ? ledgerIdentity(candidate.payload)
+        : undefined;
+    const equivalent = identity
+      ? [...serverByKey.values()].find(
+          (change) =>
+            change.entityType === 'SUBSCRIPTION_LEDGER' &&
+            change.operation === 'UPSERT' &&
+            ledgerIdentity(change.payload) === identity,
+        )
+      : undefined;
+    const server = direct ?? equivalent;
+    const serverState = stableJson(
+      server
+        ? {
+            entityId: server.entityId,
+            operation: server.operation,
+            payloadHash: recoveryPayloadHash(server.payload),
+            revision: server.revision,
+          }
+        : { operation: 'MISSING' },
+    );
+    const dependencyState = stableJson(
+      candidate.dependencyKeys
+        .map((key) => {
+          const parent = serverByKey.get(key);
+          return {
+            key,
+            operation: parent?.operation ?? 'MISSING',
+            revision: parent?.revision ?? null,
+          };
+        })
+        .sort((left, right) => left.key.localeCompare(right.key)),
+    );
+    return { dependencyState, serverState };
   }
 
   async previewPermanentFailureRecovery(
     token: string,
   ): Promise<IntegrationPermanentFailurePreview> {
     await this.assertOwner(token);
-    return (await this.classifyPermanentFailures()).preview;
+    const { candidates, preview, serverByKey } = await this.classifyPermanentFailures();
+    const snapshotId = randomUUID();
+    const snapshotPreview = { ...preview, snapshotId };
+    const snapshot: PermanentFailureSnapshot = {
+      id: snapshotId,
+      preview: snapshotPreview,
+      rows: candidates.flatMap((candidate) =>
+        candidate.outboxIds.map((failedRowId) => ({
+          ...this.permanentFailureEvidence(candidate, serverByKey),
+          baseRevision: candidate.baseRevision,
+          checkedAt: preview.checkedAt,
+          classification: candidate.classification,
+          entityId: candidate.entityId,
+          entityType: candidate.entityType,
+          failedRowId,
+          payloadHash: candidate.payloadHash,
+          reason: candidate.reason,
+        })),
+      ),
+    };
+    await this.setSetting(PERMANENT_FAILURE_SNAPSHOT_SETTING, JSON.stringify(snapshot));
+    return snapshotPreview;
   }
 
   async diagnosePermanentFailureRecovery(
@@ -4329,34 +4415,130 @@ export class IntegrationService {
 
   async recoverPermanentFailures(
     token: string,
+    snapshotId: string,
   ): Promise<IntegrationPermanentFailureRecoveryResult> {
     const actor = await this.assertOwner(token);
+    const snapshotRaw = await this.setting(PERMANENT_FAILURE_SNAPSHOT_SETTING);
+    let snapshot: PermanentFailureSnapshot | undefined;
+    try {
+      snapshot = snapshotRaw ? (JSON.parse(snapshotRaw) as PermanentFailureSnapshot) : undefined;
+    } catch {
+      // A damaged diagnostic snapshot cannot authorize recovery.
+    }
+    if (!snapshotId || snapshot?.id !== snapshotId || !Array.isArray(snapshot.rows)) {
+      throw new DomainError(
+        'VALIDATION',
+        'Снимок проверки устарел. Сначала проверьте ошибки заново.',
+      );
+    }
+    const snapshotById = new Map(snapshot.rows.map((row) => [row.failedRowId, row]));
+    const failureGroups = new Map<string, IntegrationPermanentFailureRecoveryFailureGroup>();
+    let changedToHold = 0;
+    let failedB = 0;
+    const hold = (candidate: PermanentFailureCandidate, errorCode: string, reason: string) => {
+      const key = `${candidate.entityType}:${errorCode}:${reason}`;
+      const group = failureGroups.get(key) ?? {
+        count: 0,
+        entityType: candidate.entityType,
+        errorCode,
+        examples: [],
+        reason,
+      };
+      group.count += candidate.outboxIds.length;
+      if (group.examples.length < 3) group.examples.push(candidate.entityId);
+      failureGroups.set(key, group);
+    };
+    const preflight = async (candidate: PermanentFailureCandidate) => {
+      const fresh = await this.classifyPermanentFailures();
+      const current = fresh.candidates.find(
+        (item) => item.entityType === candidate.entityType && item.entityId === candidate.entityId,
+      );
+      if (current?.outboxIds.length !== candidate.outboxIds.length) return undefined;
+      const evidence = this.permanentFailureEvidence(current, fresh.serverByKey);
+      const matches = candidate.outboxIds.every((rowId) => {
+        const saved = snapshotById.get(rowId);
+        return (
+          saved?.classification === current.classification &&
+          saved.reason === current.reason &&
+          saved.baseRevision === current.baseRevision &&
+          saved.payloadHash === current.payloadHash &&
+          saved.serverState === evidence.serverState &&
+          (current.classification === 'B' || saved.dependencyState === evidence.dependencyState) &&
+          current.outboxIds.includes(rowId)
+        );
+      });
+      return matches ? { current, serverByKey: fresh.serverByKey } : undefined;
+    };
     const batchId = randomUUID();
-    const { candidates, preview: before } = await this.classifyPermanentFailures();
+    const { candidates } = await this.classifyPermanentFailures();
+    const before = snapshot.preview;
+    for (const candidate of candidates) {
+      if (candidate.classification !== 'D') continue;
+      const changedIds = candidate.outboxIds.filter((id) => {
+        const previous = snapshotById.get(id);
+        return previous && previous.classification !== 'D';
+      });
+      if (changedIds.length === 0) continue;
+      changedToHold += changedIds.length;
+      hold(
+        { ...candidate, outboxIds: changedIds },
+        'STALE_PREFLIGHT',
+        'После dry-run запись перешла в D/HOLD и не изменялась.',
+      );
+    }
+    const currentIds = new Set(candidates.flatMap((candidate) => candidate.outboxIds));
+    for (const row of snapshot.rows) {
+      if (row.classification === 'D' || currentIds.has(row.failedRowId)) continue;
+      changedToHold += 1;
+      const candidate = {
+        entityId: row.entityId,
+        entityType: row.entityType,
+        outboxIds: [row.failedRowId],
+      } as PermanentFailureCandidate;
+      hold(candidate, 'STALE_PREFLIGHT', 'FAILED-строка изменилась или исчезла после dry-run.');
+    }
+    let resolvedA = 0;
+    let quarantinedC = 0;
     const resolved = candidates.filter(
       ({ classification }) => classification === 'A' || classification === 'C',
     );
     for (const candidate of resolved) {
-      await this.database.syncOutbox.updateMany({
-        data: { status: 'SYNCED', syncedAt: this.now() },
-        where: { id: { in: candidate.outboxIds }, status: 'FAILED' },
+      const checked = await preflight(candidate);
+      if (!checked) {
+        changedToHold += candidate.outboxIds.length;
+        hold(
+          candidate,
+          'STALE_PREFLIGHT',
+          'Серверное или локальное состояние изменилось после dry-run.',
+        );
+        continue;
+      }
+      await this.database.$transaction(async (transaction) => {
+        const updated = await transaction.syncOutbox.updateMany({
+          data: { status: 'SYNCED', syncedAt: this.now() },
+          where: { id: { in: candidate.outboxIds }, status: 'FAILED' },
+        });
+        if (updated.count !== candidate.outboxIds.length)
+          throw new DomainError('CONFLICT', 'FAILED-строки изменились во время восстановления.');
+        await transaction.syncLog.createMany({
+          data: candidate.outboxIds.map((outboxId) => ({
+            attemptCount: 0,
+            entityId: candidate.entityId,
+            entityType: candidate.entityType,
+            message: `batch=${batchId}; class=${candidate.classification}; ${candidate.reason}`,
+            operation: 'HISTORICAL_FAILURE_RECOVERY',
+            outboxId,
+            result:
+              candidate.classification === 'C'
+                ? 'QUARANTINED'
+                : candidate.resolvedEquivalentLedger
+                  ? 'RESOLVED_EQUIVALENT'
+                  : 'RESOLVED',
+          })),
+        });
       });
-      await this.database.syncLog.createMany({
-        data: candidate.outboxIds.map((outboxId) => ({
-          attemptCount: 0,
-          entityId: candidate.entityId,
-          entityType: candidate.entityType,
-          message: `batch=${batchId}; class=${candidate.classification}; ${candidate.reason}`,
-          operation: 'HISTORICAL_FAILURE_RECOVERY',
-          outboxId,
-          result:
-            candidate.classification === 'C'
-              ? 'QUARANTINED'
-              : candidate.resolvedEquivalentLedger
-                ? 'RESOLVED_EQUIVALENT'
-                : 'RESOLVED',
-        })),
-      });
+      if (candidate.classification === 'A') resolvedA += candidate.outboxIds.length;
+      else quarantinedC += candidate.outboxIds.length;
     }
     const remaining = new Map(
       candidates
@@ -4369,9 +4551,8 @@ export class IntegrationService {
     let replayedB = 0;
     let replayedEntities = 0;
     let attemptedB = 0;
-    let failedB = 0;
     let heldLedgerB = 0;
-    const failureGroups = new Map<string, IntegrationPermanentFailureRecoveryFailureGroup>();
+    const connection = await this.integrationConnection();
     const blockedDependencies = new Set<string>();
     while (remaining.size > 0) {
       const ready = [...remaining.entries()]
@@ -4406,62 +4587,94 @@ export class IntegrationService {
         return false;
       });
       if (dispatchable.length === 0) continue;
-      const freshIds = new Map<string, string>();
       for (const [key, candidate] of dispatchable) {
-        const id = randomUUID();
-        freshIds.set(key, id);
-        await this.database.syncOutbox.create({
-          data: {
-            entityId: candidate.entityId,
-            entityType: candidate.entityType,
-            id,
-            idempotencyKey: `historical-recovery:${createHash('sha256')
-              .update(`${key}:${candidate.payloadHash}`)
-              .digest('hex')}`,
-            baseRevision: candidate.baseRevision,
-            nextAttemptAt: this.now(),
-            operation: candidate.operation,
-            payloadJson: '{}',
-            payloadVersion: 2,
-            updatedAt: this.now(),
-          },
-        });
-      }
-      let previousPending = Number.POSITIVE_INFINITY;
-      for (
-        let pass = 0;
-        pass < Math.ceil(dispatchable.length / INTEGRATION_BATCH_SIZE) + 2;
-        pass += 1
-      ) {
-        const pending = await this.database.syncOutbox.count({
-          where: { id: { in: [...freshIds.values()] }, status: 'PENDING' },
-        });
-        if (pending === 0 || pending >= previousPending) break;
-        previousPending = pending;
-        await this.processPending();
-      }
-      const freshRows = await this.database.syncOutbox.findMany({
-        select: { id: true, lastErrorCode: true, status: true },
-        where: { id: { in: [...freshIds.values()] } },
-      });
-      const statusById = new Map(
-        freshRows.map(({ id, lastErrorCode, status }) => [id, { lastErrorCode, status }]),
-      );
-      for (const [key, candidate] of dispatchable) {
-        const freshId = freshIds.get(key);
         attemptedB += candidate.outboxIds.length;
-        const fresh = freshId ? statusById.get(freshId) : undefined;
-        if (fresh?.status === 'SYNCED' && !fresh.lastErrorCode) {
+        const checked = await preflight(candidate);
+        if (!checked) {
+          changedToHold += candidate.outboxIds.length;
+          blockedDependencies.add(key);
+          hold(candidate, 'STALE_PREFLIGHT', 'Класс или server state изменились после dry-run.');
+          remaining.delete(key);
+          continue;
+        }
+        const parentUnavailable = checked.current.dependencyKeys.some(
+          (dependencyKey) =>
+            dependencyKey !== key && checked.serverByKey.get(dependencyKey)?.operation !== 'UPSERT',
+        );
+        if (parentUnavailable) {
+          blockedDependencies.add(key);
+          hold(candidate, 'DEPENDENCY_HOLD', 'Родительская сущность ещё не подтверждена сервером.');
+          remaining.delete(key);
+          continue;
+        }
+        const idempotencyKey = `historical-recovery:${createHash('sha256')
+          .update(`${key}:${checked.current.payloadHash}`)
+          .digest('hex')}`;
+        try {
+          const envelope = await this.buildEnvelope(
+            checked.current.entityType,
+            checked.current.entityId,
+            checked.current.operation,
+            idempotencyKey,
+            checked.current.baseRevision,
+          );
+          if (recoveryPayloadHash(envelope.payload) !== checked.current.payloadHash) {
+            throw new IntegrationApiError(
+              'STALE_PREFLIGHT',
+              false,
+              'Локальные данные изменились во время подготовки payload.',
+            );
+          }
+          const acknowledgement = await this.api.syncBatch(
+            connection.baseUrl,
+            connection.deviceId,
+            connection.token,
+            [envelope],
+          );
+          const accepted = acknowledgement.accepted[0];
+          if (
+            acknowledgement.accepted.length !== 1 ||
+            accepted?.status !== 'ACCEPTED' ||
+            accepted.idempotencyKey !== idempotencyKey ||
+            accepted.entityId !== candidate.entityId ||
+            accepted.canonicalPayload.id !== candidate.entityId
+          ) {
+            throw new IntegrationApiError(
+              'RECOVERY_REJECTED',
+              false,
+              'Сервер не подтвердил восстановление.',
+            );
+          }
+          if (acknowledgement.deviceToken)
+            await this.credentials.saveToken(acknowledgement.deviceToken);
+          const sourceId = candidate.outboxIds[0];
+          if (!sourceId)
+            throw new IntegrationApiError('INVALID_RESPONSE', false, 'Нет исходной FAILED-строки.');
+          await this.recordOutboundAcknowledgements(
+            [
+              {
+                baseRevision: checked.current.baseRevision,
+                entityId: candidate.entityId,
+                entityType: candidate.entityType,
+                id: sourceId,
+                idempotencyKey,
+                operation: candidate.operation,
+                payloadJson: JSON.stringify(envelope.payload),
+              },
+            ],
+            acknowledgement.accepted,
+            new Date(acknowledgement.serverTimestamp),
+          );
           await this.database.syncOutbox.updateMany({
             data: { status: 'SYNCED', syncedAt: this.now() },
-            where: { id: { in: candidate.outboxIds }, status: 'FAILED' },
+            where: { id: { in: candidate.outboxIds.slice(1) }, status: 'FAILED' },
           });
           await this.database.syncLog.createMany({
             data: candidate.outboxIds.map((outboxId) => ({
               attemptCount: 0,
               entityId: candidate.entityId,
               entityType: candidate.entityType,
-              message: `batch=${batchId}; class=B; replayOutboxId=${freshId ?? 'unknown'}`,
+              message: `batch=${batchId}; class=B; idempotencyKey=${idempotencyKey}`,
               operation: 'HISTORICAL_FAILURE_RECOVERY',
               outboxId,
               result: 'RECOVERED',
@@ -4469,25 +4682,16 @@ export class IntegrationService {
           });
           replayedB += candidate.outboxIds.length;
           replayedEntities += 1;
-        } else {
-          blockedDependencies.add(key);
+        } catch (error) {
           failedB += candidate.outboxIds.length;
-          const errorCode = fresh?.lastErrorCode ?? fresh?.status ?? 'RECOVERY_NOT_DISPATCHED';
-          const reason =
-            errorCode === 'SYNC_CONFLICT'
-              ? 'Сервер не принял current-schema recovery из-за revision-конфликта.'
-              : 'Fresh recovery-операция не была подтверждена сервером.';
-          const groupKey = `${candidate.entityType}:${errorCode}:${reason}`;
-          const group = failureGroups.get(groupKey) ?? {
-            count: 0,
-            entityType: candidate.entityType,
-            errorCode,
-            examples: [],
-            reason,
-          };
-          group.count += candidate.outboxIds.length;
-          if (group.examples.length < 3) group.examples.push(candidate.entityId);
-          failureGroups.set(groupKey, group);
+          blockedDependencies.add(key);
+          hold(
+            candidate,
+            error instanceof IntegrationApiError ? error.errorCode : 'RECOVERY_ERROR',
+            error instanceof Error
+              ? error.message.slice(0, 300)
+              : 'Recovery не подтверждён сервером.',
+          );
         }
         remaining.delete(key);
       }
@@ -4501,16 +4705,16 @@ export class IntegrationService {
           before: Object.fromEntries(
             Object.entries(before.classifications).map(([key, value]) => [key, value.total]),
           ),
-          quarantinedC: before.classifications.C.total,
+          quarantinedC,
           replayedB,
           replayedEntities,
-          resolvedA: before.classifications.A.total,
+          resolvedA,
         }),
         entityId: batchId,
         entityType: 'SyncOutboxRecovery',
       },
     });
-    const after = (await this.classifyPermanentFailures()).preview;
+    const after = await this.previewPermanentFailureRecovery(token);
     const skippedDependency = [...remaining.values()].reduce(
       (total, candidate) => total + candidate.outboxIds.length,
       0,
@@ -4520,14 +4724,15 @@ export class IntegrationService {
       attemptedB,
       batchId,
       before,
+      changedToHold,
       failedB,
       failureGroups: [...failureGroups.values()],
       heldD: after.classifications.D.total,
       heldLedgerB,
-      quarantinedC: before.classifications.C.total,
+      quarantinedC,
       replayedB,
       replayedEntities,
-      resolvedA: before.classifications.A.total,
+      resolvedA,
       skippedDependency,
     };
   }

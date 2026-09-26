@@ -3129,6 +3129,7 @@ export interface IntegrationPermanentFailureBucket {
 
 export interface IntegrationPermanentFailurePreview {
   checkedAt: string;
+  snapshotId?: string;
   classifications: Record<
     IntegrationPermanentFailureClassification,
     IntegrationPermanentFailureBucket
@@ -3147,6 +3148,7 @@ export interface IntegrationPermanentFailureRecoveryResult {
   attemptedB: number;
   batchId: string;
   before: IntegrationPermanentFailurePreview;
+  changedToHold: number;
   failedB: number;
   failureGroups: IntegrationPermanentFailureRecoveryFailureGroup[];
   heldD: number;
@@ -3701,7 +3703,10 @@ export interface AravaDesktopApi {
       token: string,
     ) => Promise<IntegrationPermanentFailureRecoveryDiagnostics>;
     previewPermanentFailureRecovery: (token: string) => Promise<IntegrationPermanentFailurePreview>;
-    recoverPermanentFailures: (token: string) => Promise<IntegrationPermanentFailureRecoveryResult>;
+    recoverPermanentFailures: (
+      token: string,
+      snapshotId: string,
+    ) => Promise<IntegrationPermanentFailureRecoveryResult>;
     onDataChanged: (listener: (entityType: string) => void) => () => void;
     listConflicts: (token: string) => Promise<IntegrationConflictSummary[]>;
     resolveConflict: (

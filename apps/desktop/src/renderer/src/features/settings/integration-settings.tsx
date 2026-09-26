@@ -293,12 +293,15 @@ export function IntegrationSettings() {
     onError: (error) => setNotice(errorMessage(error)),
   });
   const permanentFailureRecovery = useMutation({
-    mutationFn: () => getDesktopApi().integration.recoverPermanentFailures(getSessionToken()),
+    mutationFn: (snapshotId: string) => {
+      if (!snapshotId) throw new Error('Сначала проверьте старые ошибки заново.');
+      return getDesktopApi().integration.recoverPermanentFailures(getSessionToken(), snapshotId);
+    },
     onError: (error) => setNotice(errorMessage(error)),
     onSuccess: async (result) => {
       setFailureRecoveryConfirmationOpen(false);
       setNotice(
-        `Восстановление: B попытка ${String(result.attemptedB)}, успешно ${String(result.replayedB)}, ошибка ${String(result.failedB)}, зависимости ${String(result.skippedDependency)}, ledger HOLD ${String(result.heldLedgerB)}.`,
+        `Восстановление: A разрешено ${String(result.resolvedA)}, B восстановлено ${String(result.replayedB)}, изменилось и удержано ${String(result.changedToHold)}, ошибка ${String(result.failedB)}, зависимости ${String(result.skippedDependency)}, ledger HOLD ${String(result.heldLedgerB)}; осталось ${String(result.after.failedRows)}.`,
       );
       await refresh();
     },
@@ -1026,6 +1029,32 @@ export function IntegrationSettings() {
           </Button>
         </div>
 
+        {permanentFailureRecovery.data ? (
+          <div
+            className="space-y-3 rounded-2xl border border-border bg-background p-5 text-sm"
+            data-testid="permanent-failure-recovery-result"
+          >
+            <h3 className="text-lg font-semibold">Результат восстановления</h3>
+            <p>
+              До: {permanentFailureRecovery.data.before.failedRows}; попыток B:{' '}
+              {permanentFailureRecovery.data.attemptedB}; разрешено A:{' '}
+              {permanentFailureRecovery.data.resolvedA}; восстановлено B:{' '}
+              {permanentFailureRecovery.data.replayedB}; закрыто C:{' '}
+              {permanentFailureRecovery.data.quarantinedC}; изменилось и удержано:{' '}
+              {permanentFailureRecovery.data.changedToHold}; ошибок B:{' '}
+              {permanentFailureRecovery.data.failedB}; пропущено по зависимостям:{' '}
+              {permanentFailureRecovery.data.skippedDependency}; удержано B ledger:{' '}
+              {permanentFailureRecovery.data.heldLedgerB}; осталось FAILED:{' '}
+              {permanentFailureRecovery.data.after.failedRows}.
+            </p>
+            {permanentFailureRecovery.data.failureGroups.map((group) => (
+              <p key={`${group.entityType}:${group.errorCode}:${group.reason}`}>
+                {entityLabels[group.entityType] ?? group.entityType} · {group.errorCode}:{' '}
+                {group.reason} ({group.count})
+              </p>
+            ))}
+          </div>
+        ) : null}
         {(() => {
           const result = permanentFailureRecovery.data?.after ?? failureRecoveryPreview.data;
           if (!result) return null;
@@ -1041,8 +1070,8 @@ export function IntegrationSettings() {
               <div>
                 <h3 className="text-lg font-semibold">Проверка старых ошибок</h3>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Dry-run проверил {result.failedRows} FAILED-записей. Исходные старые payload не
-                  переотправляются.
+                  Dry-run проверил {result.failedRows} FAILED-записей и сохранил локальный снимок по
+                  каждой строке. Исходные старые payload не переотправляются.
                 </p>
               </div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1073,8 +1102,8 @@ export function IntegrationSettings() {
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-sm text-muted-foreground">
-                  D/HOLD не изменяется. Финансовые ledger-записи восстанавливаются только по
-                  доказанной idempotent identity.
+                  D/HOLD не изменяется. Финансовые ledger-записи B удерживаются до отдельной
+                  проверки idempotent identity и финансового эффекта.
                 </p>
                 {safeCount > 0 && !failureRecoveryConfirmationOpen ? (
                   <Button
@@ -1093,9 +1122,10 @@ export function IntegrationSettings() {
                 >
                   <p className="font-semibold">Восстановить безопасные ошибки?</p>
                   <p>
-                    A будет помечено как уже представленное на сервере, B отправлено заново через
-                    текущий serializer, C помещено в карантин, D останется без изменений.
-                    Оригинальные MATERIALIZED/v1 payload не переотправляются.
+                    Перед каждой строкой сервер будет проверен заново. A будет помечено как уже
+                    представленное на сервере, безопасные B отправлены через текущий serializer, C
+                    помещены в карантин, D и B ledger останутся без изменений. Изменившиеся строки
+                    будут удержаны. Оригинальные MATERIALIZED/v1 payload не переотправляются.
                   </p>
                   <div className="flex justify-end gap-2">
                     <Button
@@ -1107,7 +1137,7 @@ export function IntegrationSettings() {
                     </Button>
                     <Button
                       disabled={permanentFailureRecovery.isPending}
-                      onClick={() => permanentFailureRecovery.mutate()}
+                      onClick={() => permanentFailureRecovery.mutate(result.snapshotId ?? '')}
                     >
                       {permanentFailureRecovery.isPending
                         ? 'Восстанавливаем…'
