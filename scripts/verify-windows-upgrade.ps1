@@ -1,6 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string]$CurrentInstaller
+  [string]$CurrentInstaller,
+  [Parameter(Mandatory = $true)]
+  [string]$ExpectedVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +46,13 @@ function Wait-ForInstalledExecutable([string]$ExpectedPath, [string]$InstallerNa
   throw "$InstallerName installer did not register or create ARAVA CRM.exe"
 }
 
+function Install-IntoTestDirectory([string]$InstallerPath, [string]$InstallerName, [string]$InstallDirectory) {
+  $process = Start-Process -FilePath $InstallerPath -ArgumentList @('/S', "/D=$InstallDirectory") -PassThru -Wait
+  if ($process.ExitCode -ne 0) {
+    throw "$InstallerName installer exited with code $($process.ExitCode)"
+  }
+}
+
 $oldReleaseDirectory = Join-Path $env:RUNNER_TEMP 'arava-old-release'
 New-Item -ItemType Directory -Force -Path $oldReleaseDirectory | Out-Null
 
@@ -53,10 +62,10 @@ gh release download v0.5.1 `
   --dir $oldReleaseDirectory
 
 $oldInstaller = Join-Path $oldReleaseDirectory 'ARAVA-CRM-0.5.1-x64.exe'
-$installDirectory = Join-Path $env:LOCALAPPDATA 'Programs\ARAVA CRM'
+$installDirectory = Join-Path $env:LOCALAPPDATA 'ARAVA-CRM-upgrade-verification'
 $installedExecutable = Join-Path $installDirectory 'ARAVA CRM.exe'
 
-Start-Process -FilePath $oldInstaller -ArgumentList '/S' -Wait
+Install-IntoTestDirectory $oldInstaller 'The 0.5.1' $installDirectory
 $installedExecutable = Wait-ForInstalledExecutable $installedExecutable 'The 0.5.1'
 
 $dataDirectory = Join-Path $env:APPDATA '@arava\desktop'
@@ -76,10 +85,19 @@ $before = @{
   media = (Get-FileHash $mediaPath -Algorithm SHA256).Hash
 }
 
-Start-Process -FilePath $CurrentInstaller -ArgumentList '/S' -Wait
+Install-IntoTestDirectory $CurrentInstaller 'The current' $installDirectory
 $updatedExecutable = Wait-ForInstalledExecutable $installedExecutable 'The current'
 if ($updatedExecutable -ne $installedExecutable) {
   throw "The current installer did not update the existing installation in place"
+}
+
+$metadataPath = Join-Path (Split-Path $updatedExecutable -Parent) 'resources\\app-metadata.json'
+if (-not (Test-Path $metadataPath)) {
+  throw 'The current installer did not include app-metadata.json'
+}
+$installedVersion = (Get-Content $metadataPath -Raw | ConvertFrom-Json).version
+if ($installedVersion -ne $ExpectedVersion) {
+  throw "The current installer version '$installedVersion' does not match expected '$ExpectedVersion'"
 }
 
 $after = @{

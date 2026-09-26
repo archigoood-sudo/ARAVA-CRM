@@ -49,9 +49,10 @@ jobs:
       - name: Verify in-place upgrade preserves application data
         shell: pwsh
         run: |
-          $installer = Get-ChildItem apps/desktop/release/ARAVA-CRM-*-x64.exe | Select-Object -First 1
-          if (-not $installer) { throw 'Windows installer was not produced' }
-          ./scripts/verify-windows-upgrade.ps1 -CurrentInstaller $installer.FullName
+          $version = node -p "require('./apps/desktop/package.json').version"
+          $installer = Join-Path $PWD "apps/desktop/release/ARAVA-CRM-$version-x64.exe"
+          if (-not (Test-Path $installer)) { throw "Current installer was not produced: $installer" }
+          ./scripts/verify-windows-upgrade.ps1 -CurrentInstaller $installer -ExpectedVersion $version
       - uses: actions/upload-artifact@v4
         with:
           name: arava-crm-windows-installer
