@@ -103,6 +103,8 @@ const desktopApi: AravaDesktopApi = {
     confirmInitialSync: (token) => invoke(IPC_CHANNELS.integrationConfirmInitialSync, token),
     confirmReconciliation: (token) => invoke(IPC_CHANNELS.integrationConfirmReconciliation, token),
     diagnose: (token) => invoke(IPC_CHANNELS.integrationDiagnose, token),
+    diagnosePermanentFailureRecovery: (token) =>
+      invoke(IPC_CHANNELS.integrationDiagnosePermanentFailureRecovery, token),
     previewPermanentFailureRecovery: (token) =>
       invoke(IPC_CHANNELS.integrationPreviewPermanentFailureRecovery, token),
     recoverPermanentFailures: (token) =>

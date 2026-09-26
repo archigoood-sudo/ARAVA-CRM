@@ -349,6 +349,7 @@ export const IPC_CHANNELS = {
   globalSearch: 'global-search:query',
   integrationConfirmInitialSync: 'integration:confirm-initial-sync',
   integrationDiagnose: 'integration:diagnose',
+  integrationDiagnosePermanentFailureRecovery: 'integration:diagnose-permanent-failure-recovery',
   integrationPreviewPermanentFailureRecovery: 'integration:preview-permanent-failure-recovery',
   integrationRecoverPermanentFailures: 'integration:recover-permanent-failures',
   integrationDataChanged: 'integration:data-changed',
@@ -3143,13 +3144,36 @@ export interface IntegrationPermanentFailurePreview {
 
 export interface IntegrationPermanentFailureRecoveryResult {
   after: IntegrationPermanentFailurePreview;
+  attemptedB: number;
   batchId: string;
   before: IntegrationPermanentFailurePreview;
+  failedB: number;
+  failureGroups: IntegrationPermanentFailureRecoveryFailureGroup[];
   heldD: number;
+  heldLedgerB: number;
   quarantinedC: number;
   replayedB: number;
   replayedEntities: number;
   resolvedA: number;
+  skippedDependency: number;
+}
+
+export interface IntegrationPermanentFailureRecoveryFailureGroup {
+  count: number;
+  entityType: string;
+  errorCode: string;
+  examples: string[];
+  reason: string;
+}
+
+export interface IntegrationPermanentFailureRecoveryDiagnostics {
+  attemptedB: number;
+  failed: number;
+  groups: IntegrationPermanentFailureRecoveryFailureGroup[];
+  heldD: number;
+  skippedDependency: number;
+  sourceRowsResolved: number;
+  succeeded: number;
 }
 
 export interface IntegrationPermanentFailureEvidence {
@@ -3673,6 +3697,9 @@ export interface AravaDesktopApi {
     claimWebsiteAuthority: (token: string) => Promise<IntegrationStatus>;
     confirmInitialSync: (token: string) => Promise<IntegrationStatus>;
     diagnose: (token: string) => Promise<IntegrationDiagnostics>;
+    diagnosePermanentFailureRecovery: (
+      token: string,
+    ) => Promise<IntegrationPermanentFailureRecoveryDiagnostics>;
     previewPermanentFailureRecovery: (token: string) => Promise<IntegrationPermanentFailurePreview>;
     recoverPermanentFailures: (token: string) => Promise<IntegrationPermanentFailureRecoveryResult>;
     onDataChanged: (listener: (entityType: string) => void) => () => void;

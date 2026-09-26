@@ -3277,6 +3277,66 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(protectedPreview.classifications.D.total).toBe(1);
   });
 
+  it('replays every non-financial B with its historical base revision across recovery batches', async () => {
+    await pair();
+    const branches = [];
+    for (let index = 0; index < INTEGRATION_BATCH_SIZE + 3; index += 1) {
+      branches.push(
+        await application.createBranch(ownerToken, { name: `Recovery revision ${String(index)}` }),
+      );
+    }
+    const outbox = await database.syncOutbox.findMany({
+      where: { entityId: { in: branches.map(({ id }) => id) }, entityType: 'BRANCH' },
+    });
+    for (const branch of branches) {
+      const row = outbox.find(({ entityId }) => entityId === branch.id);
+      if (!row) throw new Error('Missing branch outbox row');
+      await database.syncOutbox.update({
+        data: {
+          baseRevision: 7,
+          lastErrorCode: 'VALIDATION_ERROR',
+          payloadJson: JSON.stringify({ id: branch.id, legacyUnknownField: true }),
+          payloadVersion: 1,
+          status: 'FAILED',
+        },
+        where: { id: row.id },
+      });
+      canonical.set(`BRANCH:${branch.id}`, {
+        operation: 'UPSERT',
+        payload: {
+          ...(await integration.safePayload('BRANCH', branch.id)),
+          name: 'Серверная база',
+        },
+        revision: 7,
+        sequence: 20_000 + branches.indexOf(branch),
+      });
+    }
+    received.length = 0;
+
+    const result = await integration.recoverPermanentFailures(ownerToken);
+
+    expect(result).toMatchObject({
+      attemptedB: branches.length,
+      failedB: 0,
+      replayedB: branches.length,
+      replayedEntities: branches.length,
+    });
+    expect(await database.syncOutbox.count({ where: { status: 'FAILED' } })).toBe(0);
+    const recoveryOperations = received
+      .filter(({ method, path }) => method === 'POST' && path === '/api/integration/v1/sync/batch')
+      .flatMap(({ operations }) => {
+        const value: unknown = operations;
+        return Array.isArray(value)
+          ? value.filter(
+              (operation): operation is Record<string, unknown> =>
+                operation !== null && typeof operation === 'object',
+            )
+          : [];
+      });
+    expect(recoveryOperations).toHaveLength(branches.length);
+    expect(recoveryOperations.every((operation) => operation.baseRevision === 7)).toBe(true);
+  });
+
   it('allows ADMIN to observe sync health but keeps configuration OWNER-only and denies COACH', async () => {
     const branch = await application.createBranch(ownerToken, { name: 'Доступ' });
     for (const role of ['ADMIN', 'COACH'] as const) {

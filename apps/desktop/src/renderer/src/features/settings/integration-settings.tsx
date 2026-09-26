@@ -287,13 +287,18 @@ export function IntegrationSettings() {
       setNotice('Проверка завершена. До подтверждения данные не изменяются.');
     },
   });
+  const recoveryDiagnostics = useMutation({
+    mutationFn: () =>
+      getDesktopApi().integration.diagnosePermanentFailureRecovery(getSessionToken()),
+    onError: (error) => setNotice(errorMessage(error)),
+  });
   const permanentFailureRecovery = useMutation({
     mutationFn: () => getDesktopApi().integration.recoverPermanentFailures(getSessionToken()),
     onError: (error) => setNotice(errorMessage(error)),
     onSuccess: async (result) => {
       setFailureRecoveryConfirmationOpen(false);
       setNotice(
-        `Безопасное восстановление завершено: A ${String(result.resolvedA)}, B ${String(result.replayedB)}, C ${String(result.quarantinedC)}, D/HOLD ${String(result.heldD)}.`,
+        `Восстановление: B попытка ${String(result.attemptedB)}, успешно ${String(result.replayedB)}, ошибка ${String(result.failedB)}, зависимости ${String(result.skippedDependency)}, ledger HOLD ${String(result.heldLedgerB)}.`,
       );
       await refresh();
     },
@@ -980,6 +985,14 @@ export function IntegrationSettings() {
               ? 'Проверяем старые ошибки…'
               : 'Проверить старые ошибки'}
           </Button>
+          <Button
+            disabled={!status.data?.isPaired || recoveryDiagnostics.isPending}
+            onClick={() => recoveryDiagnostics.mutate()}
+            variant="outline"
+          >
+            <Stethoscope className="size-4" />
+            {recoveryDiagnostics.isPending ? 'Проверяем попытку…' : 'Диагностика восстановления'}
+          </Button>
           <Button disabled={preview.isFetching} onClick={() => void prepare()} variant="outline">
             <CloudCog className="size-4" /> Первичная синхронизация
           </Button>
@@ -1106,6 +1119,26 @@ export function IntegrationSettings() {
             </div>
           );
         })()}
+        {recoveryDiagnostics.data ? (
+          <div className="space-y-3 rounded-2xl border border-amber-300 bg-amber-50 p-5 text-sm text-amber-950">
+            <p className="font-semibold">Результат предыдущей попытки восстановления</p>
+            <p>
+              Попыток B: {recoveryDiagnostics.data.attemptedB}; сервер подтвердил:{' '}
+              {recoveryDiagnostics.data.succeeded}; исходных B помечено восстановленными:{' '}
+              {recoveryDiagnostics.data.sourceRowsResolved}; ошибок:{' '}
+              {recoveryDiagnostics.data.failed}; пропущено по зависимостям:{' '}
+              {recoveryDiagnostics.data.skippedDependency}; D/HOLD: {recoveryDiagnostics.data.heldD}
+              .
+            </p>
+            {recoveryDiagnostics.data.groups.map((group) => (
+              <p key={`${group.entityType}:${group.errorCode}:${group.reason}`}>
+                {entityLabels[group.entityType] ?? group.entityType} · {group.errorCode} ·{' '}
+                {group.count}: {group.reason}
+                {group.examples.length > 0 ? ` Примеры: ${group.examples.join(', ')}.` : ''}
+              </p>
+            ))}
+          </div>
+        ) : null}
 
         <Dialog
           closeLabel="Закрыть"

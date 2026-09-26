@@ -20,6 +20,8 @@ import type {
   IntegrationDiagnosticCheck,
   IntegrationDiagnostics,
   IntegrationPermanentFailureClassification,
+  IntegrationPermanentFailureRecoveryDiagnostics,
+  IntegrationPermanentFailureRecoveryFailureGroup,
   IntegrationPermanentFailurePreview,
   IntegrationPermanentFailureRecoveryResult,
   IntegrationDeviceSummary,
@@ -2571,6 +2573,7 @@ const ENTITY_PRIORITY: Record<SyncEntityType, number> = {
 };
 
 interface PermanentFailureCandidate {
+  baseRevision: number;
   classification: IntegrationPermanentFailureClassification;
   dependencyKeys: string[];
   entityId: string;
@@ -4027,6 +4030,7 @@ export class IntegrationService {
       const first = rows[0];
       if (!first || !INBOUND_ENTITY_TYPES.has(first.entityType as InboundChange['entityType'])) {
         candidates.push({
+          baseRevision: rows.at(-1)?.baseRevision ?? 0,
           classification: 'D',
           dependencyKeys: [],
           entityId: first?.entityId ?? key,
@@ -4046,6 +4050,7 @@ export class IntegrationService {
         payload = await this.safePayload(entityType, first.entityId);
       } catch {
         candidates.push({
+          baseRevision: rows.at(-1)?.baseRevision ?? 0,
           classification: 'D',
           dependencyKeys: [],
           entityId: first.entityId,
@@ -4136,6 +4141,7 @@ export class IntegrationService {
         reason = 'Текущая локальная сущность отсутствует на сервере и пригодна к восстановлению.';
       }
       candidates.push({
+        baseRevision: latest.baseRevision,
         classification,
         dependencyKeys:
           operation === 'ARCHIVE' ? [] : payloadDependencyKeys(entityType, canonicalPayload),
@@ -4218,6 +4224,109 @@ export class IntegrationService {
     return (await this.classifyPermanentFailures()).preview;
   }
 
+  async diagnosePermanentFailureRecovery(
+    token: string,
+  ): Promise<IntegrationPermanentFailureRecoveryDiagnostics> {
+    await this.assertOwner(token);
+    const { candidates } = await this.classifyPermanentFailures();
+    const remainingB = new Map(
+      candidates
+        .filter((candidate) => candidate.classification === 'B')
+        .map((candidate) => [
+          recoveryEntityKey(candidate.entityType, candidate.entityId),
+          candidate,
+        ]),
+    );
+    const recoveryRows = await this.database.syncOutbox.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: {
+        baseRevision: true,
+        entityId: true,
+        entityType: true,
+        id: true,
+        lastErrorCode: true,
+        status: true,
+      },
+      where: { idempotencyKey: { startsWith: 'historical-recovery:' } },
+    });
+    const latestByKey = new Map<string, (typeof recoveryRows)[number]>();
+    for (const row of recoveryRows) {
+      const key = recoveryEntityKey(row.entityType, row.entityId);
+      if (remainingB.has(key) && !latestByKey.has(key)) latestByKey.set(key, row);
+    }
+    const logs = await this.database.syncLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: { errorCode: true, message: true, outboxId: true },
+      where: { outboxId: { in: [...latestByKey.values()].map(({ id }) => id) } },
+    });
+    const latestLogByOutboxId = new Map<string, (typeof logs)[number]>();
+    for (const log of logs) {
+      if (log.outboxId && !latestLogByOutboxId.has(log.outboxId))
+        latestLogByOutboxId.set(log.outboxId, log);
+    }
+    const groups = new Map<string, IntegrationPermanentFailureRecoveryFailureGroup>();
+    const addGroup = (candidate: PermanentFailureCandidate, errorCode: string, reason: string) => {
+      const key = `${candidate.entityType}:${errorCode}:${reason}`;
+      const group = groups.get(key) ?? {
+        count: 0,
+        entityType: candidate.entityType,
+        errorCode,
+        examples: [],
+        reason,
+      };
+      group.count += candidate.outboxIds.length;
+      if (group.examples.length < 3) group.examples.push(candidate.entityId);
+      groups.set(key, group);
+    };
+    let failed = 0;
+    let skippedDependency = 0;
+    let succeeded = 0;
+    for (const [key, candidate] of remainingB) {
+      const row = latestByKey.get(key);
+      if (!row) {
+        skippedDependency += candidate.outboxIds.length;
+        addGroup(candidate, 'RECOVERY_NOT_DISPATCHED', 'Нет свежей recovery-операции для этой B.');
+        continue;
+      }
+      if (row.status === 'SYNCED' && !row.lastErrorCode) {
+        succeeded += candidate.outboxIds.length;
+        addGroup(
+          candidate,
+          'RECOVERY_ACKNOWLEDGED_SOURCE_UNRESOLVED',
+          'Сервер подтвердил recovery, но исходная historical B не была помечена SYNCED.',
+        );
+        continue;
+      }
+      const log = latestLogByOutboxId.get(row.id);
+      const errorCode = row.lastErrorCode ?? log?.errorCode ?? row.status;
+      const reason =
+        errorCode === 'SYNC_CONFLICT' && row.baseRevision === 0 && candidate.baseRevision > 0
+          ? `Recovery отправил baseRevision=0 вместо historical baseRevision=${String(candidate.baseRevision)}.`
+          : (log?.message ?? 'Recovery-операция не была подтверждена сервером.');
+      failed += candidate.outboxIds.length;
+      addGroup(candidate, errorCode, reason);
+    }
+    const sourceRowsResolved = await this.database.syncLog.count({
+      where: { operation: 'HISTORICAL_FAILURE_RECOVERY', result: 'RECOVERED' },
+    });
+    return {
+      attemptedB: latestByKey.size,
+      failed,
+      groups: [...groups.values()].sort(
+        (left, right) =>
+          left.entityType.localeCompare(right.entityType) ||
+          left.errorCode.localeCompare(right.errorCode) ||
+          left.reason.localeCompare(right.reason),
+      ),
+      heldD: candidates
+        .filter((candidate) => candidate.classification === 'D')
+        .reduce((total, candidate) => total + candidate.outboxIds.length, 0),
+      skippedDependency,
+      sourceRowsResolved,
+      succeeded,
+    };
+  }
+
   async recoverPermanentFailures(
     token: string,
   ): Promise<IntegrationPermanentFailureRecoveryResult> {
@@ -4259,6 +4368,10 @@ export class IntegrationService {
     );
     let replayedB = 0;
     let replayedEntities = 0;
+    let attemptedB = 0;
+    let failedB = 0;
+    let heldLedgerB = 0;
+    const failureGroups = new Map<string, IntegrationPermanentFailureRecoveryFailureGroup>();
     const blockedDependencies = new Set<string>();
     while (remaining.size > 0) {
       const ready = [...remaining.entries()]
@@ -4274,8 +4387,27 @@ export class IntegrationService {
             left.entityId.localeCompare(right.entityId),
         );
       if (ready.length === 0) break;
+      const dispatchable = ready.filter(([key, candidate]) => {
+        if (candidate.entityType !== 'SUBSCRIPTION_LEDGER') return true;
+        blockedDependencies.add(key);
+        remaining.delete(key);
+        heldLedgerB += candidate.outboxIds.length;
+        const groupKey = `${candidate.entityType}:LEDGER_HOLD:Финансовый ledger удержан до отдельной проверки.`;
+        const group = failureGroups.get(groupKey) ?? {
+          count: 0,
+          entityType: candidate.entityType,
+          errorCode: 'LEDGER_HOLD',
+          examples: [],
+          reason: 'Финансовый ledger удержан до отдельной проверки.',
+        };
+        group.count += candidate.outboxIds.length;
+        if (group.examples.length < 3) group.examples.push(candidate.entityId);
+        failureGroups.set(groupKey, group);
+        return false;
+      });
+      if (dispatchable.length === 0) continue;
       const freshIds = new Map<string, string>();
-      for (const [key, candidate] of ready) {
+      for (const [key, candidate] of dispatchable) {
         const id = randomUUID();
         freshIds.set(key, id);
         await this.database.syncOutbox.create({
@@ -4286,6 +4418,7 @@ export class IntegrationService {
             idempotencyKey: `historical-recovery:${createHash('sha256')
               .update(`${key}:${candidate.payloadHash}`)
               .digest('hex')}`,
+            baseRevision: candidate.baseRevision,
             nextAttemptAt: this.now(),
             operation: candidate.operation,
             payloadJson: '{}',
@@ -4295,7 +4428,11 @@ export class IntegrationService {
         });
       }
       let previousPending = Number.POSITIVE_INFINITY;
-      for (let pass = 0; pass < Math.ceil(ready.length / INTEGRATION_BATCH_SIZE) + 2; pass += 1) {
+      for (
+        let pass = 0;
+        pass < Math.ceil(dispatchable.length / INTEGRATION_BATCH_SIZE) + 2;
+        pass += 1
+      ) {
         const pending = await this.database.syncOutbox.count({
           where: { id: { in: [...freshIds.values()] }, status: 'PENDING' },
         });
@@ -4304,13 +4441,17 @@ export class IntegrationService {
         await this.processPending();
       }
       const freshRows = await this.database.syncOutbox.findMany({
-        select: { id: true, status: true },
+        select: { id: true, lastErrorCode: true, status: true },
         where: { id: { in: [...freshIds.values()] } },
       });
-      const statusById = new Map(freshRows.map(({ id, status }) => [id, status]));
-      for (const [key, candidate] of ready) {
+      const statusById = new Map(
+        freshRows.map(({ id, lastErrorCode, status }) => [id, { lastErrorCode, status }]),
+      );
+      for (const [key, candidate] of dispatchable) {
         const freshId = freshIds.get(key);
-        if (freshId && statusById.get(freshId) === 'SYNCED') {
+        attemptedB += candidate.outboxIds.length;
+        const fresh = freshId ? statusById.get(freshId) : undefined;
+        if (fresh?.status === 'SYNCED' && !fresh.lastErrorCode) {
           await this.database.syncOutbox.updateMany({
             data: { status: 'SYNCED', syncedAt: this.now() },
             where: { id: { in: candidate.outboxIds }, status: 'FAILED' },
@@ -4320,7 +4461,7 @@ export class IntegrationService {
               attemptCount: 0,
               entityId: candidate.entityId,
               entityType: candidate.entityType,
-              message: `batch=${batchId}; class=B; replayOutboxId=${freshId}`,
+              message: `batch=${batchId}; class=B; replayOutboxId=${freshId ?? 'unknown'}`,
               operation: 'HISTORICAL_FAILURE_RECOVERY',
               outboxId,
               result: 'RECOVERED',
@@ -4330,6 +4471,23 @@ export class IntegrationService {
           replayedEntities += 1;
         } else {
           blockedDependencies.add(key);
+          failedB += candidate.outboxIds.length;
+          const errorCode = fresh?.lastErrorCode ?? fresh?.status ?? 'RECOVERY_NOT_DISPATCHED';
+          const reason =
+            errorCode === 'SYNC_CONFLICT'
+              ? 'Сервер не принял current-schema recovery из-за revision-конфликта.'
+              : 'Fresh recovery-операция не была подтверждена сервером.';
+          const groupKey = `${candidate.entityType}:${errorCode}:${reason}`;
+          const group = failureGroups.get(groupKey) ?? {
+            count: 0,
+            entityType: candidate.entityType,
+            errorCode,
+            examples: [],
+            reason,
+          };
+          group.count += candidate.outboxIds.length;
+          if (group.examples.length < 3) group.examples.push(candidate.entityId);
+          failureGroups.set(groupKey, group);
         }
         remaining.delete(key);
       }
@@ -4353,15 +4511,24 @@ export class IntegrationService {
       },
     });
     const after = (await this.classifyPermanentFailures()).preview;
+    const skippedDependency = [...remaining.values()].reduce(
+      (total, candidate) => total + candidate.outboxIds.length,
+      0,
+    );
     return {
       after,
+      attemptedB,
       batchId,
       before,
+      failedB,
+      failureGroups: [...failureGroups.values()],
       heldD: after.classifications.D.total,
+      heldLedgerB,
       quarantinedC: before.classifications.C.total,
       replayedB,
       replayedEntities,
       resolvedA: before.classifications.A.total,
+      skippedDependency,
     };
   }
 
