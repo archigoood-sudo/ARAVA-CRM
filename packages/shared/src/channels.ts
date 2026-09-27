@@ -3658,6 +3658,7 @@ export interface EmergencyOwnerPreview {
   expiresAt: string;
   failed: number;
   outbox: number;
+  syncLogChanged: number;
   ownerEmail: string;
   ownerId: string;
   ownerName: string;
@@ -3667,6 +3668,7 @@ export interface EmergencyOwnerPreview {
 export interface EmergencyOwnerResult {
   failedAfter: number;
   failedBefore: number;
+  syncLogChanged: number;
   ownerId: string;
   recoveryCode: string;
 }

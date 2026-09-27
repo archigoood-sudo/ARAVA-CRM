@@ -1,4 +1,4 @@
-import { mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -27,6 +27,11 @@ describe('one-time local OWNER recovery', () => {
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'arava-emergency-owner-'));
     databasePath = join(directory, 'arava.db');
+    await mkdir(join(directory, 'integration'));
+    await writeFile(
+      join(directory, 'integration', 'device.json'),
+      '{"deviceId":"preserved-device"}',
+    );
     database = createDatabaseClient(toSqliteUrl(databasePath));
     await initializeDatabase(database);
     const service = new ApplicationService(database);
@@ -166,5 +171,70 @@ describe('one-time local OWNER recovery', () => {
     const after = await database.user.findUniqueOrThrow({ where: { id: ownerId } });
     expect(after.passwordHash).toBe(before.passwordHash);
     expect(await database.syncOutbox.count({ where: { status: 'FAILED' } })).toBe(1);
+  });
+
+  it('allows a growing SyncLog without editing it during credential reset', async () => {
+    const recovery = new EmergencyOwnerRecovery(database, databasePath, true, () =>
+      Promise.resolve(true),
+    );
+    const preview = await recovery.prepare();
+    await recovery.authorize(preview.ticket);
+    await database.syncLog.create({ data: { result: 'SUCCESS', message: 'background sync' } });
+    const result = await recovery.reset(
+      preview.ticket,
+      'Owner!AfterEmergency2026',
+      'ВОССТАНОВИТЬ ВЛАДЕЛЬЦА',
+    );
+    expect(result.syncLogChanged).toBe(1);
+    expect(await database.syncLog.count()).toBe(1);
+  });
+
+  it('rejects same-count SyncOutbox mutation and leaves password unchanged', async () => {
+    const row = await database.syncOutbox.create({
+      data: {
+        entityId: 'preserved-attendance',
+        entityType: 'ATTENDANCE',
+        idempotencyKey: 'preserved-failed-row',
+        nextAttemptAt: new Date(),
+        operation: 'UPSERT',
+        payloadJson: '{}',
+        payloadVersion: 1,
+        status: 'FAILED',
+        updatedAt: new Date(),
+      },
+    });
+    const recovery = new EmergencyOwnerRecovery(database, databasePath, true, () =>
+      Promise.resolve(true),
+    );
+    const preview = await recovery.prepare();
+    await recovery.authorize(preview.ticket);
+    await database.syncOutbox.update({
+      where: { id: row.id },
+      data: { entityId: 'changed-attendance' },
+    });
+    const before = await database.user.findUniqueOrThrow({ where: { id: ownerId } });
+    await expect(
+      recovery.reset(preview.ticket, 'Owner!AfterEmergency2026', 'ВОССТАНОВИТЬ ВЛАДЕЛЬЦА'),
+    ).rejects.toThrow('SyncOutbox изменилось');
+    const after = await database.user.findUniqueOrThrow({ where: { id: ownerId } });
+    expect(after.passwordHash).toBe(before.passwordHash);
+    expect(await database.syncOutbox.count({ where: { status: 'FAILED' } })).toBe(1);
+  });
+
+  it('rejects changed business counts and leaves password unchanged', async () => {
+    const recovery = new EmergencyOwnerRecovery(database, databasePath, true, () =>
+      Promise.resolve(true),
+    );
+    const preview = await recovery.prepare();
+    await recovery.authorize(preview.ticket);
+    await database.branch.create({
+      data: { address: 'Test address', name: 'Background branch', phone: '+79990000000' },
+    });
+    const before = await database.user.findUniqueOrThrow({ where: { id: ownerId } });
+    await expect(
+      recovery.reset(preview.ticket, 'Owner!AfterEmergency2026', 'ВОССТАНОВИТЬ ВЛАДЕЛЬЦА'),
+    ).rejects.toThrow('Branch изменилось');
+    const after = await database.user.findUniqueOrThrow({ where: { id: ownerId } });
+    expect(after.passwordHash).toBe(before.passwordHash);
   });
 });

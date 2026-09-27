@@ -84,8 +84,8 @@ export function EmergencyOwnerRecoveryPage() {
   };
 
   return (
-    <main className="app-drag-region flex min-h-screen items-center justify-center bg-background p-6">
-      <div className="app-no-drag w-full max-w-2xl">
+    <main className="app-no-drag h-screen overflow-y-auto bg-background px-4 py-6 sm:px-6">
+      <div className="mx-auto w-full max-w-2xl">
         <BrandMark className="mb-6 text-foreground" />
         <Card className="rounded-3xl">
           <CardContent className="space-y-5 p-8">
@@ -112,6 +112,9 @@ export function EmergencyOwnerRecoveryPage() {
                 <p>
                   SyncOutbox: {preview.outbox}; постоянных FAILED: {preview.failed}
                 </p>
+                {preview.syncLogChanged !== 0 ? (
+                  <p>SyncLog changed: expected volatile background activity.</p>
+                ) : null}
                 <p>
                   Подготовка действует до {new Date(preview.expiresAt).toLocaleString('ru-RU')}.
                 </p>
@@ -165,6 +168,9 @@ export function EmergencyOwnerRecoveryPage() {
                   FAILED до/после: {result.failedBefore}/{result.failedAfter}. Войдите с новым
                   паролем.
                 </p>
+                {result.syncLogChanged !== 0 ? (
+                  <p className="text-sm">SyncLog changed: expected volatile background activity.</p>
+                ) : null}
               </section>
             ) : null}
             {error ? (
