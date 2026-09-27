@@ -5,6 +5,7 @@ import { AboutPage } from './features/about/about-page';
 import { ArchivePage } from './features/archive/archive-page';
 import { ChangePasswordPage } from './features/auth/change-password-page';
 import { ForgotPasswordPage } from './features/auth/forgot-password-page';
+import { EmergencyOwnerRecoveryPage } from './features/auth/emergency-owner-recovery-page';
 import { BranchesPage } from './features/branches/branches-page';
 import { DashboardPage } from './features/dashboard/dashboard-page';
 import { AttentionPage } from './features/attention/attention-page';
@@ -48,6 +49,7 @@ export const router = createHashRouter([
     children: [
       { element: <LoginPage />, path: '/login' },
       { element: <ForgotPasswordPage />, path: '/forgot-password' },
+      { element: <EmergencyOwnerRecoveryPage />, path: '/emergency-owner-recovery' },
     ],
   },
   {

@@ -268,6 +268,10 @@ export const IPC_CHANNELS = {
   authLogin: 'auth:login',
   authLogout: 'auth:logout',
   authRecoverOwner: 'auth:recover-owner',
+  authEmergencyAvailable: 'auth:emergency-available',
+  authEmergencyPrepare: 'auth:emergency-prepare',
+  authEmergencyAuthorize: 'auth:emergency-authorize',
+  authEmergencyReset: 'auth:emergency-reset',
   authRestore: 'auth:restore',
   branchArchive: 'branch:archive',
   branchCreate: 'branch:create',
@@ -3648,6 +3652,25 @@ export interface SettingUpdate {
   value: string;
 }
 
+export interface EmergencyOwnerPreview {
+  backupPath: string;
+  checkedAt: string;
+  expiresAt: string;
+  failed: number;
+  outbox: number;
+  ownerEmail: string;
+  ownerId: string;
+  ownerName: string;
+  ticket: string;
+}
+
+export interface EmergencyOwnerResult {
+  failedAfter: number;
+  failedBefore: number;
+  ownerId: string;
+  recoveryCode: string;
+}
+
 export interface AravaDesktopApi {
   archive: {
     deletePermanently: (
@@ -3690,6 +3713,14 @@ export interface AravaDesktopApi {
     login: (credentials: LoginCredentials) => Promise<AuthSession>;
     logout: (token: string) => Promise<void>;
     recoverOwner: (input: OwnerRecoveryInput) => Promise<OwnerRecoveryResult>;
+    emergencyAvailable: () => Promise<boolean>;
+    emergencyPrepare: () => Promise<EmergencyOwnerPreview>;
+    emergencyAuthorize: (ticket: string) => Promise<void>;
+    emergencyReset: (
+      ticket: string,
+      newPassword: string,
+      confirmation: string,
+    ) => Promise<EmergencyOwnerResult>;
     restore: (token: string) => Promise<AuthenticatedUser>;
   };
   globalSearch: {

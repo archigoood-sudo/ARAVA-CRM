@@ -3,10 +3,12 @@ import { loginCredentialsSchema, t, type LoginCredentials } from '@arava/shared'
 import { Button, Input, Label } from '@arava/ui';
 import { ArrowRight, BarChart3, Check, ShieldCheck, Sparkles } from 'lucide-react';
 import { useForm } from 'react-hook-form';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { BrandMark } from '../../components/brand-mark';
 import { useAuthStore } from '../../stores/auth-store';
+import { getDesktopApi } from '../../lib/desktop-api';
 
 const productHighlights = [
   t('auth.promo.highlight1'),
@@ -15,6 +17,13 @@ const productHighlights = [
 ];
 
 export function LoginPage() {
+  const [emergencyAvailable, setEmergencyAvailable] = useState(false);
+  useEffect(() => {
+    void getDesktopApi()
+      .auth.emergencyAvailable()
+      .then(setEmergencyAvailable)
+      .catch(() => undefined);
+  }, []);
   const navigate = useNavigate();
   const login = useAuthStore((state) => state.login);
   const sessionMessage = useAuthStore((state) => state.sessionMessage);
@@ -157,6 +166,14 @@ export function LoginPage() {
             >
               {t('auth.forgotPassword')}
             </Link>
+            {emergencyAvailable ? (
+              <Link
+                className="block text-center text-sm font-medium text-amber-700 hover:underline"
+                to="/emergency-owner-recovery"
+              >
+                Аварийное восстановление владельца
+              </Link>
+            ) : null}
           </form>
 
           <p className="mt-8 text-center text-xs leading-5 text-muted-foreground">

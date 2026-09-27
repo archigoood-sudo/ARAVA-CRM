@@ -22,6 +22,8 @@ import { createIntegrationCredentialStore, IntegrationManager } from './integrat
 import { isDesktopUpdateSupported, UpdateManager } from './update-manager';
 import { getDesktopUpdateChannel } from './build-metadata';
 import { AutomaticBackupManager } from './automatic-backup-manager';
+import { EmergencyOwnerRecovery } from './emergency-owner-recovery';
+import { approveWindowsAdministrator } from './windows-admin-approval';
 
 const { autoUpdater } = electronUpdater;
 
@@ -106,6 +108,12 @@ async function bootstrap(): Promise<void> {
   registerIpcHandlers(database, databasePath, {
     backup: backups,
     customerDisplay,
+    emergencyOwnerRecovery: new EmergencyOwnerRecovery(
+      database,
+      databasePath,
+      app.isPackaged && process.platform === 'win32' && getDesktopUpdateChannel() === 'dev',
+      approveWindowsAdministrator,
+    ),
     integration,
     service,
     updates,

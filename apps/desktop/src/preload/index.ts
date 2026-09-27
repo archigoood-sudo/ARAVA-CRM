@@ -43,6 +43,13 @@ const desktopApi: AravaDesktopApi = {
       await invoke(IPC_CHANNELS.authLogout, token);
     },
     recoverOwner: (input) => invoke(IPC_CHANNELS.authRecoverOwner, input),
+    emergencyAvailable: () => invoke(IPC_CHANNELS.authEmergencyAvailable),
+    emergencyPrepare: () => invoke(IPC_CHANNELS.authEmergencyPrepare),
+    emergencyAuthorize: async (ticket) => {
+      await invoke(IPC_CHANNELS.authEmergencyAuthorize, ticket);
+    },
+    emergencyReset: (ticket, newPassword, confirmation) =>
+      invoke(IPC_CHANNELS.authEmergencyReset, ticket, newPassword, confirmation),
     restore: (token) => invoke(IPC_CHANNELS.authRestore, token),
   },
   globalSearch: {

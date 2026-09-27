@@ -27,6 +27,7 @@ import {
   assertPermission,
   type DatabaseClient,
 } from '@arava/database';
+import type { EmergencyOwnerRecovery } from './emergency-owner-recovery';
 import {
   IPC_CHANNELS,
   ARCHIVE_ENTITY_TYPES,
@@ -96,6 +97,7 @@ import {
   trialOutcomeInputSchema,
   trialScheduleInputSchema,
   passwordChangeSchema,
+  passwordSchema,
   paymentInputSchema,
   paymentListQuerySchema,
   paymentMethodSchema,
@@ -199,6 +201,7 @@ const integrationConflictResolutionSchema = z.object({
 });
 
 export interface BackupIpcDependencies {
+  emergencyOwnerRecovery?: EmergencyOwnerRecovery;
   backup?: BackupService;
   chooseBackupFile?: () => Promise<string | undefined>;
   chooseBackupFolder?: () => Promise<string | undefined>;
@@ -421,6 +424,29 @@ export function createIpcHandlers(
       ),
     [IPC_CHANNELS.authRecoverOwner]: (unsafeInput) =>
       service.recoverOwner(ownerRecoverySchema.parse(unsafeInput)),
+    [IPC_CHANNELS.authEmergencyAvailable]: () =>
+      backupDependencies.emergencyOwnerRecovery?.available() ?? Promise.resolve(false),
+    [IPC_CHANNELS.authEmergencyPrepare]: () => {
+      if (!backupDependencies.emergencyOwnerRecovery)
+        throw new Error('Аварийное восстановление недоступно.');
+      return backupDependencies.emergencyOwnerRecovery.prepare();
+    },
+    [IPC_CHANNELS.authEmergencyAuthorize]: (unsafeTicket) => {
+      if (!backupDependencies.emergencyOwnerRecovery)
+        throw new Error('Аварийное восстановление недоступно.');
+      return backupDependencies.emergencyOwnerRecovery.authorize(
+        z.string().uuid().parse(unsafeTicket),
+      );
+    },
+    [IPC_CHANNELS.authEmergencyReset]: (unsafeTicket, unsafePassword, unsafeConfirmation) => {
+      if (!backupDependencies.emergencyOwnerRecovery)
+        throw new Error('Аварийное восстановление недоступно.');
+      return backupDependencies.emergencyOwnerRecovery.reset(
+        z.string().uuid().parse(unsafeTicket),
+        passwordSchema.parse(unsafePassword),
+        z.string().parse(unsafeConfirmation),
+      );
+    },
 
     [IPC_CHANNELS.userList]: (unsafeToken) =>
       service.listUsers(sessionTokenSchema.parse(unsafeToken)),
