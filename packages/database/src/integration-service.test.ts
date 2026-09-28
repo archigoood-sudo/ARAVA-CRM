@@ -3363,6 +3363,58 @@ describe('Sprint 4.5A multi-device integration', () => {
     expect(recoveryOperations.every((operation) => operation.baseRevision === 7)).toBe(true);
   });
 
+  it('exports the persisted recovery snapshot without network or database writes', async () => {
+    const branch = await application.createBranch(ownerToken, { name: 'Private export branch' });
+    const failed = await database.syncOutbox.findFirstOrThrow({ where: { entityId: branch.id } });
+    await database.syncOutbox.update({
+      where: { id: failed.id },
+      data: { status: 'FAILED', lastErrorCode: 'VALIDATION_ERROR' },
+    });
+    const saved = JSON.stringify({
+      id: 'snapshot-export',
+      preview: { checkedAt: '2026-09-28T10:00:00.000Z', failedRows: 1 },
+      rows: [
+        {
+          failedRowId: failed.id,
+          entityType: 'BRANCH',
+          entityId: branch.id,
+          classification: 'B',
+          reason: 'Текущая локальная сущность отсутствует на сервере и пригодна к восстановлению.',
+          baseRevision: 0,
+          checkedAt: '2026-09-28T10:00:00.000Z',
+          payloadHash: '',
+          serverState: '{"operation":"MISSING"}',
+          dependencyState: '[]',
+          payloadJson: 'TOP_SECRET_PAYLOAD',
+        },
+      ],
+    });
+    await database.appSetting.upsert({
+      where: { key: 'integration.permanent-failure-snapshot' },
+      create: { key: 'integration.permanent-failure-snapshot', value: saved },
+      update: { value: saved },
+    });
+    const capture = async () => ({
+      rows: await database.syncOutbox.findMany(),
+      settings: await database.appSetting.findMany(),
+      logs: await database.syncLog.findMany(),
+      sessions: await database.session.findMany(),
+      branches: await database.branch.findMany(),
+    });
+    const before = await capture();
+    received.length = 0;
+    const result = await integration.exportPermanentFailureSnapshot(ownerToken);
+    expect(result.filename).toBe('ARAVA-recovery-diagnostic-2026-09-28T10-00-00-000Z.json');
+    const report = JSON.parse(result.content) as { rows: { failedRowId: string }[] };
+    expect(report.rows.map((row) => row.failedRowId)).toEqual([failed.id]);
+    expect(result.content).not.toContain('TOP_SECRET_PAYLOAD');
+    expect(result.content).not.toContain(branch.name);
+    expect(await capture()).toEqual(before);
+    expect(received).toEqual([]);
+    await expect(integration.exportPermanentFailureSnapshot('invalid-token')).rejects.toThrow();
+    expect(await capture()).toEqual(before);
+  });
+
   it('holds a stale B snapshot when server state changes before recovery', async () => {
     await pair();
     const branch = await application.createBranch(ownerToken, { name: 'Stale recovery' });

@@ -292,6 +292,16 @@ export function IntegrationSettings() {
       getDesktopApi().integration.diagnosePermanentFailureRecovery(getSessionToken()),
     onError: (error) => setNotice(errorMessage(error)),
   });
+  const recoverySnapshotExport = useMutation({
+    mutationFn: () => getDesktopApi().integration.exportPermanentFailureSnapshot(getSessionToken()),
+    onError: (error) => setNotice(errorMessage(error)),
+    onSuccess: (saved) =>
+      setNotice(
+        saved
+          ? 'Сохранённый снимок экспортирован. Синхронизация и восстановление не запускались.'
+          : 'Экспорт отменён.',
+      ),
+  });
   const permanentFailureRecovery = useMutation({
     mutationFn: (snapshotId: string) => {
       if (!snapshotId) throw new Error('Сначала проверьте старые ошибки заново.');
@@ -995,6 +1005,15 @@ export function IntegrationSettings() {
           >
             <Stethoscope className="size-4" />
             {recoveryDiagnostics.isPending ? 'Проверяем попытку…' : 'Диагностика восстановления'}
+          </Button>
+          <Button
+            disabled={recoverySnapshotExport.isPending}
+            onClick={() => recoverySnapshotExport.mutate()}
+            variant="outline"
+          >
+            {recoverySnapshotExport.isPending
+              ? 'Сохраняем снимок…'
+              : 'Экспорт диагностики восстановления'}
           </Button>
           <Button disabled={preview.isFetching} onClick={() => void prepare()} variant="outline">
             <CloudCog className="size-4" /> Первичная синхронизация

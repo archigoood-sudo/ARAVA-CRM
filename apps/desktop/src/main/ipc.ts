@@ -691,6 +691,20 @@ export function createIpcHandlers(
       requireIntegration().diagnosePermanentFailureRecovery(sessionTokenSchema.parse(unsafeToken)),
     [IPC_CHANNELS.integrationPreviewPermanentFailureRecovery]: (unsafeToken) =>
       requireIntegration().previewPermanentFailureRecovery(sessionTokenSchema.parse(unsafeToken)),
+    [IPC_CHANNELS.integrationExportPermanentFailureSnapshot]: async (unsafeToken) => {
+      const report = await requireIntegration().exportPermanentFailureSnapshot(
+        sessionTokenSchema.parse(unsafeToken),
+      );
+      const selection = await dialog.showSaveDialog({
+        defaultPath: join(app.getPath('documents'), report.filename),
+        filters: [{ extensions: ['json'], name: 'Диагностика восстановления JSON' }],
+        title: 'Экспорт диагностики восстановления',
+      });
+      if (selection.canceled || !selection.filePath) return false;
+      // Never overwrite an existing DB, credential file, or another user file.
+      await writeFile(selection.filePath, report.content, { encoding: 'utf8', flag: 'wx' });
+      return true;
+    },
     [IPC_CHANNELS.integrationRecoverPermanentFailures]: (unsafeToken, unsafeSnapshotId) =>
       requireIntegration().recoverPermanentFailures(
         sessionTokenSchema.parse(unsafeToken),

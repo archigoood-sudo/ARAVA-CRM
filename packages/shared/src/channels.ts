@@ -355,6 +355,7 @@ export const IPC_CHANNELS = {
   integrationDiagnose: 'integration:diagnose',
   integrationDiagnosePermanentFailureRecovery: 'integration:diagnose-permanent-failure-recovery',
   integrationPreviewPermanentFailureRecovery: 'integration:preview-permanent-failure-recovery',
+  integrationExportPermanentFailureSnapshot: 'integration:export-permanent-failure-snapshot',
   integrationRecoverPermanentFailures: 'integration:recover-permanent-failures',
   integrationDataChanged: 'integration:data-changed',
   integrationListConflicts: 'integration:list-conflicts',
@@ -3736,6 +3737,7 @@ export interface AravaDesktopApi {
       token: string,
     ) => Promise<IntegrationPermanentFailureRecoveryDiagnostics>;
     previewPermanentFailureRecovery: (token: string) => Promise<IntegrationPermanentFailurePreview>;
+    exportPermanentFailureSnapshot: (token: string) => Promise<boolean>;
     recoverPermanentFailures: (
       token: string,
       snapshotId: string,

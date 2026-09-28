@@ -56,7 +56,11 @@ import { readFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 
 import type { DatabaseClient } from './index';
-import { DomainError } from './security';
+import { DomainError, hashSessionToken } from './security';
+import {
+  buildRecoverySnapshotExport,
+  type RecoveryLedgerComparison,
+} from './recovery-snapshot-export';
 import type { ApplicationService } from './services';
 import { FinanceService } from './finance-service';
 import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
@@ -2619,9 +2623,12 @@ interface PermanentFailureSnapshotRow {
   serverState: string;
   dependencyState: string;
   checkedAt: string;
+  errorCode?: string | null;
+  ledgerComparison?: RecoveryLedgerComparison;
 }
 
 interface PermanentFailureSnapshot {
+  version?: 2;
   id: string;
   preview: IntegrationPermanentFailurePreview;
   rows: PermanentFailureSnapshotRow[];
@@ -4242,7 +4249,7 @@ export class IntegrationService {
   private permanentFailureEvidence(
     candidate: PermanentFailureCandidate,
     serverByKey: Map<string, InboundChange>,
-  ): Pick<PermanentFailureSnapshotRow, 'serverState' | 'dependencyState'> {
+  ): Pick<PermanentFailureSnapshotRow, 'serverState' | 'dependencyState' | 'ledgerComparison'> {
     const direct = serverByKey.get(recoveryEntityKey(candidate.entityType, candidate.entityId));
     const identity =
       candidate.entityType === 'SUBSCRIPTION_LEDGER'
@@ -4279,7 +4286,85 @@ export class IntegrationService {
         })
         .sort((left, right) => left.key.localeCompare(right.key)),
     );
-    return { dependencyState, serverState };
+    const identityHash = (value: string | undefined) =>
+      value ? createHash('sha256').update(value).digest('hex') : null;
+    const effectHash = (payload: Record<string, unknown>) =>
+      createHash('sha256')
+        .update(stableJson(ledgerEffect(payload)))
+        .digest('hex');
+    const serverIdentity =
+      server?.operation === 'UPSERT' ? ledgerIdentity(server.payload) : undefined;
+    const ledgerComparison: RecoveryLedgerComparison | undefined =
+      candidate.entityType === 'SUBSCRIPTION_LEDGER'
+        ? {
+            version: 1,
+            identityKind: identity?.startsWith('write-off:')
+              ? 'WRITE_OFF'
+              : identity?.startsWith('reversal:')
+                ? 'REVERSAL'
+                : 'UNPROVEN',
+            localIdentityHash: identityHash(identity),
+            serverIdentityHash: identityHash(serverIdentity),
+            identityMatches: identity && serverIdentity ? identity === serverIdentity : null,
+            localEffectHash: effectHash(candidate.payload),
+            serverEffectHash: server?.operation === 'UPSERT' ? effectHash(server.payload) : null,
+            effectMatches:
+              server?.operation === 'UPSERT'
+                ? effectHash(candidate.payload) === effectHash(server.payload)
+                : null,
+          }
+        : undefined;
+    return { dependencyState, serverState, ...(ledgerComparison ? { ledgerComparison } : {}) };
+  }
+
+  async exportPermanentFailureSnapshot(
+    token: string,
+  ): Promise<{ filename: string; content: string }> {
+    // Standard authentication updates lastUsedAt; this diagnostic must perform reads only.
+    const session = await this.database.session.findUnique({
+      include: { user: true },
+      where: { tokenHash: hashSessionToken(token) },
+    });
+    if (
+      !session ||
+      session.expiresAt.getTime() <= Date.now() ||
+      !session.user.isActive ||
+      session.securityVersion !== session.user.securityVersion
+    ) {
+      throw new DomainError('AUTHENTICATION', 'Сессия недействительна. Войдите снова.');
+    }
+    if (session.user.role !== 'OWNER' || session.user.mustChangePassword) {
+      throw new DomainError('AUTHORIZATION', 'Экспорт диагностики доступен только владельцу.');
+    }
+    const report = await this.database.$transaction(async (transaction) => {
+      const saved = await transaction.appSetting.findUnique({
+        where: { key: PERMANENT_FAILURE_SNAPSHOT_SETTING },
+      });
+      if (!saved)
+        throw new DomainError(
+          'NOT_FOUND',
+          'Сохранённый снимок отсутствует. Сначала выполните проверку старых ошибок.',
+        );
+      const failed = await transaction.syncOutbox.findMany({
+        select: { id: true },
+        orderBy: { id: 'asc' },
+        where: {
+          status: 'FAILED',
+          OR: [
+            { lastErrorCode: null },
+            { lastErrorCode: { notIn: [...RETRYABLE_SYNC_ERROR_CODES] } },
+          ],
+        },
+      });
+      return buildRecoverySnapshotExport(
+        saved.value,
+        failed.map(({ id }) => id),
+      );
+    });
+    return {
+      filename: `ARAVA-recovery-diagnostic-${report.snapshotTimestamp.replaceAll(/[:.]/gu, '-')}.json`,
+      content: JSON.stringify(report, null, 2),
+    };
   }
 
   async previewPermanentFailureRecovery(
@@ -4289,7 +4374,16 @@ export class IntegrationService {
     const { candidates, preview, serverByKey } = await this.classifyPermanentFailures();
     const snapshotId = randomUUID();
     const snapshotPreview = { ...preview, snapshotId };
+    const codes = new Map(
+      (
+        await this.database.syncOutbox.findMany({
+          select: { id: true, lastErrorCode: true },
+          where: { id: { in: candidates.flatMap((candidate) => candidate.outboxIds) } },
+        })
+      ).map((row) => [row.id, row.lastErrorCode]),
+    );
     const snapshot: PermanentFailureSnapshot = {
+      version: 2,
       id: snapshotId,
       preview: snapshotPreview,
       rows: candidates.flatMap((candidate) =>
@@ -4301,6 +4395,7 @@ export class IntegrationService {
           entityId: candidate.entityId,
           entityType: candidate.entityType,
           failedRowId,
+          errorCode: codes.get(failedRowId) ?? null,
           payloadHash: candidate.payloadHash,
           reason: candidate.reason,
         })),
