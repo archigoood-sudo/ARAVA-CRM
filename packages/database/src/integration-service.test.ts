@@ -23,6 +23,8 @@ import {
 import { ApplicationService } from './services';
 import { StudioService } from './studio-service';
 import { LeadService } from './lead-service';
+import { FinanceService } from './finance-service';
+import { applyAttendanceWriteOff, reverseAttendanceWriteOffs } from './subscription-ledger';
 
 class MemoryCredentials implements IntegrationCredentialStore {
   deviceId = 'e69370b3-70d3-47eb-8d7a-509ba0f27e9d';
@@ -646,6 +648,287 @@ describe('Sprint 4.5A multi-device integration', () => {
       pairingCode: '123456',
     });
   }
+
+  async function subscriptionFixture() {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Branch A' });
+    const student = await database.student.create({
+      data: {
+        branchId: branch.id,
+        firstName: 'Student',
+        lastName: 'A',
+        status: 'ACTIVE',
+      },
+    });
+    const owner = await database.user.findFirstOrThrow({ where: { role: 'OWNER' } });
+    const tariff = await database.tariff.create({
+      data: {
+        name: 'Tariff A',
+        type: 'LESSON_PACK',
+        lessonCount: 12,
+        price: 0,
+      },
+    });
+    const subscription = await database.subscription.create({
+      data: {
+        branchId: branch.id,
+        studentId: student.id,
+        tariffId: tariff.id,
+        createdByUserId: owner.id,
+        purchasedAt: new Date('2026-01-01'),
+        startsAt: new Date('2026-01-01'),
+        lessonLimit: 12,
+        lessonsUsed: 1,
+        salePrice: 0,
+        status: 'ACTIVE',
+      },
+    });
+    const group = await database.danceGroup.create({
+      data: {
+        branchId: branch.id,
+        name: 'Group A',
+        direction: 'Dance',
+        capacity: 10,
+        status: 'ACTIVE',
+      },
+    });
+    let lessonIndex = 0;
+    async function writeOff(label: string) {
+      lessonIndex += 1;
+      const lesson = await database.lesson.create({
+        data: {
+          branchId: branch.id,
+          groupId: group.id,
+          startsAt: new Date(Date.parse('2026-09-01T10:00:00Z') + lessonIndex * 86_400_000),
+          endsAt: new Date(Date.parse('2026-09-01T11:00:00Z') + lessonIndex * 86_400_000),
+          status: 'PLANNED',
+        },
+      });
+      await database.$transaction((transaction) =>
+        applyAttendanceWriteOff(transaction, {
+          actorUserId: owner.id,
+          attendanceStatus: label === 'late' ? 'LATE' : 'PRESENT',
+          branchId: branch.id,
+          studentId: student.id,
+          lessonId: lesson.id,
+          lessonStartsAt: lesson.startsAt,
+        }),
+      );
+      return lesson;
+    }
+    return { subscription, student, owner, writeOff };
+  }
+
+  it('subscription hardening: coalesces 1 -> 2 -> 3 and delivers latest usage, reversal and manual adjustment', async () => {
+    const { subscription, student, owner, writeOff } = await subscriptionFixture();
+    const lesson = await writeOff('present');
+    await writeOff('late');
+    await integration.processPending();
+    expect(canonical.get(`SUBSCRIPTION:${subscription.id}`)?.payload.lessonsUsed).toBe(3);
+    const rows = await database.syncOutbox.findMany({
+      where: { entityType: 'SUBSCRIPTION', entityId: subscription.id },
+    });
+    expect(rows.filter(({ status }) => status === 'SYNCED')).toHaveLength(1);
+    expect(rows.filter(({ status }) => status === 'SUPERSEDED')).toHaveLength(2);
+    expect(
+      rows
+        .filter(({ status }) => status === 'SUPERSEDED')
+        .every(({ syncedAt }) => syncedAt === null),
+    ).toBe(true);
+    await database.$transaction((transaction) =>
+      reverseAttendanceWriteOffs(transaction, `${lesson.id}:${student.id}`, owner.id, 'Reversal'),
+    );
+    await integration.processPending();
+    expect(canonical.get(`SUBSCRIPTION:${subscription.id}`)?.payload.lessonsUsed).toBe(2);
+    await new FinanceService(database, application).adjustSubscription(
+      ownerToken,
+      subscription.id,
+      { lessonDelta: -1, comment: 'Adjustment' },
+    );
+    await integration.processPending();
+    expect(canonical.get(`SUBSCRIPTION:${subscription.id}`)?.payload.lessonsUsed).toBe(1);
+  });
+
+  it('subscription hardening: lost ACK retries immutable envelope across restart while a newer state stays queued', async () => {
+    const { subscription, writeOff } = await subscriptionFixture();
+    const api = new IntegrationApiClient();
+    const original = api.syncBatch.bind(api);
+    const spy = vi
+      .spyOn(IntegrationApiClient.prototype, 'syncBatch')
+      .mockImplementationOnce(async (...args) => {
+        await original(...args);
+        throw new Error('ACK lost');
+      });
+    await integration.processPending();
+    spy.mockRestore();
+    const retry = await database.syncOutbox.findFirstOrThrow({
+      where: { entityId: subscription.id, status: 'PENDING', envelopeJson: { not: null } },
+    });
+    expect(retry.envelopeJson).not.toBeNull();
+    const frozen: unknown = JSON.parse(retry.envelopeJson ?? '{}');
+    await writeOff('present');
+    await writeOff('late');
+    await integration.processPending(); // retry backoff also blocks the newer subscription operation
+    expect(canonical.get(`SUBSCRIPTION:${subscription.id}`)?.payload.lessonsUsed).toBe(1);
+    now = new Date(now.getTime() + 60_000);
+    integration = new IntegrationService(
+      database,
+      application,
+      credentials,
+      new IntegrationApiClient(),
+      () => now,
+    );
+    await integration.initialize();
+    await integration.processPending();
+    const deliveries = received
+      .flatMap((request) =>
+        Array.isArray(request.operations) ? (request.operations as Record<string, unknown>[]) : [],
+      )
+      .filter((operation) => operation.idempotencyKey === retry.idempotencyKey);
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries[0]).toEqual(frozen);
+    expect(deliveries[1]).toEqual(frozen);
+    expect(
+      (await database.syncOutbox.findUniqueOrThrow({ where: { id: retry.id } })).envelopeJson,
+    ).toBe(retry.envelopeJson);
+    await integration.processPending();
+    expect(canonical.get(`SUBSCRIPTION:${subscription.id}`)?.payload.lessonsUsed).toBe(3);
+  });
+
+  it('subscription hardening: CONFLICT is not a successful acknowledgement', async () => {
+    const { subscription } = await subscriptionFixture();
+    const payload = await integration.safePayload('SUBSCRIPTION', subscription.id);
+    canonical.set(`SUBSCRIPTION:${subscription.id}`, {
+      operation: 'UPSERT',
+      payload: { ...payload, lessonsUsed: 5 },
+      revision: 10,
+      sequence: 10,
+      sourceDeviceId: 'device-other',
+    });
+    await integration.processPending();
+    const row = await database.syncOutbox.findFirstOrThrow({
+      where: { entityId: subscription.id },
+    });
+    expect(row).toMatchObject({
+      status: 'CONFLICT',
+      lastErrorCode: 'SYNC_CONFLICT',
+      syncedAt: null,
+    });
+    expect(await database.syncLog.count({ where: { outboxId: row.id, result: 'ACCEPTED' } })).toBe(
+      0,
+    );
+    expect(await database.syncLog.count({ where: { outboxId: row.id, result: 'CONFLICT' } })).toBe(
+      1,
+    );
+  });
+
+  it('subscription hardening: failed latest operation remains retryable after coalescing', async () => {
+    const { subscription, writeOff } = await subscriptionFixture();
+    await writeOff('present');
+    await writeOff('late');
+    mode = 'TEMPORARY';
+    await integration.processPending();
+    const rows = await database.syncOutbox.findMany({ where: { entityId: subscription.id } });
+    expect(rows.filter(({ status }) => status === 'SUPERSEDED')).toHaveLength(2);
+    const latest = rows.find(({ status }) => status === 'PENDING');
+    const snapshot = JSON.parse(latest?.envelopeJson ?? '{}') as {
+      payload?: { lessonsUsed?: number };
+    };
+    expect(snapshot.payload?.lessonsUsed).toBe(3);
+    expect(latest?.syncedAt).toBeNull();
+    mode = 'SUCCESS';
+    now = new Date(now.getTime() + 60_000);
+    await integration.processPending();
+    expect(canonical.get(`SUBSCRIPTION:${subscription.id}`)?.payload.lessonsUsed).toBe(3);
+  });
+
+  it('subscription hardening: replica rollback and startup cannot leave local triggers suppressed', async () => {
+    const { subscription } = await subscriptionFixture();
+    await expect(
+      database.$transaction(async (transaction) => {
+        await transaction.appSetting.upsert({
+          where: { key: 'integration.applyingRemote' },
+          create: { key: 'integration.applyingRemote', value: 'true' },
+          update: { value: 'true' },
+        });
+        await transaction.subscription.update({
+          where: { id: subscription.id },
+          data: { lessonsUsed: 9 },
+        });
+        throw new Error('replica rollback');
+      }),
+    ).rejects.toThrow('replica rollback');
+    await database.appSetting.update({
+      where: { key: 'integration.applyingRemote' },
+      data: { value: 'true' },
+    });
+    await integration.initialize();
+    const before = await database.syncOutbox.count({ where: { entityId: subscription.id } });
+    await database.subscription.update({
+      where: { id: subscription.id },
+      data: { lessonsUsed: 2 },
+    });
+    expect(await database.syncOutbox.count({ where: { entityId: subscription.id } })).toBe(
+      before + 1,
+    );
+    expect(
+      (
+        await database.appSetting.findUniqueOrThrow({
+          where: { key: 'integration.applyingRemote' },
+        })
+      ).value,
+    ).toBe('false');
+  });
+
+  it('subscription hardening: incomplete ACK leaves immutable operations pending until a complete response', async () => {
+    const { subscription } = await subscriptionFixture();
+    const api = new IntegrationApiClient();
+    const original = api.syncBatch.bind(api);
+    const spy = vi
+      .spyOn(IntegrationApiClient.prototype, 'syncBatch')
+      .mockImplementationOnce(async (...args) => {
+        const result = await original(...args);
+        return { ...result, accepted: [] };
+      });
+    try {
+      await integration.processPending();
+    } finally {
+      spy.mockRestore();
+    }
+    const pending = await database.syncOutbox.findFirstOrThrow({
+      where: { entityId: subscription.id, status: 'PENDING' },
+    });
+    expect(pending.envelopeJson).not.toBeNull();
+    expect(pending.syncedAt).toBeNull();
+    now = new Date(now.getTime() + 60_000);
+    await integration.processPending();
+    expect(await database.syncOutbox.findUnique({ where: { id: pending.id } })).toMatchObject({
+      status: 'SYNCED',
+      envelopeJson: pending.envelopeJson,
+    });
+  });
+
+  it('subscription hardening: replayed ACCEPTED cannot roll back a newer known revision', async () => {
+    const { subscription } = await subscriptionFixture();
+    await integration.processPending();
+    const row = await database.syncOutbox.findFirstOrThrow({
+      where: { entityId: subscription.id, status: 'SYNCED' },
+    });
+    await database.syncEntityState.update({
+      where: { entityType_entityId: { entityType: 'SUBSCRIPTION', entityId: subscription.id } },
+      data: { revision: 10 },
+    });
+    await database.syncOutbox.update({
+      where: { id: row.id },
+      data: { status: 'PENDING', syncedAt: null, nextAttemptAt: now },
+    });
+    await integration.processPending();
+    expect(
+      await database.syncEntityState.findUnique({
+        where: { entityType_entityId: { entityType: 'SUBSCRIPTION', entityId: subscription.id } },
+      }),
+    ).toMatchObject({ revision: 10 });
+  });
 
   it('validates HTTPS configuration while explicitly allowing localhost development', () => {
     expect(validateIntegrationBaseUrl('https://arava.example/api')).toBe(

@@ -161,6 +161,79 @@ describe('Prisma and packaged runtime migration compatibility', () => {
     }
   }, 30_000);
 
+  it('upgrades legacy attempted outbox keys safely and does not duplicate successors on restart', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'arava-outbox-upgrade-'));
+    directories.push(directory);
+    const database = createDatabaseClient(
+      singleConnectionSqliteUrl(join(directory, 'database.db')),
+    );
+    try {
+      await applyCheckedInMigrations(database, '20260929000000_payment_warning_resolution');
+      await database.$executeRawUnsafe(
+        'CREATE TABLE "_AppMigration" ("id" TEXT NOT NULL PRIMARY KEY, "appliedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+      );
+      for (const { id } of runtimeMigrations.filter(({ id }) => id < '20260929010000')) {
+        await database.$executeRawUnsafe('INSERT INTO "_AppMigration" ("id") VALUES (?)', id);
+      }
+      for (const [id, entityType] of [
+        ['old-subscription', 'SUBSCRIPTION'],
+        ['old-branch', 'BRANCH'],
+      ]) {
+        await database.$executeRawUnsafe(
+          `INSERT INTO "SyncOutbox" ("id", "entityType", "entityId", "idempotencyKey", "payloadJson", "attemptCount", "lastAttemptAt", "updatedAt") VALUES (?, ?, ?, ?, '{"lessonsUsed":2}', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          id,
+          entityType,
+          id,
+          id,
+        );
+      }
+      await database.$executeRawUnsafe(
+        `INSERT INTO "SyncOutbox" ("id", "entityType", "entityId", "idempotencyKey", "status", "lastErrorCode", "syncedAt", "updatedAt") VALUES ('old-conflict', 'SUBSCRIPTION', 'old-conflict', 'old-conflict', 'SYNCED', 'SYNC_CONFLICT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      );
+      await initializeDatabase(database);
+      expect(await database.syncOutbox.findUnique({ where: { id: 'old-conflict' } })).toMatchObject(
+        { status: 'CONFLICT', syncedAt: null },
+      );
+      expect(
+        await database.syncOutbox.findUnique({ where: { id: 'old-subscription' } }),
+      ).toMatchObject({
+        status: 'SUPERSEDED',
+        syncedAt: null,
+        lastErrorCode: 'LEGACY_ENVELOPE_UNAVAILABLE',
+      });
+      expect(await database.syncOutbox.findUnique({ where: { id: 'old-branch' } })).toMatchObject({
+        status: 'FAILED',
+        lastErrorCode: 'LEGACY_ENVELOPE_UNAVAILABLE',
+      });
+      const latest = await database.syncOutbox.findFirstOrThrow({
+        where: { entityId: 'old-subscription', status: 'PENDING' },
+      });
+      expect(latest.idempotencyKey).not.toBe('old-subscription');
+      expect(latest.envelopeJson).toBeNull();
+      const count = await database.syncOutbox.count();
+      await initializeDatabase(database);
+      expect(await database.syncOutbox.count()).toBe(count);
+      await database.syncOutbox.update({
+        where: { id: latest.id },
+        data: { envelopeJson: '{"payload":{"lessonsUsed":3}}' },
+      });
+      await expect(
+        database.syncOutbox.update({ where: { id: latest.id }, data: { envelopeJson: '{}' } }),
+      ).rejects.toThrow();
+      await expect(
+        database.syncOutbox.update({
+          where: { id: latest.id },
+          data: { idempotencyKey: 'replacement' },
+        }),
+      ).rejects.toThrow();
+      expect(await database.$queryRawUnsafe('PRAGMA integrity_check')).toEqual([
+        { integrity_check: 'ok' },
+      ]);
+    } finally {
+      await closeDatabase(database);
+    }
+  }, 30_000);
+
   it('upgrades a Sprint 4 database in place and migrates legacy managers to ADMIN', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'arava-upgrade-'));
     directories.push(directory);
@@ -311,7 +384,8 @@ describe('Prisma and packaged runtime migration compatibility', () => {
           id !== '20260822000000_trainer_sync_1' &&
           id !== '20260828010000_student_documents' &&
           id !== '20260901000000_trainer_payout_policies' &&
-          id !== '20260901010000_schedule_exceptions_archive',
+          id !== '20260901010000_schedule_exceptions_archive' &&
+          id !== '20260929010000_immutable_sync_outbox',
       )) {
         await database.$executeRawUnsafe('INSERT INTO "_AppMigration" ("id") VALUES (?)', id);
       }

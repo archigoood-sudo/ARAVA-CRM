@@ -2970,6 +2970,8 @@ export class IntegrationService {
   }
 
   async initialize(): Promise<void> {
+    // Replica suppression is transaction-scoped; a committed true value is stale.
+    await this.setSetting('integration.applyingRemote', 'false');
     await this.database.syncOutbox.updateMany({
       data: { nextAttemptAt: this.now(), status: 'PENDING' },
       where: { status: 'PROCESSING' },
@@ -6727,6 +6729,13 @@ export class IntegrationService {
         take: INTEGRATION_BATCH_SIZE * 4,
         where: { status: 'PENDING' },
       });
+      const preparedPending = await this.database.syncOutbox.findMany({
+        orderBy: { createdAt: 'asc' },
+        where: { status: 'PENDING', envelopeJson: { not: null } },
+      });
+      for (const item of preparedPending) {
+        if (!candidates.some(({ id }) => id === item.id)) candidates.push(item);
+      }
       const pendingAttendanceCheckin = await this.database.syncOutbox.findFirst({
         orderBy: { createdAt: 'asc' },
         where: {
@@ -6743,22 +6752,38 @@ export class IntegrationService {
         await this.processInboundSafely(baseUrl, deviceId, token);
         return;
       }
-      const due = candidates.filter(
-        ({ entityType, nextAttemptAt }) =>
-          entityType !== 'ATTENDANCE_CHECKIN' && nextAttemptAt <= this.now(),
-      );
-      const latestByEntity = new Map<string, (typeof due)[number]>();
-      for (const item of due) latestByEntity.set(`${item.entityType}:${item.entityId}`, item);
-      const superseded = due.filter(
-        (item) => latestByEntity.get(`${item.entityType}:${item.entityId}`)?.id !== item.id,
-      );
-      if (superseded.length > 0) {
-        await this.database.syncOutbox.updateMany({
-          data: { status: 'SYNCED', syncedAt: this.now() },
-          where: { id: { in: superseded.map(({ id }) => id) }, status: 'PENDING' },
-        });
+      // Never coalesce a prepared request: its key may already exist on the server.
+      // Serialize requests per entity, including retries whose backoff has not elapsed.
+      const groups = new Map<string, typeof candidates>();
+      for (const item of candidates) {
+        if (item.entityType === 'ATTENDANCE_CHECKIN') continue;
+        const key = `${item.entityType}:${item.entityId}`;
+        groups.set(key, [...(groups.get(key) ?? []), item]);
       }
-      const selected = [...latestByEntity.values()]
+      const dispatchable: typeof candidates = [];
+      for (const items of groups.values()) {
+        const prepared = items.find((item) => item.envelopeJson !== null);
+        if (prepared) {
+          if (prepared.nextAttemptAt <= this.now()) dispatchable.push(prepared);
+          continue;
+        }
+        const due = items.filter((item) => item.nextAttemptAt <= this.now());
+        const latest = due.at(-1);
+        if (!latest) continue;
+        const superseded = due.slice(0, -1);
+        if (superseded.length) {
+          await this.database.syncOutbox.updateMany({
+            data: { status: 'SUPERSEDED', syncedAt: null },
+            where: {
+              id: { in: superseded.map(({ id }) => id) },
+              status: 'PENDING',
+              envelopeJson: null,
+            },
+          });
+        }
+        dispatchable.push(latest);
+      }
+      const selected = dispatchable
         .sort(
           (left, right) =>
             ENTITY_PRIORITY[left.entityType as SyncEntityType] -
@@ -6782,7 +6807,18 @@ export class IntegrationService {
         const envelopes: SyncEntityEnvelope[] = [];
         const preparedItems: typeof selected = [];
         for (const item of selected) {
-          if (item.entityType === 'PUBLICATION' && item.operation === 'UPSERT') {
+          if (!item.envelopeJson && item.payloadJson !== '{}' && item.lastAttemptAt) {
+            throw new IntegrationApiError(
+              'LEGACY_ENVELOPE_UNAVAILABLE',
+              false,
+              'Полный исходный envelope отсутствует; повтор под прежним ключом запрещён.',
+            );
+          }
+          if (
+            !item.envelopeJson &&
+            item.entityType === 'PUBLICATION' &&
+            item.operation === 'UPSERT'
+          ) {
             await this.preparePublicationMedia(baseUrl, deviceId, token, item.entityId);
           }
           const state = await this.database.syncEntityState.findUnique({
@@ -6797,20 +6833,27 @@ export class IntegrationService {
             state?.sourceDeviceId === deviceId && state.revision > item.baseRevision
               ? state.revision
               : item.baseRevision;
-          const envelope = await this.buildEnvelope(
-            item.entityType as SyncEntityType,
-            item.entityId,
-            item.operation,
-            item.idempotencyKey,
-            baseRevision,
-          );
+          const envelope: SyncEntityEnvelope = item.envelopeJson
+            ? (JSON.parse(item.envelopeJson) as SyncEntityEnvelope)
+            : await this.buildEnvelope(
+                item.entityType as SyncEntityType,
+                item.entityId,
+                item.operation,
+                item.idempotencyKey,
+                baseRevision,
+              );
           envelopes.push(envelope);
           const payloadJson = JSON.stringify(envelope.payload);
-          preparedItems.push({ ...item, baseRevision, payloadJson });
-          await this.database.syncOutbox.update({
-            data: { baseRevision, payloadJson },
-            where: { id: item.id },
-          });
+          preparedItems.push({ ...item, baseRevision: envelope.baseRevision, payloadJson });
+          if (!item.envelopeJson)
+            await this.database.syncOutbox.update({
+              data: {
+                baseRevision: envelope.baseRevision,
+                payloadJson,
+                envelopeJson: JSON.stringify(envelope),
+              },
+              where: { id: item.id },
+            });
         }
         const acknowledgement = await this.api.syncBatch(baseUrl, deviceId, token, envelopes);
         if (acknowledgement.deviceToken)
@@ -6826,7 +6869,15 @@ export class IntegrationService {
         }
         await this.setSetting(SETTINGS.lastOutboundSync, syncedAt.toISOString());
         for (const item of selected) {
-          await this.log(item, item.operation, 'SYNCED', item.attemptCount + 1);
+          const ack = acknowledgement.accepted.find(
+            ({ idempotencyKey }) => idempotencyKey === item.idempotencyKey,
+          );
+          await this.log(
+            item,
+            item.operation,
+            ack?.status ?? 'INVALID_RESPONSE',
+            item.attemptCount + 1,
+          );
         }
       } catch (error) {
         await this.failBatch(selected, error);
@@ -7326,6 +7377,18 @@ export class IntegrationService {
     acknowledgements: SyncAcknowledgement[],
     syncedAt: Date,
   ): Promise<void> {
+    if (
+      acknowledgements.length !== items.length ||
+      new Set(acknowledgements.map((ack) => ack.idempotencyKey)).size !== items.length ||
+      acknowledgements.some(
+        (ack) =>
+          !items.some(
+            (item) => item.idempotencyKey === ack.idempotencyKey && item.entityId === ack.entityId,
+          ),
+      )
+    ) {
+      throw new IntegrationApiError('INVALID_RESPONSE', true, 'Неполное подтверждение пакета.');
+    }
     const deviceId = await this.credentials.getDeviceId();
     await this.database.$transaction(async (transaction) => {
       for (const acknowledgement of acknowledgements) {
@@ -7342,8 +7405,8 @@ export class IntegrationService {
         await transaction.syncOutbox.update({
           data: {
             lastErrorCode: acknowledgement.status === 'CONFLICT' ? 'SYNC_CONFLICT' : null,
-            status: 'SYNCED',
-            syncedAt,
+            status: acknowledgement.status === 'ACCEPTED' ? 'SYNCED' : 'CONFLICT',
+            syncedAt: acknowledgement.status === 'ACCEPTED' ? syncedAt : null,
           },
           where: { id: item.id },
         });
@@ -7351,25 +7414,32 @@ export class IntegrationService {
           acknowledgement.status === 'ACCEPTED' &&
           acknowledgement.canonicalPayload.id === item.entityId
         ) {
-          await transaction.syncEntityState.upsert({
-            create: {
-              entityId: item.entityId,
-              entityType: item.entityType,
-              revision: acknowledgement.revision,
-              serverSequence: acknowledgement.serverSequence,
-              serverUpdatedAt: syncedAt,
-              sourceDeviceId: deviceId,
-            },
-            update: {
-              revision: acknowledgement.revision,
-              serverSequence: acknowledgement.serverSequence,
-              serverUpdatedAt: syncedAt,
-              sourceDeviceId: deviceId,
-            },
+          const currentState = await transaction.syncEntityState.findUnique({
             where: {
               entityType_entityId: { entityId: item.entityId, entityType: item.entityType },
             },
           });
+          // A replayed ACK may precede a newer canonical change already pulled locally.
+          if (!currentState || currentState.revision <= acknowledgement.revision)
+            await transaction.syncEntityState.upsert({
+              create: {
+                entityId: item.entityId,
+                entityType: item.entityType,
+                revision: acknowledgement.revision,
+                serverSequence: acknowledgement.serverSequence,
+                serverUpdatedAt: syncedAt,
+                sourceDeviceId: deviceId,
+              },
+              update: {
+                revision: acknowledgement.revision,
+                serverSequence: acknowledgement.serverSequence,
+                serverUpdatedAt: syncedAt,
+                sourceDeviceId: deviceId,
+              },
+              where: {
+                entityType_entityId: { entityId: item.entityId, entityType: item.entityType },
+              },
+            });
           await transaction.syncOutbox.updateMany({
             data: { baseRevision: acknowledgement.revision },
             where: {
@@ -7378,6 +7448,7 @@ export class IntegrationService {
               entityType: item.entityType,
               id: { not: item.id },
               status: 'PENDING',
+              envelopeJson: null,
             },
           });
         }
@@ -7416,11 +7487,12 @@ export class IntegrationService {
         update: { value: 'CONNECTED' },
         where: { key: SETTINGS.lastState },
       });
-      await transaction.appSetting.upsert({
-        create: { key: SETTINGS.lastSuccessfulSync, value: syncedAt.toISOString() },
-        update: { value: syncedAt.toISOString() },
-        where: { key: SETTINGS.lastSuccessfulSync },
-      });
+      if (acknowledgements.some(({ status }) => status === 'ACCEPTED'))
+        await transaction.appSetting.upsert({
+          create: { key: SETTINGS.lastSuccessfulSync, value: syncedAt.toISOString() },
+          update: { value: syncedAt.toISOString() },
+          where: { key: SETTINGS.lastSuccessfulSync },
+        });
       await transaction.appSetting.deleteMany({ where: { key: SETTINGS.lastError } });
     });
   }
@@ -7572,7 +7644,8 @@ export class IntegrationService {
       if (pending.length > 0) {
         const canonicalJson = stableJson(change.payload);
         const matchingIds = pending
-          .filter(({ operation, payloadJson }) => {
+          .filter(({ operation, payloadJson, entityType }) => {
+            if (entityType === 'SUBSCRIPTION') return false;
             if (operation !== change.operation) return false;
             try {
               return stableJson(JSON.parse(payloadJson) as unknown) === canonicalJson;
@@ -7613,7 +7686,11 @@ export class IntegrationService {
           if (rebasedIds.length > 0) {
             await transaction.syncOutbox.updateMany({
               data: { baseRevision: change.revision },
-              where: { id: { in: rebasedIds }, status: { in: ['PENDING', 'PROCESSING'] } },
+              where: {
+                id: { in: rebasedIds },
+                status: { in: ['PENDING', 'PROCESSING'] },
+                envelopeJson: null,
+              },
             });
           }
           if (!state || state.revision < change.revision) {

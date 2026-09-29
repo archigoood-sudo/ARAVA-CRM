@@ -38,6 +38,7 @@ describe('runtime migrations', () => {
       '20260906000000_free_attendance_coverage',
       '20260906010000_attendance_scenarios',
       '20260929000000_payment_warning_resolution',
+      '20260929010000_immutable_sync_outbox',
     ]);
   });
 });

@@ -251,6 +251,8 @@ enum SyncOutboxStatus {
   PENDING
   PROCESSING
   SYNCED
+  CONFLICT
+  SUPERSEDED
   FAILED
 }
 
@@ -1320,6 +1322,7 @@ model SyncOutbox {
   operation      SyncOperation    @default(UPSERT)
   payloadVersion Int              @default(1)
   payloadJson    String           @default("{}")
+  envelopeJson   String?
   baseRevision   Int              @default(0)
   idempotencyKey String           @unique
   status         SyncOutboxStatus @default(PENDING)
