@@ -36,6 +36,8 @@ export function groupAttendanceLessons(
 
 export function attendanceProgress(lesson: AttendanceWorkspaceLesson): string {
   if (lesson.status === 'CANCELLED') return 'Отменено';
+  if (lesson.attendanceExpected === 0 && lesson.attendanceMarked === 0)
+    return 'Нет учеников для отметки';
   if (lesson.attendanceMarked === 0) return 'Не заполняли';
   const remaining = Math.max(0, lesson.attendanceExpected - lesson.attendanceMarked);
   return remaining > 0 ? `Осталось отметить ${String(remaining)}` : 'Посещаемость заполнена';

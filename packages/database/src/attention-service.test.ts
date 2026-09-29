@@ -555,6 +555,146 @@ describe('Sprint 4.2B attention center', () => {
     );
   });
 
+  it.each([
+    {
+      name: 'always empty',
+      joined: null,
+      left: null,
+      cancelled: false,
+      original: null,
+      marked: false,
+      expected: false,
+    },
+    {
+      name: 'joins after lesson',
+      joined: 0,
+      left: null,
+      cancelled: false,
+      original: null,
+      marked: false,
+      expected: false,
+    },
+    {
+      name: 'left before lesson',
+      joined: -10,
+      left: -3,
+      cancelled: false,
+      original: null,
+      marked: false,
+      expected: false,
+    },
+    {
+      name: 'eligible at lesson',
+      joined: -10,
+      left: null,
+      cancelled: false,
+      original: null,
+      marked: false,
+      expected: true,
+    },
+    {
+      name: 'left after lesson',
+      joined: -10,
+      left: -1,
+      cancelled: false,
+      original: null,
+      marked: false,
+      expected: true,
+    },
+    {
+      name: 'rescheduled into membership',
+      joined: -3,
+      left: null,
+      cancelled: false,
+      original: -5,
+      marked: false,
+      expected: true,
+    },
+    {
+      name: 'rescheduled out of membership',
+      joined: -1,
+      left: null,
+      cancelled: false,
+      original: 0,
+      marked: false,
+      expected: false,
+    },
+    {
+      name: 'explicit makeup participant',
+      joined: null,
+      left: null,
+      cancelled: false,
+      original: null,
+      marked: true,
+      expected: true,
+    },
+    {
+      name: 'cancelled with eligible student',
+      joined: -10,
+      left: null,
+      cancelled: true,
+      original: null,
+      marked: false,
+      expected: false,
+    },
+  ])(
+    'uses the lesson-date roster: $name',
+    async ({ joined, left, cancelled, original, marked, expected }) => {
+      const { branch, coach, student } = await branchFoundation('Состав');
+      const group = await database.danceGroup.create({
+        data: {
+          branchId: branch.id,
+          coachId: coach.id,
+          name: 'Набор',
+          direction: 'Танцы',
+          capacity: 20,
+          status: 'ACTIVE',
+        },
+      });
+      if (joined !== null)
+        await database.enrollment.create({
+          data: {
+            groupId: group.id,
+            studentId: student.id,
+            joinedAt: at(joined),
+            leftAt: left === null ? null : at(left),
+            status: 'ACTIVE',
+          },
+        });
+      const lesson = await database.lesson.create({
+        data: {
+          branchId: branch.id,
+          coachId: coach.id,
+          groupId: group.id,
+          startsAt: at(-2),
+          endsAt: at(-2, 1),
+          originalStartsAt: original === null ? null : at(original),
+          status: cancelled ? 'CANCELLED' : 'PLANNED',
+        },
+      });
+      if (marked)
+        await database.attendance.create({
+          data: {
+            lessonId: lesson.id,
+            studentId: student.id,
+            status: 'ABSENT',
+            markedAt: NOW,
+            markedByUserId: coach.id,
+          },
+        });
+      const before = await database.attendance.count();
+      const items = await attention.listItems(ownerToken, { category: 'ATTENDANCE' });
+      expect(items.map(({ entityId }) => entityId)).toEqual(expected ? [lesson.id] : []);
+      const summary = await attention.getSummary(ownerToken);
+      expect(summary.categories.find(({ category }) => category === 'ATTENDANCE')?.count ?? 0).toBe(
+        expected ? 1 : 0,
+      );
+      expect(await database.lesson.findUnique({ where: { id: lesson.id } })).toEqual(lesson);
+      expect(await database.attendance.count()).toBe(before);
+      expect(await database.danceGroup.findUnique({ where: { id: group.id } })).toEqual(group);
+    },
+  );
+
   it('flags only past incomplete attendance and preserves zero-PRESENT completion semantics', async () => {
     const { branch, coach, student } = await branchFoundation('Посещаемость');
     const group = await database.danceGroup.create({
@@ -566,6 +706,9 @@ describe('Sprint 4.2B attention center', () => {
         name: 'Вечерняя',
         status: 'ACTIVE',
       },
+    });
+    await database.enrollment.create({
+      data: { groupId: group.id, studentId: student.id, joinedAt: at(-10), status: 'ACTIVE' },
     });
     const incomplete = await database.lesson.create({
       data: {

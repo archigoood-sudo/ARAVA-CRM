@@ -9,6 +9,7 @@ import { RETENTION_RULES } from '@arava/shared';
 import type { DatabaseClient } from './index';
 import { ATTENTION_RULES, DAY_MS, isExpiringSoon } from './attention-rules';
 import { accessibleBranchIds, assertBranchAccess } from './permissions';
+import { LessonOccurrenceService } from './lesson-occurrence-service';
 import { DomainError } from './security';
 import type { ApplicationService } from './services';
 import { AUTO_RESOLVE_LWW_ENTITY_TYPES } from './sync-conflict-policy';
@@ -697,7 +698,21 @@ export class AttentionService {
       });
     }
 
-    for (const lesson of lessons)
+    // Use the same date-effective roster as Today, including explicit lesson participants.
+    // Resolving occurrences is read-only: empty lessons and recurring schedules remain intact.
+    const rosterResolver = new LessonOccurrenceService(this.database);
+    const eligibleLessonIds = new Set<string>();
+    const lessonDays = new Map(
+      lessons.map((lesson) => [dateRoute(lesson.startsAt), lesson.startsAt]),
+    );
+    for (const day of lessonDays.values()) {
+      for (const occurrence of await rosterResolver.resolveDay(actor, day)) {
+        if (occurrence.lessonId && occurrence.expectedStudents > 0)
+          eligibleLessonIds.add(occurrence.lessonId);
+      }
+    }
+    for (const lesson of lessons) {
+      if (!eligibleLessonIds.has(lesson.id)) continue;
       add({
         actionLabel: 'Заполнить посещаемость',
         actionRoute: `/attendance/${lesson.id}`,
@@ -712,6 +727,7 @@ export class AttentionService {
         severity: 'WARNING',
         title: 'Не заполнена посещаемость',
       });
+    }
 
     for (const closure of closures) {
       const affectedLessons = closure.room.lessons.filter(

@@ -67,6 +67,17 @@ describe('attendance workspace presentation', () => {
     );
   });
 
+  it('does not label an empty roster as unfilled attendance', () => {
+    expect(attendanceProgress(lesson('recruiting', '', '', { attendanceExpected: 0 }))).toBe(
+      'Нет учеников для отметки',
+    );
+    expect(
+      attendanceProgress(
+        lesson('cancelled-empty', '', '', { attendanceExpected: 0, status: 'CANCELLED' }),
+      ),
+    ).toBe('Отменено');
+  });
+
   it('uses a local calendar date instead of a UTC date', () => {
     expect(localDateKey(new Date(2026, 7, 23, 0, 5))).toBe('2026-08-23');
   });
