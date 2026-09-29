@@ -322,6 +322,7 @@ export const IPC_CHANNELS = {
   lessonMakeup: 'lesson:makeup',
   lessonReschedule: 'lesson:reschedule',
   substitutionAssign: 'substitution:assign',
+  substitutionRemove: 'substitution:remove',
   contactCreate: 'student-contact:create',
   contactRemove: 'student-contact:remove',
   contactUpdate: 'student-contact:update',
@@ -4010,6 +4011,7 @@ export interface AravaDesktopApi {
     reschedule: (token: string, id: string, input: LessonRescheduleInput) => Promise<LessonSummary>;
     update: (token: string, id: string, input: LessonInput) => Promise<LessonSummary>;
     copyDay: (token: string, input: CopyDayInput) => Promise<CopyDayResult>;
+    removeSubstitution: (token: string, id: string) => Promise<void>;
     assignSubstitution: (
       token: string,
       id: string,

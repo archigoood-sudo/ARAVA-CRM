@@ -32,6 +32,7 @@ import { getDesktopApi } from '../../lib/desktop-api';
 import { invalidateAttendanceCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
+import { LessonSubstitutionControl } from '../schedule/lesson-substitution-control';
 import { isAttendanceCheckInDate } from './attendance-workspace';
 
 const operationalStatuses: {
@@ -181,6 +182,7 @@ export function AttendancePage() {
             {formatDate(lesson.startsAt, { dateStyle: 'long', timeStyle: 'short' })}
           </p>
           <h1 className="mt-2 text-4xl font-semibold tracking-[-0.045em]">{lesson.groupName}</h1>
+          <LessonSubstitutionControl lesson={lesson} />
           <p className="mt-2 text-muted-foreground">Отмечайте учеников одним нажатием</p>
         </div>
         <div className="text-right">

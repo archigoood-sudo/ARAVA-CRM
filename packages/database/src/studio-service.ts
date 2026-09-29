@@ -84,11 +84,13 @@ const lessonInclude = {
       },
       assistantCoachId: true,
       coachId: true,
+      coach: { select: { fullName: true } },
       name: true,
     },
   },
   roomEntity: { select: { name: true } },
   makeupLesson: { select: { id: true, status: true } },
+  scheduleTemplate: { include: { coach: { select: { fullName: true } } } },
   substitution: {
     include: {
       originalTrainer: { select: { fullName: true } },
@@ -215,8 +217,12 @@ function lessonSummary(lesson: LessonRecord): LessonSummary {
     branchId: lesson.branchId,
     branchName: lesson.branch.name,
     cancellationReason: lesson.cancellationReason ?? undefined,
-    coachId: lesson.coachId ?? undefined,
-    coachName: lesson.coach?.fullName,
+    coachId:
+      lesson.coachId ?? lesson.scheduleTemplate?.coachId ?? lesson.group.coachId ?? undefined,
+    coachName:
+      lesson.coach?.fullName ??
+      lesson.scheduleTemplate?.coach?.fullName ??
+      lesson.group.coach?.fullName,
     endsAt: lesson.endsAt.toISOString(),
     groupId: lesson.groupId,
     groupName: lesson.group.name,

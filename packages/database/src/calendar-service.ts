@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   AffectedCalendarEvent,
   CalendarExceptionInput,
@@ -448,67 +449,136 @@ export class CalendarService {
     lessonId: string,
     input: TrainerSubstitutionInput,
   ): Promise<TrainerSubstitutionSummary> {
-    const lesson = await this.database.lesson.findUnique({
-      include: { coach: true },
-      where: { id: lessonId },
-    });
-    if (!lesson) throw new DomainError('NOT_FOUND', 'Занятие не найдено.');
-    const actor = await this.manager(token, lesson.branchId);
-    const substitute = await this.database.user.findFirst({
-      where: {
-        id: input.substituteTrainerId,
-        isActive: true,
-        role: 'COACH',
-        branchAssignments: { some: { branchId: lesson.branchId } },
-      },
-    });
-    if (!substitute)
-      throw new DomainError('VALIDATION', 'Заменяющий тренер недоступен в этом филиале.');
-    const conflict = await this.database.lesson.findFirst({
-      where: {
-        id: { not: lessonId },
-        status: { not: 'CANCELLED' },
-        coachId: substitute.id,
-        ...overlap(lesson.startsAt, lesson.endsAt),
-      },
-    });
-    if (conflict) throw new DomainError('CONFLICT', 'Тренер уже занят в это время.');
-    const row = await this.database.$transaction(async (transaction) => {
-      const substitution = await transaction.trainerSubstitution.upsert({
-        create: {
-          createdByUserId: actor.id,
-          lessonId,
-          originalTrainerId: lesson.coachId,
-          reason: optional(input.reason),
-          substituteTrainerId: substitute.id,
-        },
-        update: { reason: optional(input.reason), substituteTrainerId: substitute.id },
-        where: { lessonId },
-      });
-      await transaction.lesson.update({
-        data: { coachId: substitute.id },
+    const result = await this.changeSubstitution(token, lessonId, input);
+    if (!result) throw new DomainError('VALIDATION', 'Замена не назначена.');
+    return result;
+  }
+
+  async removeSubstitution(token: string, lessonId: string): Promise<void> {
+    await this.changeSubstitution(token, lessonId, null);
+  }
+
+  private async changeSubstitution(
+    token: string,
+    lessonId: string,
+    input: TrainerSubstitutionInput | null,
+  ): Promise<TrainerSubstitutionSummary | null> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'schedules:manage');
+    return this.database.$transaction(async (transaction) => {
+      const lesson = await transaction.lesson.findUnique({
         where: { id: lessonId },
+        include: {
+          coach: true,
+          group: { include: { coach: true } },
+          scheduleTemplate: { include: { coach: true } },
+          substitution: { include: { originalTrainer: true } },
+        },
       });
+      if (!lesson) throw new DomainError('NOT_FOUND', 'Занятие не найдено.');
+      assertBranchAccess(actor, lesson.branchId);
+      if (lesson.status === 'CANCELLED')
+        throw new DomainError('VALIDATION', 'Нельзя изменить замену отменённого занятия.');
+      const existing = lesson.substitution;
+      const regularId = existing
+        ? existing.originalTrainerId
+        : (lesson.coachId ?? lesson.scheduleTemplate?.coachId ?? lesson.group.coachId);
+      const regularName = existing
+        ? existing.originalTrainer?.fullName
+        : (lesson.coach?.fullName ??
+          lesson.scheduleTemplate?.coach?.fullName ??
+          lesson.group.coach?.fullName);
+      const targetId = input ? input.substituteTrainerId : regularId;
+      if (!input && !existing) return null;
+      if (input && targetId === regularId)
+        throw new DomainError('VALIDATION', 'Для возврата основного тренера снимите замену.');
+      const substitute = input
+        ? await transaction.user.findFirst({
+            where: {
+              id: input.substituteTrainerId,
+              isActive: true,
+              role: 'COACH',
+              branchAssignments: { some: { branchId: lesson.branchId } },
+            },
+          })
+        : null;
+      if (input && !substitute)
+        throw new DomainError('VALIDATION', 'Заменяющий тренер недоступен в этом филиале.');
+      if (targetId) {
+        const conflict = await transaction.lesson.findFirst({
+          where: {
+            id: { not: lessonId },
+            status: { not: 'CANCELLED' },
+            coachId: targetId,
+            ...overlap(lesson.startsAt, lesson.endsAt),
+          },
+        });
+        if (conflict) throw new DomainError('CONFLICT', 'Тренер уже занят в это время.');
+      }
+      const beforeTrainerId = existing?.substituteTrainerId ?? lesson.coachId ?? regularId;
+      let result: TrainerSubstitutionSummary | null = null;
+      let substitutionId: string;
+      if (input && substitute) {
+        const row = await transaction.trainerSubstitution.upsert({
+          where: { lessonId },
+          create: {
+            lessonId,
+            originalTrainerId: regularId,
+            substituteTrainerId: substitute.id,
+            reason: optional(input.reason),
+            createdByUserId: actor.id,
+          },
+          update: { substituteTrainerId: substitute.id, reason: optional(input.reason) },
+        });
+        substitutionId = row.id;
+        result = {
+          id: row.id,
+          lessonId,
+          createdAt: row.createdAt.toISOString(),
+          originalTrainerId: regularId ?? undefined,
+          originalTrainerName: regularName,
+          substituteTrainerId: substitute.id,
+          substituteTrainerName: substitute.fullName,
+          reason: row.reason ?? undefined,
+        };
+      } else {
+        if (!existing) return null;
+        substitutionId = existing.id;
+        await transaction.trainerSubstitution.delete({ where: { id: existing.id } });
+      }
+      await transaction.lesson.update({ where: { id: lessonId }, data: { coachId: targetId } });
+      // Inserts already use the canonical SQLite trigger; updates/removal need the same outbox path.
+      if (existing) {
+        const state = await transaction.syncEntityState.findUnique({
+          where: { entityType_entityId: { entityType: 'SUBSTITUTION', entityId: substitutionId } },
+        });
+        await transaction.syncOutbox.create({
+          data: {
+            entityType: 'SUBSTITUTION',
+            entityId: substitutionId,
+            operation: input ? 'UPSERT' : 'ARCHIVE',
+            idempotencyKey: randomUUID(),
+            baseRevision: state?.revision ?? 0,
+          },
+        });
+      }
       await transaction.auditLog.create({
         data: {
-          action: 'TRAINER_SUBSTITUTED',
           actorUserId: actor.id,
-          entityId: substitution.id,
           entityType: 'TrainerSubstitution',
+          entityId: substitutionId,
+          action: input ? 'TRAINER_SUBSTITUTED' : 'TRAINER_SUBSTITUTION_REMOVED',
+          detail: JSON.stringify({
+            lessonId,
+            originalTrainerId: regularId,
+            beforeTrainerId,
+            afterTrainerId: targetId,
+            reason: input?.reason ?? null,
+          }),
         },
       });
-      return substitution;
+      return result;
     });
-    return {
-      createdAt: row.createdAt.toISOString(),
-      id: row.id,
-      lessonId,
-      originalTrainerId: row.originalTrainerId ?? undefined,
-      originalTrainerName: lesson.coach?.fullName,
-      reason: row.reason ?? undefined,
-      substituteTrainerId: substitute.id,
-      substituteTrainerName: substitute.fullName,
-    };
   }
 
   async copyDay(token: string, input: CopyDayInput): Promise<CopyDayResult> {

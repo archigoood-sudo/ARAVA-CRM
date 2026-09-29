@@ -95,7 +95,8 @@ export async function invalidateSyncedEntityCaches(
   if (entityType === 'ATTENDANCE') return invalidateAttendanceCaches(client);
   if (entityType === 'SUBSCRIPTION' || entityType === 'SUBSCRIPTION_LEDGER')
     return invalidateFinanceCaches(client);
-  if (entityType === 'LESSON' || entityType === 'SCHEDULE') return invalidateLessonCaches(client);
+  if (entityType === 'LESSON' || entityType === 'SCHEDULE' || entityType === 'SUBSTITUTION')
+    return invalidateLessonCaches(client);
   if (
     entityType === 'STUDENT_IDENTITY' ||
     entityType === 'STUDENT_CONTACT' ||

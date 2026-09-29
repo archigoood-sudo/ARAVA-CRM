@@ -8115,7 +8115,10 @@ export class IntegrationService {
         break;
       }
       case 'SUBSTITUTION': {
-        if (archived) return;
+        if (archived) {
+          await transaction.trainerSubstitution.deleteMany({ where: { id: change.entityId } });
+          break;
+        }
         const data = {
           createdByUserId: ownerId,
           lessonId: requiredString(payload, 'lessonId'),

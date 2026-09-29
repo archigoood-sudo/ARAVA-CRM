@@ -11,15 +11,7 @@ import {
   StatusBadge,
 } from '@arava/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  ArrowLeft,
-  Ban,
-  CalendarClock,
-  MapPin,
-  Pencil,
-  Repeat2,
-  UserRoundCheck,
-} from 'lucide-react';
+import { ArrowLeft, Ban, CalendarClock, MapPin, Pencil, UserRoundCheck } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
@@ -28,6 +20,7 @@ import { invalidateLessonCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { LessonDialog } from './lesson-dialog';
+import { LessonSubstitutionControl } from './lesson-substitution-control';
 
 export function LessonDetailsPage() {
   const { lessonId = '' } = useParams();
@@ -40,8 +33,6 @@ export function LessonDetailsPage() {
   const [reason, setReason] = useState('');
   const [requiresMakeup, setRequiresMakeup] = useState(false);
   const [makeup, setMakeup] = useState(false);
-  const [substitution, setSubstitution] = useState(false);
-  const [substituteId, setSubstituteId] = useState('');
   const lesson = useQuery({
     queryFn: () => getDesktopApi().lessons.get(getSessionToken(), lessonId),
     queryKey: queryKeys.lesson(lessonId),
@@ -159,10 +150,7 @@ export function LessonDetailsPage() {
             label={t('lesson.end')}
             value={formatDate(detail.endsAt, { dateStyle: 'long', timeStyle: 'short' })}
           />
-          <Info
-            label={detail.substituteCoachName ? 'Заменяющий тренер' : t('lesson.coach')}
-            value={detail.substituteCoachName ?? detail.coachName ?? t('group.noCoach')}
-          />
+          <LessonSubstitutionControl lesson={detail} />
           <Info
             label={t('lesson.room')}
             value={detail.roomName ?? (detail.roomId ? detail.room : undefined) ?? 'Зал не указан'}
@@ -181,10 +169,6 @@ export function LessonDetailsPage() {
                 <Button onClick={() => setCancel(true)} variant="outline">
                   <Ban className="size-4" />
                   {t('lesson.action.cancel')}
-                </Button>
-                <Button onClick={() => setSubstitution(true)} variant="outline">
-                  <Repeat2 className="size-4" />
-                  Назначить замену
                 </Button>
               </>
             ) : null}
@@ -265,49 +249,6 @@ export function LessonDetailsPage() {
               }}
             >
               {t('lesson.action.cancel')}
-            </Button>
-          </div>
-        </div>
-      </Dialog>
-      <Dialog
-        closeLabel="Закрыть"
-        onClose={() => setSubstitution(false)}
-        open={substitution}
-        title="Назначить замену"
-      >
-        <div className="space-y-4">
-          <div>
-            <Label>Заменяющий тренер</Label>
-            <select
-              className="mt-2 h-11 w-full rounded-xl border border-border bg-surface px-3"
-              onChange={(event) => setSubstituteId(event.target.value)}
-              value={substituteId}
-            >
-              <option value="">Выберите тренера</option>
-              {staff.data
-                ?.filter((coach) => coach.id !== detail.coachId)
-                .map((coach) => (
-                  <option key={coach.id} value={coach.id}>
-                    {coach.fullName}
-                  </option>
-                ))}
-            </select>
-          </div>
-          <div className="flex justify-end gap-3">
-            <Button onClick={() => setSubstitution(false)} variant="outline">
-              Отмена
-            </Button>
-            <Button
-              disabled={!substituteId}
-              onClick={async () => {
-                await getDesktopApi().lessons.assignSubstitution(getSessionToken(), lessonId, {
-                  substituteTrainerId: substituteId,
-                });
-                await refresh();
-                setSubstitution(false);
-              }}
-            >
-              Назначить замену
             </Button>
           </div>
         </div>

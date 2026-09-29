@@ -22,6 +22,7 @@ import {
 } from './integration-service';
 import { ApplicationService } from './services';
 import { StudioService } from './studio-service';
+import { CalendarService } from './calendar-service';
 import { LeadService } from './lead-service';
 import { FinanceService } from './finance-service';
 import { applyAttendanceWriteOff, reverseAttendanceWriteOffs } from './subscription-ledger';
@@ -3821,6 +3822,94 @@ describe('Sprint 4.5A multi-device integration', () => {
         integration.updateSettings(session.token, { baseUrl: serverUrl, enabled: true }),
       ).rejects.toThrow('только владелец');
     }
+  });
+  it('synchronizes substitution replacement and removal using the same canonical lesson and substitution', async () => {
+    await pair();
+    const branch = await application.createBranch(ownerToken, { name: 'Замены sync' });
+    const trainers = [];
+    for (const name of ['regular', 'substitute', 'replacement'])
+      trainers.push(
+        await application.createUser(ownerToken, {
+          branchIds: [branch.id],
+          email: name + '-sync-substitution@arava.local',
+          fullName: name,
+          password: 'Trainer!Sync2026',
+          role: 'COACH',
+        }),
+      );
+    const [regular, substitute, replacement] = trainers;
+    if (!regular || !substitute || !replacement) throw new Error('Missing trainer fixture');
+    const studio = new StudioService(database, application);
+    const calendar = new CalendarService(database, application);
+    const group = await studio.createGroup(ownerToken, {
+      branchId: branch.id,
+      coachId: regular.id,
+      name: 'Замены',
+      direction: 'Танцы',
+      capacity: 10,
+      status: 'ACTIVE',
+    });
+    const lesson = await studio.createLesson(ownerToken, {
+      groupId: group.id,
+      coachId: regular.id,
+      startsAt: '2026-08-10T15:00:00Z',
+      endsAt: '2026-08-10T16:00:00Z',
+    });
+    await integration.processPending();
+    const first = await calendar.assignSubstitution(ownerToken, lesson.id, {
+      substituteTrainerId: substitute.id,
+    });
+    await integration.processPending();
+    expect(canonical.get('SUBSTITUTION:' + first.id)?.payload.substituteTrainerId).toBe(
+      substitute.id,
+    );
+    await calendar.assignSubstitution(ownerToken, lesson.id, {
+      substituteTrainerId: replacement.id,
+    });
+    await integration.processPending();
+    expect(canonical.get('SUBSTITUTION:' + first.id)?.payload).toMatchObject({
+      substituteTrainerId: replacement.id,
+      originalTrainerId: regular.id,
+    });
+    const remoteLesson = canonical.get('LESSON:' + lesson.id);
+    const remoteSubstitution = canonical.get('SUBSTITUTION:' + first.id);
+    if (!remoteLesson || !remoteSubstitution) throw new Error('Missing canonical fixture');
+    let sequence = Math.max(0, ...changes.map((change) => Number(change.sequence)));
+    changes.push({
+      entityType: 'LESSON',
+      entityId: lesson.id,
+      operation: 'UPSERT',
+      payload: { ...remoteLesson.payload, coachId: regular.id },
+      revision: remoteLesson.revision + 1,
+      sequence: ++sequence,
+      serverUpdatedAt: now.toISOString(),
+      sourceDeviceId: 'other-device',
+    });
+    changes.push({
+      entityType: 'SUBSTITUTION',
+      entityId: first.id,
+      operation: 'ARCHIVE',
+      payload: { id: first.id, missing: true },
+      revision: remoteSubstitution.revision + 1,
+      sequence: ++sequence,
+      serverUpdatedAt: now.toISOString(),
+      sourceDeviceId: 'other-device',
+    });
+    const before = await database.syncOutbox.count();
+    await integration.processPending();
+    expect(await database.trainerSubstitution.count({ where: { lessonId: lesson.id } })).toBe(0);
+    expect((await studio.getLesson(ownerToken, lesson.id)).coachId).toBe(regular.id);
+    expect(await database.syncOutbox.count()).toBe(before);
+    const next = await calendar.assignSubstitution(ownerToken, lesson.id, {
+      substituteTrainerId: substitute.id,
+    });
+    await integration.processPending();
+    await calendar.removeSubstitution(ownerToken, lesson.id);
+    await integration.processPending();
+    expect(canonical.get('SUBSTITUTION:' + next.id)?.operation).toBe('ARCHIVE');
+    expect(
+      await database.syncOutbox.count({ where: { entityType: 'SUBSTITUTION', status: 'FAILED' } }),
+    ).toBe(0);
   });
 });
 

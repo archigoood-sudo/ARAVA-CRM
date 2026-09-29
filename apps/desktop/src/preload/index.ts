@@ -287,6 +287,7 @@ const desktopApi: AravaDesktopApi = {
     reschedule: (token, id, input) => invoke(IPC_CHANNELS.lessonReschedule, token, id, input),
     update: (token, id, input) => invoke(IPC_CHANNELS.lessonUpdate, token, id, input),
     copyDay: (token, input) => invoke(IPC_CHANNELS.lessonCopyDay, token, input),
+    removeSubstitution: (token, id) => invoke(IPC_CHANNELS.substitutionRemove, token, id),
     assignSubstitution: (token, id, input) =>
       invoke(IPC_CHANNELS.substitutionAssign, token, id, input),
   },

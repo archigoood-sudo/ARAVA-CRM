@@ -1112,6 +1112,11 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         copyDayInputSchema.parse(unsafeInput),
       ),
+    [IPC_CHANNELS.substitutionRemove]: (unsafeToken, unsafeId) =>
+      calendar.removeSubstitution(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+      ),
     [IPC_CHANNELS.substitutionAssign]: (unsafeToken, unsafeId, unsafeInput) =>
       calendar.assignSubstitution(
         sessionTokenSchema.parse(unsafeToken),
@@ -2624,6 +2629,7 @@ const SYNC_RELEVANT_MUTATIONS = new Set<string>([
   IPC_CHANNELS.subscriptionFreeze,
   IPC_CHANNELS.subscriptionUnfreeze,
   IPC_CHANNELS.substitutionAssign,
+  IPC_CHANNELS.substitutionRemove,
   IPC_CHANNELS.tariffArchive,
   IPC_CHANNELS.tariffCreate,
   IPC_CHANNELS.tariffUpdate,
