@@ -403,6 +403,7 @@ const desktopApi: AravaDesktopApi = {
     updateRegister: (token, id, input) => invoke(IPC_CHANNELS.cashRegisterUpdate, token, id, input),
   },
   payroll: {
+    document: (token, id, action) => invoke(IPC_CHANNELS.payrollPeriodDocument, token, id, action),
     addLesson: (token, periodId, input) =>
       invoke(IPC_CHANNELS.payrollPeriodLessonAdd, token, periodId, input),
     adjustAccrual: (token, id, input) =>

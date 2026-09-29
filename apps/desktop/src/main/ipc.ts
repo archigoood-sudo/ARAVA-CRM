@@ -161,6 +161,7 @@ import type { CustomerDisplayManager } from './customer-display-manager';
 import type { IntegrationManager } from './integration-manager';
 import type { UpdateController } from './update-manager';
 import { DocumentPackManager } from './document-pack-manager';
+import { generatePayrollPdf } from './payroll-pdf';
 import { ExpenseAttachmentManager } from './expense-attachment-manager';
 
 type IpcHandler = (...arguments_: unknown[]) => unknown;
@@ -1797,6 +1798,32 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
       ),
+    [IPC_CHANNELS.payrollPeriodDocument]: async (unsafeToken, unsafeId, unsafeAction) => {
+      const token = sessionTokenSchema.parse(unsafeToken);
+      const id = identifierSchema.parse(unsafeId);
+      const action = z.enum(['preview', 'save', 'data']).parse(unsafeAction);
+      const period = await management.getPayrollPrintPeriod(token, id);
+      const filename = `Расчётный лист ${period.sheetNumber ?? period.id}.pdf`.replaceAll(
+        /[\\/:*?"<>|]/gu,
+        '_',
+      );
+      const pdf = await generatePayrollPdf(period);
+      if (action === 'data')
+        return { status: 'READY' as const, filename, pdfBase64: pdf.toString('base64') };
+      if (action === 'preview') {
+        await documentPacks.preview(pdf);
+        return { status: 'PREVIEW' as const, filename };
+      }
+      const selection = await dialog.showSaveDialog({
+        title: 'Сохранить расчётный лист',
+        defaultPath: join(app.getPath('documents'), filename),
+        filters: [{ extensions: ['pdf'], name: 'Расчётный лист (PDF)' }],
+      });
+      if (selection.canceled || !selection.filePath)
+        return { status: 'CANCELLED' as const, filename };
+      await writeFile(selection.filePath, pdf);
+      return { status: 'SAVED' as const, filename };
+    },
     [IPC_CHANNELS.payrollPeriodCalculate]: (unsafeToken, unsafeId) =>
       management.calculatePayrollPeriod(
         sessionTokenSchema.parse(unsafeToken),

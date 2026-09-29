@@ -94,8 +94,7 @@ function SalarySheet({
   const lessonTotal = lessonRows.reduce((sum, row) => sum + row.calculatedAmount, 0);
   const adjustments = period.accruals.reduce((sum, row) => sum + row.manualAdjustment, 0);
   return (
-    <section className="payroll-print-document mt-5 rounded-2xl border border-border bg-white p-7 text-black shadow-sm print:mt-0 print:border-0 print:p-0 print:shadow-none">
-      <style>{`@media print { @page { size: A4; margin: 12mm; } body * { visibility: hidden !important; } .payroll-print-document, .payroll-print-document * { visibility: visible !important; } .payroll-print-document { position: absolute; inset: 0; width: 100%; margin: 0 !important; } .payroll-print-document thead { display: table-header-group; } .payroll-print-document tr { break-inside: avoid; } .payroll-print-document .sheet-total { break-inside: avoid; } }`}</style>
+    <section className="mt-5 rounded-2xl border border-border bg-white p-7 text-black shadow-sm print:mt-0 print:border-0 print:p-0 print:shadow-none">
       <header className="border-b-2 border-black pb-4">
         <p className="text-sm font-semibold uppercase tracking-[0.18em]">
           ARAVA CRM · Студия танца
@@ -152,7 +151,13 @@ function SalarySheet({
                 <td className="p-2">{index + 1}</td>
                 <td className="p-2 whitespace-nowrap">
                   {row.lessonStartsAt
-                    ? formatDate(row.lessonStartsAt, { dateStyle: 'short', timeStyle: 'short' })
+                    ? formatDate(row.lessonStartsAt, {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
                     : '—'}
                 </td>
                 <td className="p-2">{row.groupName ?? '—'}</td>
@@ -337,6 +342,15 @@ export function TrainerSalaryCard({
       ),
     onError: (error) => setMessage(getErrorMessage(error, 'Не удалось сохранить диагностику.')),
   });
+  const document = useMutation({
+    mutationFn: (action: 'preview' | 'save') =>
+      getDesktopApi().payroll.document(getSessionToken(), selectedId ?? '', action),
+    onSuccess: (result) => {
+      if (result.status === 'SAVED') setMessage('Расчётный лист сохранён в PDF.');
+    },
+    onError: (error) =>
+      setMessage(getErrorMessage(error, 'Не удалось сформировать расчётный лист.')),
+  });
   const period = selected.data;
   return (
     <>
@@ -429,8 +443,19 @@ export function TrainerSalaryCard({
               </div>
             ) : null}
             <div className="flex flex-wrap gap-2">
-              <Button onClick={() => window.print()} variant="outline">
+              <Button
+                disabled={document.isPending}
+                onClick={() => document.mutate('preview')}
+                variant="outline"
+              >
                 <Printer className="size-4" /> Печать / PDF
+              </Button>
+              <Button
+                disabled={document.isPending}
+                onClick={() => document.mutate('save')}
+                variant="outline"
+              >
+                <FileDown className="size-4" /> Сохранить PDF
               </Button>
               <Button onClick={() => diagnostic.mutate()} variant="outline">
                 <FileDown className="size-4" /> Диагностика

@@ -509,6 +509,7 @@ export const IPC_CHANNELS = {
   payrollPeriodCalculate: 'payroll-period:calculate',
   payrollPeriodCreate: 'payroll-period:create',
   payrollPeriodGet: 'payroll-period:get',
+  payrollPeriodDocument: 'payroll-period:document',
   payrollPeriodList: 'payroll-period:list',
   payrollPeriodPay: 'payroll-period:pay',
   payrollPeriodDelete: 'payroll-period:delete',
@@ -4177,6 +4178,15 @@ export interface AravaDesktopApi {
     ) => Promise<CashRegisterSummary>;
   };
   payroll: {
+    document: (
+      token: string,
+      id: string,
+      action: 'preview' | 'save' | 'data',
+    ) => Promise<{
+      status: 'PREVIEW' | 'SAVED' | 'CANCELLED' | 'READY';
+      filename: string;
+      pdfBase64?: string;
+    }>;
     adjustAccrual: (
       token: string,
       id: string,

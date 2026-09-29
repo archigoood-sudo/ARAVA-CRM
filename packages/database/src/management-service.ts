@@ -1042,6 +1042,40 @@ export class ManagementService {
       : periodDetail(period, pendingAttendance);
   }
 
+  /** Read-only print projection; never backfill from mutable lesson data. */
+  async getPayrollPrintPeriod(token: string, id: string): Promise<PayrollPeriodDetail> {
+    const actor = await this.application.authenticate(token);
+    assertPermission(actor, 'payroll:read');
+    if (actor.role === 'COACH')
+      throw new DomainError('AUTHORIZATION', 'Печать доступна руководителям.');
+    const period = await this.requirePayrollPeriod(id);
+    if (period.branchId) assertBranchAccess(actor, period.branchId);
+    for (const row of period.accruals) assertBranchAccess(actor, row.branchId);
+    if (!period.trainerId || !period.trainerName)
+      throw new DomainError(
+        'VALIDATION',
+        'В старом расчёте не сохранён snapshot конкретного тренера.',
+      );
+    if (period.accruals.some((row) => row.coachId !== period.trainerId))
+      throw new DomainError('VALIDATION', 'В расчёте есть начисления другого тренера.');
+    if (period.accruals.some((row) => row.lessonId && !row.lessonStartsAtSnapshot))
+      throw new DomainError(
+        'VALIDATION',
+        'В старом snapshot отсутствует дата занятия. Печать по текущему расписанию запрещена. Неутверждённый расчёт можно пересчитать.',
+      );
+    const trainerName = period.trainerName;
+    return {
+      ...periodDetail(period, []),
+      accruals: period.accruals.map((row) => ({
+        ...accrualSummary(row),
+        coachName: trainerName,
+        branchName: row.branchNameSnapshot ?? 'Название не сохранено',
+        groupName: row.groupNameSnapshot ?? undefined,
+        lessonStartsAt: row.lessonStartsAtSnapshot?.toISOString(),
+      })),
+    };
+  }
+
   async calculatePayrollPeriod(token: string, id: string): Promise<PayrollPeriodDetail> {
     const actor = await this.financeActor(token, 'payroll:calculate');
     const period = await this.requirePayrollPeriod(id);
