@@ -53,6 +53,7 @@ export class AqsiPaymentService {
     operationId: string,
     gateway: AqsiGatewayPayment,
   ): Promise<void> {
+    await this.operations.recordProviderOutcomeTrusted(operationId, gateway.status);
     let local = await this.operations.get(token, operationId);
     if (local.status === 'SUCCEEDED') return;
     if (local.status === 'CREATED') {

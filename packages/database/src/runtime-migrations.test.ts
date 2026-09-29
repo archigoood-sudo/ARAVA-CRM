@@ -37,6 +37,7 @@ describe('runtime migrations', () => {
       '20260904010000_normalize_invalid_room_references',
       '20260906000000_free_attendance_coverage',
       '20260906010000_attendance_scenarios',
+      '20260929000000_payment_warning_resolution',
     ]);
   });
 });

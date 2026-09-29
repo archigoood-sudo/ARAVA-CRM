@@ -906,6 +906,13 @@ model PaymentOperation {
   salePrice                       Int?
   saleNotes                       String?
   saleSequenceAfterSubscriptionId String?
+  warningResolvedAt              DateTime?
+  warningResolvedByUserId        String?
+  warningResolutionType          String?
+  warningResolutionNote          String?
+  providerOutcome                String?
+  providerOutcomeCheckedAt       DateTime?
+  providerPaymentConfirmedAt     DateTime?
   saleFinalizationError           String?
   saleFinalizationAttempts        Int                    @default(0)
   saleFinalizedAt                 DateTime?

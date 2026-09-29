@@ -882,4 +882,16 @@ export const runtimeMigrations: readonly RuntimeMigration[] = [
       `INSERT OR IGNORE INTO "AppSetting" ("key", "value", "updatedAt") VALUES ('attendance.scenario.LATE', '{"deductSubscription":true,"includeInTrainerPayroll":true}', CURRENT_TIMESTAMP)`,
     ],
   },
+  {
+    id: '20260929000000_payment_warning_resolution',
+    statements: [
+      'ALTER TABLE "PaymentOperation" ADD COLUMN "warningResolvedAt" DATETIME',
+      'ALTER TABLE "PaymentOperation" ADD COLUMN "warningResolvedByUserId" TEXT',
+      'ALTER TABLE "PaymentOperation" ADD COLUMN "warningResolutionType" TEXT',
+      'ALTER TABLE "PaymentOperation" ADD COLUMN "warningResolutionNote" TEXT',
+      'ALTER TABLE "PaymentOperation" ADD COLUMN "providerOutcome" TEXT',
+      'ALTER TABLE "PaymentOperation" ADD COLUMN "providerOutcomeCheckedAt" DATETIME',
+      'ALTER TABLE "PaymentOperation" ADD COLUMN "providerPaymentConfirmedAt" DATETIME',
+    ],
+  },
 ];

@@ -231,7 +231,11 @@ export class AttentionService {
       take: 25,
       where: {
         ...branchScope,
-        OR: [{ status: { in: ['FAILED', 'EXPIRED'] } }, { saleFinalizationError: { not: null } }],
+        OR: [
+          { status: { in: ['FAILED', 'EXPIRED'] }, warningResolvedAt: null },
+          { saleFinalizationError: { not: null } },
+          { status: { in: ['FAILED', 'EXPIRED'] }, providerPaymentConfirmedAt: { not: null } },
+        ],
         updatedAt: { gte: historyStart },
       },
     });

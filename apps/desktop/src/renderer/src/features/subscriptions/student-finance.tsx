@@ -276,7 +276,8 @@ export function StudentFinance({
     if (
       !operation ||
       !paymentOperationId ||
-      !['SBP', 'ACQUIRING'].includes(operation.providerType)
+      !['SBP', 'ACQUIRING'].includes(operation.providerType) ||
+      ['FAILED', 'EXPIRED'].includes(operation.status)
     ) {
       setGatewayPayment(undefined);
       return;
@@ -677,6 +678,38 @@ export function StudentFinance({
         subscriptionSale={subscriptionSale}
       />
       <PaymentOperationDetailsDialog
+        key={paymentOperationId ?? 'none'}
+        canResolve={user?.role === 'OWNER'}
+        onResolve={
+          user?.role === 'OWNER'
+            ? async (reason) => {
+                await perform(
+                  () =>
+                    getDesktopApi().paymentOperations.resolveWarning(
+                      getSessionToken(),
+                      paymentOperationId ?? '',
+                      { reason },
+                    ),
+                  'Не удалось закрыть предупреждение.',
+                );
+              }
+            : undefined
+        }
+        onExport={
+          user?.role === 'OWNER'
+            ? async () => {
+                setError(undefined);
+                try {
+                  await getDesktopApi().paymentOperations.exportWarnings(
+                    getSessionToken(),
+                    student.id,
+                  );
+                } catch (caught) {
+                  setError(getErrorMessage(caught, 'Не удалось сохранить диагностику.'));
+                }
+              }
+            : undefined
+        }
         busy={refreshAqsi.isPending || retryFiscalReceipt.isPending}
         error={error}
         gateway={gatewayPayment}
@@ -688,7 +721,10 @@ export function StudentFinance({
             ? retryFiscalReceipt.mutateAsync(operation.id)
             : refreshAqsi.mutateAsync(operation.id);
           void action
-            .then((result) => setGatewayPayment(result))
+            .then(async (result) => {
+              setGatewayPayment(result);
+              await selectedPaymentOperation.refetch();
+            })
             .catch((caught: unknown) =>
               setError(getErrorMessage(caught, 'Не удалось проверить кассовый чек.')),
             );

@@ -7,6 +7,7 @@ import {
 } from '@arava/shared';
 import { Badge, Button, Dialog, Money, Receipt } from '@arava/ui';
 import { ExternalLink, RefreshCw } from 'lucide-react';
+import { useState } from 'react';
 
 import { canCheckFiscalReceipt, fiscalReceiptLabel } from './payment-operation-details';
 
@@ -29,6 +30,9 @@ const gatewayStatus: Record<AqsiGatewayPayment['status'], string> = {
 
 export function PaymentOperationDetailsDialog({
   busy,
+  canResolve,
+  onResolve,
+  onExport,
   error,
   gateway,
   onCheck,
@@ -38,6 +42,9 @@ export function PaymentOperationDetailsDialog({
   payment,
 }: {
   busy: boolean;
+  canResolve?: boolean | undefined;
+  onResolve?: ((reason: string) => Promise<void>) | undefined;
+  onExport?: (() => Promise<void>) | undefined;
   error?: string | undefined;
   gateway?: AqsiGatewayPayment | undefined;
   onCheck: () => void;
@@ -46,7 +53,11 @@ export function PaymentOperationDetailsDialog({
   operation?: PaymentOperationSummary | undefined;
   payment?: PaymentDetail | undefined;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  const [reason, setReason] = useState('');
+  const [working, setWorking] = useState(false);
   const fiscal = gateway?.fiscalReceipt;
+  const terminalFailure = operation && ['FAILED', 'EXPIRED'].includes(operation.status);
   return (
     <Dialog
       closeLabel={t('common.closeDialog')}
@@ -160,15 +171,83 @@ export function PaymentOperationDetailsDialog({
             </section>
           ) : null}
 
+          {operation.warningResolvedAt ? (
+            <p className="text-sm">Предупреждение закрыто. Финансовый статус сохранён.</p>
+          ) : null}
+          {canResolve && terminalFailure && !operation.warningResolvedAt ? (
+            <section className="space-y-3 rounded-xl border p-3">
+              {operation.warningResolutionBlockedReason ? (
+                <p>
+                  Закрытие недоступно: результат оплаты не подтверждён либо требуется завершить
+                  выдачу. Используйте отдельную проверку оплаты.
+                </p>
+              ) : confirming ? (
+                <>
+                  <p>
+                    Закрыть только предупреждение в блоке внимания? Деньги, долг, абонемент и
+                    посещение не изменятся. Попытка останется в истории как неудачная.
+                  </p>
+                  <label className="block">
+                    Причина закрытия
+                    <textarea
+                      className="mt-1 w-full rounded border p-2"
+                      maxLength={500}
+                      onChange={(event) => setReason(event.target.value)}
+                      value={reason}
+                    />
+                  </label>
+                  <Button
+                    disabled={busy || working || reason.trim().length < 3}
+                    onClick={() => {
+                      if (!onResolve) return;
+                      setWorking(true);
+                      void onResolve(reason)
+                        .then(() => {
+                          setConfirming(false);
+                          setReason('');
+                        })
+                        .finally(() => setWorking(false));
+                    }}
+                  >
+                    Подтвердить закрытие предупреждения
+                  </Button>
+                  <Button disabled={working} onClick={() => setConfirming(false)} variant="outline">
+                    Отмена
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  disabled={busy || working}
+                  onClick={() => setConfirming(true)}
+                  variant="outline"
+                >
+                  Закрыть ошибку оплаты
+                </Button>
+              )}
+            </section>
+          ) : null}
+          {onExport ? (
+            <Button
+              disabled={working}
+              onClick={() => {
+                setWorking(true);
+                void onExport().finally(() => setWorking(false));
+              }}
+              variant="outline"
+            >
+              Экспорт диагностики оплаты
+            </Button>
+          ) : null}
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
           <div className="flex justify-end gap-2">
             <Button onClick={onClose} variant="outline">
               {t('common.close')}
             </Button>
-            {canCheckFiscalReceipt(operation, gateway) ? (
+            {canCheckFiscalReceipt(operation, gateway) ||
+            (terminalFailure && ['SBP', 'ACQUIRING'].includes(operation.providerType)) ? (
               <Button disabled={busy} onClick={onCheck}>
                 <RefreshCw className="size-4" />
-                Проверить чек
+                {terminalFailure ? 'Проверить оплату' : 'Проверить чек'}
               </Button>
             ) : null}
           </div>

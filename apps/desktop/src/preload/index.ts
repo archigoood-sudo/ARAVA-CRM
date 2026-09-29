@@ -337,6 +337,10 @@ const desktopApi: AravaDesktopApi = {
     list: (token, query) => invoke(IPC_CHANNELS.paymentList, token, query),
   },
   paymentOperations: {
+    resolveWarning: (token, id, input) =>
+      invoke(IPC_CHANNELS.paymentOperationResolveWarning, token, id, input),
+    exportWarnings: (token, studentId) =>
+      invoke(IPC_CHANNELS.paymentOperationExportWarnings, token, studentId),
     cancel: (token, id, input) => invoke(IPC_CHANNELS.paymentOperationCancel, token, id, input),
     cancelAqsi: (token, id) => invoke(IPC_CHANNELS.paymentOperationCancelAqsi, token, id),
     cancelSbp: (token, id) => invoke(IPC_CHANNELS.paymentOperationCancelSbp, token, id),

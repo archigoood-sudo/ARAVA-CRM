@@ -1282,6 +1282,26 @@ export function createIpcHandlers(
         sessionTokenSchema.parse(unsafeToken),
         identifierSchema.parse(unsafeId),
       ),
+    [IPC_CHANNELS.paymentOperationResolveWarning]: (unsafeToken, unsafeId, unsafeInput) =>
+      paymentOperations.resolveWarning(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeId),
+        paymentOperationReasonSchema.parse(unsafeInput),
+      ),
+    [IPC_CHANNELS.paymentOperationExportWarnings]: async (unsafeToken, unsafeStudentId) => {
+      const report = await paymentOperations.exportWarnings(
+        sessionTokenSchema.parse(unsafeToken),
+        identifierSchema.parse(unsafeStudentId),
+      );
+      const selection = await dialog.showSaveDialog({
+        defaultPath: join(app.getPath('documents'), report.filename),
+        filters: [{ extensions: ['json'], name: 'Диагностика ошибок оплаты JSON' }],
+        title: 'Экспорт диагностики оплаты',
+      });
+      if (selection.canceled || !selection.filePath) return false;
+      await writeFile(selection.filePath, report.content, { encoding: 'utf8', flag: 'wx' });
+      return true;
+    },
     [IPC_CHANNELS.paymentOperationCreate]: (unsafeToken, unsafeInput) =>
       paymentOperations.create(
         sessionTokenSchema.parse(unsafeToken),

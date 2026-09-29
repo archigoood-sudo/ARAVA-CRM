@@ -455,6 +455,8 @@ export const IPC_CHANNELS = {
   attendanceCoverFree: 'attendance:cover-free',
   paymentGet: 'payment:get',
   paymentList: 'payment:list',
+  paymentOperationResolveWarning: 'payment-operation:resolve-warning',
+  paymentOperationExportWarnings: 'payment-operation:export-warnings',
   paymentOperationCancel: 'payment-operation:cancel',
   paymentOperationCancelAqsi: 'payment-operation:cancel-aqsi',
   paymentOperationCreate: 'payment-operation:create',
@@ -1327,6 +1329,9 @@ export interface PaymentOperationCreateInput {
 }
 
 export interface PaymentOperationSummary extends PaymentOperationCreateInput {
+  warningResolvedAt?: string | undefined;
+  warningResolutionType?: 'ABANDONED' | 'SUPERSEDED' | undefined;
+  warningResolutionBlockedReason?: string | undefined;
   cancellationReason?: string | undefined;
   completedAt?: string | undefined;
   createdAt: string;
@@ -4086,6 +4091,12 @@ export interface AravaDesktopApi {
     list: (token: string, query: PaymentListQuery) => Promise<PaymentSummary[]>;
   };
   paymentOperations: {
+    resolveWarning: (
+      token: string,
+      id: string,
+      input: PaymentOperationReasonInput,
+    ) => Promise<PaymentOperationSummary>;
+    exportWarnings: (token: string, studentId: string) => Promise<boolean>;
     cancel: (
       token: string,
       id: string,

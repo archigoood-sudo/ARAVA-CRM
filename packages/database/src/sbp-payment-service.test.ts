@@ -44,6 +44,7 @@ function setup(
 ) {
   let current = currentOperation;
   const operations = {
+    recordProviderOutcomeTrusted: vi.fn(),
     cancel: vi.fn(),
     expireTrusted: vi.fn(),
     failTrusted: vi.fn(),
@@ -160,11 +161,19 @@ describe('AqsiPaymentService', () => {
   it('maps failed and expired provider states without payment creation', async () => {
     const failed = setup('FAILED');
     await failed.service.start('session', operation.id);
+    expect(failed.operations.recordProviderOutcomeTrusted).toHaveBeenCalledWith(
+      operation.id,
+      'FAILED',
+    );
     expect(failed.operations.failTrusted).toHaveBeenCalledOnce();
     expect(failed.operations.finalizeTrusted).not.toHaveBeenCalled();
 
     const expired = setup('EXPIRED');
     await expired.service.start('session', operation.id);
+    expect(expired.operations.recordProviderOutcomeTrusted).toHaveBeenCalledWith(
+      operation.id,
+      'EXPIRED',
+    );
     expect(expired.operations.expireTrusted).toHaveBeenCalledOnce();
     expect(expired.operations.finalizeTrusted).not.toHaveBeenCalled();
   });

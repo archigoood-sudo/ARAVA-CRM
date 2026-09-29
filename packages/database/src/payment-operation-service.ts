@@ -16,7 +16,8 @@ import {
 } from './finance-service';
 import type { DatabaseClient } from './index';
 import { accessibleBranchIds, assertBranchAccess, assertPermission } from './permissions';
-import { DomainError } from './security';
+import { DomainError, hashSessionToken } from './security';
+import { paymentWarningBlock } from './payment-warning';
 import type { ApplicationService } from './services';
 
 const operationInclude = {
@@ -72,6 +73,18 @@ function optionalText(value: string | undefined): string | null {
 
 function summary(operation: OperationRecord): PaymentOperationSummary {
   return {
+    ...(operation.warningResolvedAt
+      ? {
+          warningResolvedAt: operation.warningResolvedAt.toISOString(),
+          warningResolutionType:
+            operation.warningResolutionType === 'SUPERSEDED'
+              ? ('SUPERSEDED' as const)
+              : ('ABANDONED' as const),
+        }
+      : {}),
+    ...(paymentWarningBlock(operation)
+      ? { warningResolutionBlockedReason: paymentWarningBlock(operation) }
+      : {}),
     amount: operation.amount,
     branchId: operation.branchId,
     ...(operation.cancellationReason ? { cancellationReason: operation.cancellationReason } : {}),
@@ -305,6 +318,140 @@ export class PaymentOperationService {
       }
       throw error;
     }
+  }
+
+  // Uses the same session security checks without touching lastUsedAt or deleting sessions.
+  private async requireWarningOwner(token: string) {
+    const session = await this.database.session.findUnique({
+      include: { user: true },
+      where: { tokenHash: hashSessionToken(token) },
+    });
+    if (
+      !session ||
+      session.expiresAt.getTime() <= Date.now() ||
+      !session.user.isActive ||
+      session.securityVersion !== session.user.securityVersion
+    )
+      throw new DomainError('AUTHENTICATION', 'Сессия недействительна. Войдите снова.');
+    if (session.user.role !== 'OWNER' || session.user.mustChangePassword)
+      throw new DomainError('AUTHORIZATION', 'Действие доступно только владельцу.');
+    return session.user;
+  }
+
+  async resolveWarning(
+    token: string,
+    id: string,
+    input: { reason: string },
+  ): Promise<PaymentOperationSummary> {
+    const actor = await this.requireWarningOwner(token);
+    const note = input.reason.trim();
+    if (note.length < 3 || note.length > 500)
+      throw new DomainError('VALIDATION', 'Укажите причину закрытия (3–500 символов).');
+    return this.database.$transaction(async (tx) => {
+      const operation = await tx.paymentOperation.findUnique({
+        include: operationInclude,
+        where: { id },
+      });
+      if (!operation) throw new DomainError('NOT_FOUND', 'Операция оплаты не найдена.');
+      if (operation.warningResolvedAt) return summary(operation);
+      const blocked = paymentWarningBlock(operation);
+      if (blocked)
+        throw new DomainError(
+          'CONFLICT',
+          'Нельзя закрыть ошибку: требуется проверка оплаты. ' + blocked,
+        );
+      // No correlation identity exists across attempts: never infer SUPERSEDED from purchase attributes.
+      const updated = await tx.paymentOperation.update({
+        where: { id },
+        include: operationInclude,
+        data: {
+          warningResolvedAt: new Date(),
+          warningResolvedByUserId: actor.id,
+          warningResolutionType: 'ABANDONED',
+          warningResolutionNote: note,
+          // Acknowledgement must not move the financial operation into a different reporting day.
+          updatedAt: operation.updatedAt,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          action: 'PAYMENT_WARNING_RESOLVED',
+          actorUserId: actor.id,
+          entityType: 'PaymentOperation',
+          entityId: id,
+          detail: JSON.stringify({
+            resolutionType: 'ABANDONED',
+            financialStatus: operation.status,
+            reason: note,
+          }),
+        },
+      });
+      return summary(updated);
+    });
+  }
+
+  async recordProviderOutcomeTrusted(id: string, outcome: string): Promise<void> {
+    if (
+      !['CREATED', 'WAITING', 'PROCESSING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED'].includes(
+        outcome,
+      )
+    )
+      throw new DomainError('VALIDATION', 'Неизвестный результат провайдера.');
+    const operation = await this.requireOperation(id);
+    await this.database.paymentOperation.update({
+      where: { id },
+      data: {
+        providerOutcome: outcome,
+        providerOutcomeCheckedAt: new Date(),
+        updatedAt: operation.updatedAt,
+        ...(outcome === 'SUCCEEDED'
+          ? { providerPaymentConfirmedAt: operation.providerPaymentConfirmedAt ?? new Date() }
+          : {}),
+      },
+    });
+  }
+
+  async exportWarnings(
+    token: string,
+    studentId: string,
+  ): Promise<{ filename: string; content: string }> {
+    await this.requireWarningOwner(token);
+    const rows = await this.database.paymentOperation.findMany({
+      where: { studentId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    // Explicit allowlist: never export free-text reasons, purpose, names, provider IDs or tokens.
+    const operations = rows.map((row) => ({
+      operationId: row.id,
+      studentId: row.studentId,
+      subscriptionId: row.subscriptionId,
+      paymentId: row.paymentId,
+      attendanceLessonId: row.attendanceLessonId,
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+      completedAt: row.completedAt?.toISOString() ?? null,
+      providerType: row.providerType,
+      providerOutcome: row.providerOutcome,
+      providerOutcomeCheckedAt: row.providerOutcomeCheckedAt?.toISOString() ?? null,
+      providerPaymentConfirmed: Boolean(row.providerPaymentConfirmedAt),
+      failureReasonPresent: Boolean(row.failureReason),
+      finalizationErrorPresent: row.saleFinalizationError !== null,
+      finalizationAttempts: row.saleFinalizationAttempts,
+      warningResolvedAt: row.warningResolvedAt?.toISOString() ?? null,
+      resolutionType: row.warningResolutionType,
+      resolutionBlockedReason: paymentWarningBlock(row) ?? null,
+      purchaseCorrelation: 'NOT_AVAILABLE',
+    }));
+    const at = new Date().toISOString();
+    return {
+      filename: 'ARAVA-payment-warnings-' + at.replace(/[:.]/g, '-') + '.json',
+      content: JSON.stringify(
+        { version: 1, exportedAt: at, total: operations.length, operations },
+        null,
+        2,
+      ),
+    };
   }
 
   async get(token: string, id: string): Promise<PaymentOperationSummary> {
