@@ -181,6 +181,7 @@ test('payroll PDF is isolated A4, repeats headers, retains actual dates and immu
             calculatedAmount: 50000,
             finalAmount: 50000,
             attendeeCount: 8,
+            comment: 'Оплата разово; абонемент; списание; СБП; долг',
             ...(index === 0
               ? { manualAddedAt: new Date(), manualAdditionReason: 'Подтверждённая замена' }
               : {}),
@@ -212,11 +213,13 @@ test('payroll PDF is isolated A4, repeats headers, retains actual dates and immu
     for (let day = 1; day <= 24; day++)
       expect(normalText.texts[0]).toContain(`${String(day).padStart(2, '0')}.08.2026`);
     expect(normalText.texts[0]).toMatch(/Добавлено\s*вручную/u);
+    expect(normalText.texts[0]).toMatch(/Дополнительные\s*начисления/u);
+    expect(normalText.texts[0]).toMatch(/сумма\s*учтена\s*в\s*занятиях/u);
     expect(normalText.texts[0]).toContain('Сохранённый Заменяющий');
     expect(normalText.texts[0]).toContain('Подпись руководителя');
     expect(normalText.texts[0]).toContain('Подпись сотрудника');
     expect(normalText.texts[0]).not.toMatch(
-      /Настройки|Диагностика|Добавить занятие|Отменить расчёт/u,
+      /Настройки|Диагностика|Добавить занятие|Отменить расчёт|Оплата\s*разово|абонемент|списание|СБП|долг|Статус\s*\/основание/u,
     );
     const longId = await seed(100, 'APPROVED', 2);
     const long = await generate(longId);

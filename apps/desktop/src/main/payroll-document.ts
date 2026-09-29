@@ -30,16 +30,6 @@ const statuses = {
   PAID: 'ВЫПЛАЧЕН',
   CANCELLED: 'ОТМЕНЁН',
 };
-const categories = {
-  REGULAR_ATTENDANCE: 'Обычное посещение',
-  MAKEUP: 'Отработка',
-  SUBSTITUTION: 'Замена',
-  PERSONAL_LESSON: 'Персональное',
-  PROMOTIONAL_FREE: 'Промо / бесплатное',
-  SINGLE_VISIT: 'Разовое посещение',
-  TRIAL: 'Пробное',
-};
-
 function rate(row: PayrollAccrualSummary): string {
   if (row.payoutCategory && !row.payoutMode) return 'Не настроено';
   if (row.payoutMode === 'NO_PAYOUT') return 'NO_PAYOUT · 0 ₽';
@@ -95,17 +85,38 @@ export function buildPayrollDocumentHtml(period: PayrollPeriodDetail): string {
   const additionalTotal = extras.reduce((sum, row) => sum + row.amount, 0);
   if (lessonTotal + additionalTotal !== period.totalAmount)
     throw new Error('Итог snapshot не совпадает с начислениями.');
+  const manualNotes = lessons
+    .filter((row) => Boolean(row.manualAdditionReason))
+    .map(
+      (row) =>
+        '<p>Добавлено вручную: ' +
+        escape(row.manualAdditionReason ?? '') +
+        ' · ' +
+        date(row.lessonStartsAt) +
+        ' · ' +
+        escape(row.groupName ?? 'Название не сохранено') +
+        ' (сумма учтена в занятиях)</p>',
+    )
+    .join('');
   const rows = lessons
-    .map((row) => {
-      const basis = [
-        row.payoutCategory ? categories[row.payoutCategory] : 'По расчёту',
-        row.manualAdditionReason ? `Добавлено вручную: ${row.manualAdditionReason}` : row.comment,
-        row.payoutCategory && !row.payoutMode ? 'Не настроено' : undefined,
-      ]
-        .filter(Boolean)
-        .join('. ');
-      return `<tr data-lesson="${escape(row.id)}"><td class="nowrap">${date(row.lessonStartsAt)}</td><td>${escape(row.groupName ?? 'Название не сохранено')}</td><td class="nowrap">${time(row.lessonStartsAt)}</td><td>${escape(basis)}</td><td class="number">${String(row.attendeeCount ?? 0)}</td><td>${escape(rate(row))}</td><td class="number">${escape(money(row.calculatedAmount))}</td></tr>`;
-    })
+    .map(
+      (row) =>
+        '<tr data-lesson="' +
+        escape(row.id) +
+        '"><td class="nowrap">' +
+        date(row.lessonStartsAt) +
+        '</td><td>' +
+        escape(row.groupName ?? 'Название не сохранено') +
+        '</td><td class="nowrap">' +
+        time(row.lessonStartsAt) +
+        '</td><td class="number">' +
+        String(row.attendeeCount ?? 0) +
+        '</td><td>' +
+        escape(rate(row)) +
+        '</td><td class="number">' +
+        escape(money(row.calculatedAmount)) +
+        '</td></tr>',
+    )
     .join('');
   return `<!doctype html><html lang="ru"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Расчётный лист ${escape(period.sheetNumber ?? period.id)}</title><style>
 @page { size: A4 portrait; margin: 12mm 12mm 17mm; }
@@ -114,8 +125,8 @@ h1 { font-size: 15pt; margin: 0 0 3mm; } p { margin: 1.5mm 0; } header { margin-
 table { border-collapse: collapse; width: 100%; table-layout: fixed; } thead { display: table-header-group; } th, td { border: .2mm solid #888; padding: 1.2mm 1mm; vertical-align: top; overflow-wrap: anywhere; } th { font-weight: bold; text-align: left; border-color: #333; } tr { break-inside: avoid; page-break-inside: avoid; } .number { text-align: right; } .nowrap { white-space: nowrap; } .extras { margin-top: 4mm; } h2 { font-size: 10pt; margin: 0 0 2mm; }
 .closing { break-inside: avoid; page-break-inside: avoid; margin-top: 4mm; } .totals { width: 95mm; margin-left: auto; } .totals td { border: none; padding: 1mm 0; } .grand td { border-top: .4mm solid #000; font-weight: bold; font-size: 11pt; padding-top: 2mm; } .metadata { margin-top: 3mm; font-size: 8pt; } .signatures { display: flex; justify-content: space-between; gap: 8mm; margin-top: 8mm; padding-bottom: 3mm; } .signature { flex: 1; white-space: nowrap; }
 </style></head><body><header><div class="studio">АРАВА · Студия танца</div><h1>РАСЧЁТНЫЙ ЛИСТ № ${escape(period.sheetNumber ?? 'не присвоен')}</h1><p>Расчётный период: ${date(period.dateFrom)} — ${date(period.dateTo)}</p><p>Сотрудник: <b>${escape(period.trainerName)}</b></p><p>Должность/роль: тренер</p></header>
-<table aria-label="Занятия"><colgroup><col style="width:11%"><col style="width:21%"><col style="width:8%"><col style="width:22%"><col style="width:8%"><col style="width:17%"><col style="width:13%"></colgroup><thead><tr><th>Дата</th><th>Группа</th><th>Время</th><th>Статус/основание</th><th>Ученики</th><th>Ставка</th><th>Сумма</th></tr></thead><tbody>${rows || '<tr><td colspan="7">Нет начислений по занятиям</td></tr>'}</tbody></table>
-${extras.length ? `<section class="extras"><h2>Дополнительные начисления</h2><table><thead><tr><th>Основание</th><th style="width:25%">Сумма</th></tr></thead><tbody>${extras.map((row) => `<tr><td>${escape(row.label)}</td><td class="number">${escape(money(row.amount))}</td></tr>`).join('')}</tbody></table></section>` : ''}
+<table aria-label="Занятия"><colgroup><col style="width:13%"><col style="width:29%"><col style="width:10%"><col style="width:11%"><col style="width:22%"><col style="width:15%"></colgroup><thead><tr><th>Дата</th><th>Группа</th><th>Время</th><th>Ученики</th><th>Ставка</th><th>Сумма</th></tr></thead><tbody>${rows || '<tr><td colspan="6">Нет начислений по занятиям</td></tr>'}</tbody></table>
+${extras.length || manualNotes ? `<section class="extras"><h2>Дополнительные начисления</h2>${manualNotes}${extras.length ? `<table><thead><tr><th>Основание</th><th style="width:25%">Сумма</th></tr></thead><tbody>${extras.map((row) => `<tr><td>${escape(row.label)}</td><td class="number">${escape(money(row.amount))}</td></tr>`).join('')}</tbody></table>` : ''}</section>` : ''}
 <section class="closing"><table class="totals"><tbody><tr><td>Итого за занятия</td><td class="number">${escape(money(lessonTotal))}</td></tr><tr><td>Дополнительные начисления</td><td class="number">${escape(money(additionalTotal))}</td></tr><tr class="grand"><td>ИТОГО К ВЫПЛАТЕ</td><td class="number">${escape(money(period.totalAmount))}</td></tr></tbody></table><p class="metadata">Дата формирования: ${date(period.createdAt)} · Статус расчёта: ${statuses[period.status]}</p><div class="signatures"><div class="signature">Подпись руководителя __________</div><div class="signature">Подпись сотрудника __________</div></div></section></body></html>`;
 }
 

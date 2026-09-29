@@ -49,7 +49,8 @@ describe('isolated payroll print document', () => {
     expect(html).toContain('ЗП-2026-0042');
     expect(html).toContain('Тренер Замещающий');
     expect(html).toContain('Добавлено вручную: Уточнено владельцем');
-    expect(html).toContain('Замена');
+    expect(html).not.toContain('<th>Статус/основание</th>');
+    expect(html).toContain('сумма учтена в занятиях');
     expect(html).toContain('500,00 ₽');
     expect(html).toContain('550,00 ₽');
     expect(html).toContain('50,00 ₽');
@@ -91,5 +92,45 @@ describe('isolated payroll print document', () => {
     expect(buildPayrollDocumentHtml(period)).toContain('Не настроено');
     row.payoutMode = 'NO_PAYOUT';
     expect(buildPayrollDocumentHtml(period)).toContain('NO_PAYOUT');
+  });
+  it('excludes client finance comments and categories without mutating the snapshot', () => {
+    const period = fixture();
+    const row = period.accruals[0];
+    if (!row) throw new Error('Incomplete test fixture');
+    row.comment = 'Оплата разово; абонемент; списание; СБП; карта; долг; оплата ожидается';
+    row.manualAdjustment = 0;
+    row.manualAdditionReason = undefined;
+    row.finalAmount = row.calculatedAmount;
+    period.totalAmount = row.finalAmount;
+    for (const category of [
+      'SINGLE_VISIT',
+      'REGULAR_ATTENDANCE',
+      'TRIAL',
+      'PROMOTIONAL_FREE',
+    ] as const) {
+      row.payoutCategory = category;
+      const before = structuredClone(period);
+      const html = buildPayrollDocumentHtml(period);
+      expect(html).not.toMatch(
+        /Оплата разово|абонемент|списание|СБП|карта|долг|оплата ожидается|Разовое посещение|Пробное|Промо/u,
+      );
+      const table = html.split('<table aria-label="Занятия">')[1]?.split('</table>')[0];
+      expect(table).toContain(
+        '<th>Дата</th><th>Группа</th><th>Время</th><th>Ученики</th><th>Ставка</th><th>Сумма</th>',
+      );
+      expect(period).toEqual(before);
+    }
+  });
+  it('keeps manual payroll reasons outside the lesson table and counts each amount once', () => {
+    const html = buildPayrollDocumentHtml(fixture());
+    const table = html.split('<table aria-label="Занятия">')[1]?.split('</table>')[0];
+    expect(table).not.toContain('Уточнено владельцем');
+    expect(table).not.toContain('Доплата');
+    const extras = html.split('<section class="extras">')[1]?.split('</section>')[0];
+    expect(extras).toContain('Добавлено вручную: Уточнено владельцем');
+    expect(extras).toContain('Корректировка 17.08.2026: Доплата');
+    expect(extras).toContain('50,00 ₽');
+    expect(extras).not.toContain('500,00 ₽');
+    expect(html).toContain('550,00 ₽');
   });
 });
