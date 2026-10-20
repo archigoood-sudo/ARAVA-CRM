@@ -1,3 +1,4 @@
+import { vkResultSchema, type VkAction, type VkResult } from '@arava/shared';
 import type {
   AqsiDeviceList,
   AqsiDeviceSummary,
@@ -911,6 +912,9 @@ function parseChatSummary(value: unknown): ChatSummary {
     };
   });
   return {
+    ...(value.channel === 'VK'
+      ? { channel: 'VK' as const, leadId: typeof value.leadId === 'string' ? value.leadId : null }
+      : {}),
     branchId: typeof value.branchId === 'string' ? value.branchId : null,
     crmGroupId: typeof value.crmGroupId === 'string' ? value.crmGroupId : null,
     id: value.id,
@@ -929,7 +933,7 @@ function parseChatMessagePage(value: unknown): ChatMessagePage {
   if (!isRecord(value) || !Array.isArray(value.messages) || typeof value.hasMore !== 'boolean') {
     return invalidChatResponse();
   }
-  const messages = value.messages.map((message) => {
+  const messages = value.messages.map<ChatMessagePage['messages'][number]>((message) => {
     if (
       !isRecord(message) ||
       typeof message.id !== 'string' ||
@@ -974,7 +978,12 @@ function parseChatMessagePage(value: unknown): ChatMessagePage {
       senderName: message.senderName,
       senderRole: message.senderRole,
       senderType: message.senderType,
-      status: 'SENT' as const,
+      status:
+        isRecord(value.conversation) &&
+        value.conversation.channel === 'VK' &&
+        (message.status === 'PENDING' || message.status === 'ERROR')
+          ? message.status
+          : ('SENT' as const),
     };
   });
   return {
@@ -1143,6 +1152,8 @@ export class IntegrationApiClient {
       'X-ARAVA-API-Version': INTEGRATION_API_VERSION,
       'X-ARAVA-Device-ID': deviceId,
     };
+    if (path === 'chats' || path.startsWith('chats?') || path.startsWith('chats/'))
+      headers['X-ARAVA-Chat-Channels'] = 'vk';
     if (token) headers.Authorization = `Bearer ${token}`;
     if (context) {
       headers['X-ARAVA-CRM-Context'] = Buffer.from(JSON.stringify(context), 'utf8').toString(
@@ -2192,6 +2203,53 @@ export class IntegrationApiClient {
         'Сервер не подтвердил конвертацию заявки.',
       );
     return parseLeadDetail(payload.lead);
+  }
+
+  async vkAction(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    input: VkAction,
+  ): Promise<VkResult> {
+    return vkResultSchema.parse(
+      await this.request(baseUrl, 'vk', deviceId, token, 'POST', input, context),
+    );
+  }
+
+  async sendVkChatMessage(
+    baseUrl: string,
+    deviceId: string,
+    token: string,
+    context: CrmChatRequestContext,
+    conversationId: string,
+    input: ChatSendInput,
+  ): Promise<ChatMessagePage['messages'][number]> {
+    const payload = await this.request(
+      baseUrl,
+      'chats/' + encodeURIComponent(conversationId) + '/messages',
+      deviceId,
+      token,
+      'POST',
+      input,
+      context,
+    );
+    if (!isRecord(payload) || !isRecord(payload.message)) return invalidChatResponse();
+    const page = parseChatMessagePage({
+      conversation: payload.conversation,
+      messages: [payload.message],
+      hasMore: false,
+      nextCursor: null,
+    });
+    const message = page.messages[0];
+    if (
+      !message ||
+      page.conversation.id !== conversationId ||
+      page.conversation.channel !== 'VK' ||
+      message.id !== input.clientMessageId
+    )
+      return invalidChatResponse();
+    return message;
   }
 
   async getChat(
@@ -3462,6 +3520,33 @@ export class IntegrationService {
     );
     await this.auditClientAccess(actor, studentId, 'WEB_CLIENT_ACCESS_REVOKED');
     return result;
+  }
+
+  async remoteVkAction(context: CrmChatRequestContext, input: VkAction): Promise<VkResult> {
+    const connection = await this.chatConnection();
+    return this.api.vkAction(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      input,
+    );
+  }
+
+  async sendRemoteVkChatMessage(
+    context: CrmChatRequestContext,
+    conversationId: string,
+    input: ChatSendInput,
+  ): Promise<ChatMessagePage['messages'][number]> {
+    const connection = await this.chatConnection();
+    return this.api.sendVkChatMessage(
+      connection.baseUrl,
+      connection.deviceId,
+      connection.token,
+      context,
+      conversationId,
+      input,
+    );
   }
 
   async listRemoteChats(

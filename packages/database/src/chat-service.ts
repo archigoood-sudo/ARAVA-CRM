@@ -1,5 +1,7 @@
 import type {
   AuthenticatedUser,
+  VkAction,
+  VkResult,
   ChatListQuery,
   ChatListResult,
   ChatMessage,
@@ -86,6 +88,23 @@ export class ChatService {
     private readonly integration: IntegrationService,
   ) {}
 
+  async vkAction(token: string, input: VkAction): Promise<VkResult> {
+    const actor = await this.communicationsActor(token);
+    if (['STATUS', 'CONFIGURE', 'DISABLE'].includes(input.action) && actor.role !== 'OWNER') {
+      throw new DomainError('AUTHORIZATION', 'Настраивать ВКонтакте может только владелец.');
+    }
+    if ('conversationId' in input) {
+      const conversation = await this.integration.getRemoteChat(
+        this.context(actor),
+        input.conversationId,
+      );
+      await this.assertAccess(actor, conversation);
+      if (conversation.channel !== 'VK')
+        throw new DomainError('VALIDATION', 'Это не диалог ВКонтакте.');
+    }
+    return this.integration.remoteVkAction(this.context(actor), input);
+  }
+
   clearAuthorizationCache(): void {
     this.authorizedConversations.clear();
   }
@@ -134,9 +153,10 @@ export class ChatService {
     this.remember(actor, page.conversation);
     const messages: ChatMessage[] = page.messages.map((message) => ({
       ...message,
-      status: 'SENT' as const,
+      status: page.conversation.channel === 'VK' ? message.status : ('SENT' as const),
     }));
-    if (!before) messages.push(...(await this.pendingMessages(actor, conversationId)));
+    if (!before && page.conversation.channel !== 'VK')
+      messages.push(...(await this.pendingMessages(actor, conversationId)));
     return { ...page, messages };
   }
 
@@ -157,6 +177,10 @@ export class ChatService {
       (await this.integration.getRemoteChat(this.context(actor), conversationId));
     await this.assertAccess(actor, conversation);
     this.remember(actor, conversation);
+    if (conversation.channel === 'VK') {
+      // Provider delivery is owned by the server. Never enqueue external messages in CRM sync.
+      return this.integration.sendRemoteVkChatMessage(this.context(actor), conversationId, input);
+    }
     const context = this.context(actor);
     const now = new Date();
     const idempotencyKey = `chat:${input.clientMessageId}`;
@@ -445,6 +469,12 @@ export class ChatService {
 
   private async canAccess(actor: AuthenticatedUser, conversation: ChatSummary): Promise<boolean> {
     if (actor.role === 'OWNER') return true;
+    if (conversation.channel === 'VK')
+      return (
+        actor.role === 'ADMIN' &&
+        (actor.branchIds.length === 0 ||
+          (conversation.branchId !== null && canAccessBranch(actor, conversation.branchId)))
+      );
     if (conversation.type === 'PRIVATE_ADMIN') {
       if (actor.role === 'COACH') return false;
       if (actor.branchIds.length === 0) return true;

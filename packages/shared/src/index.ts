@@ -127,3 +127,5 @@ export {
   weeklyScheduleInputSchema,
   weeklyScheduleQuerySchema,
 } from './validation';
+
+export * from './vk';

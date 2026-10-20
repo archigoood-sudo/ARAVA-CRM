@@ -1,3 +1,4 @@
+import type { VkAction, VkResult } from './vk';
 import type { PermissionSet } from './permissions';
 
 export const USER_ROLES = ['OWNER', 'ADMIN', 'COACH'] as const;
@@ -393,6 +394,7 @@ export const IPC_CHANNELS = {
   webActionReject: 'web-action:reject',
   chatGet: 'chat:get',
   chatImage: 'chat:image',
+  vkAction: 'vk:action',
   chatList: 'chat:list',
   chatMessages: 'chat:messages',
   chatRead: 'chat:read',
@@ -3509,6 +3511,8 @@ export interface ChatLinkedStudent {
 }
 
 export interface ChatSummary {
+  channel?: 'VK' | undefined;
+  leadId?: string | null | undefined;
   branchId: string | null;
   crmGroupId: string | null;
   id: string;
@@ -3817,6 +3821,9 @@ export interface AravaDesktopApi {
       input: TrialOutcomeInput,
     ) => Promise<TrialAppointmentSummary>;
     schedule: (token: string, input: TrialScheduleInput) => Promise<TrialAppointmentSummary>;
+  };
+  vk: {
+    request: (token: string, input: VkAction) => Promise<VkResult>;
   };
   chats: {
     get: (token: string, conversationId: string) => Promise<ChatSummary>;

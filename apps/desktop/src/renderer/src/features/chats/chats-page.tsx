@@ -23,6 +23,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { safeChatReturn } from '../students/student-communication-model';
 import { ChatTemplates } from './chat-templates';
+import { VkChatActions } from './vk-chat-actions';
 
 const filters: { id: ChatFilter; label: string }[] = [
   { id: 'ALL', label: 'Все' },
@@ -75,7 +76,7 @@ export function ChatsPage() {
   return (
     <main className="mx-auto flex h-full w-full max-w-[1600px] flex-col p-9 pb-8">
       <PageHeader
-        description="Личные обращения клиентов и групповые разговоры из ARAVA-WEB."
+        description="Обращения клиентов из ARAVA-WEB и подключённого сообщества ВКонтакте."
         eyebrow="ARAVA ECOSYSTEM"
         title="Чаты"
       />
@@ -245,9 +246,13 @@ function ConversationView({
         text,
       }),
     onError: (error) => setSendError(getErrorMessage(error, 'Не удалось отправить сообщение.')),
-    onSuccess: () => {
+    onSuccess: (message) => {
       setDraft('');
-      setSendError(undefined);
+      setSendError(
+        message.status === 'ERROR'
+          ? 'ВКонтакте не подтвердил отправку. Проверьте диалог в ВК перед повторной отправкой.'
+          : undefined,
+      );
       void client.invalidateQueries({
         queryKey: queryKeys.chatMessages(accessKey, conversation.id),
       });
@@ -297,6 +302,9 @@ function ConversationView({
           </Button>
         </div>
       </header>
+      {conversation.channel === 'VK' ? (
+        <VkChatActions conversation={conversation} accessKey={accessKey} />
+      ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto bg-muted/10 px-8 py-6">
         {messages.hasNextPage ? (
           <div className="mb-5 text-center">

@@ -55,6 +55,7 @@ const desktopApi: AravaDesktopApi = {
   globalSearch: {
     query: (token, query) => invoke(IPC_CHANNELS.globalSearch, token, query),
   },
+  vk: { request: (token, input) => invoke(IPC_CHANNELS.vkAction, token, input) },
   chats: {
     get: (token, conversationId) => invoke(IPC_CHANNELS.chatGet, token, conversationId),
     image: (token, conversationId, attachmentId) =>

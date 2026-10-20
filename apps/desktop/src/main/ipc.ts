@@ -30,6 +30,7 @@ import {
 import type { EmergencyOwnerRecovery } from './emergency-owner-recovery';
 import {
   IPC_CHANNELS,
+  vkActionSchema,
   ARCHIVE_ENTITY_TYPES,
   archiveDeleteInputSchema,
   archiveQuerySchema,
@@ -485,6 +486,11 @@ export function createIpcHandlers(
         globalSearchQuerySchema.parse(unsafeQuery),
       ),
 
+    [IPC_CHANNELS.vkAction]: (unsafeToken, unsafeInput) =>
+      requireChats().vkAction(
+        sessionTokenSchema.parse(unsafeToken),
+        vkActionSchema.parse(unsafeInput),
+      ),
     [IPC_CHANNELS.chatList]: (unsafeToken, unsafeQuery) =>
       requireChats().list(
         sessionTokenSchema.parse(unsafeToken),
