@@ -23,6 +23,8 @@ import {
   type AttendanceTimeGroup,
 } from './attendance-workspace';
 
+import { attendanceOpenError } from './attendance-open-error';
+
 const groupLabels: Record<AttendanceTimeGroup, string> = {
   COMPLETED: 'Завершённые',
   CURRENT: 'Идут сейчас',
@@ -219,9 +221,32 @@ export function AttendanceWorkspacePage() {
       </Card>
 
       {openOccurrence.isError ? (
-        <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-          Не удалось открыть занятие. Обновите список и попробуйте снова.
-        </p>
+        <div
+          role="alert"
+          className="mb-4 space-y-2 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700"
+        >
+          <p className="font-semibold">Не удалось открыть занятие</p>
+          <p>
+            {openOccurrence.variables.groupName} ·{' '}
+            {formatDate(openOccurrence.variables.startsAt, {
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+          </p>
+          <p className="whitespace-pre-wrap break-words font-medium">
+            {attendanceOpenError(openOccurrence.error)}
+          </p>
+          <p>
+            Если причина непонятна, пришлите скриншот этого сообщения. Не удаляйте занятие для
+            устранения ошибки.
+          </p>
+          <Button variant="outline" onClick={() => void attendance.refetch()}>
+            Обновить список
+          </Button>
+        </div>
       ) : null}
 
       {visibleLessons.length === 0 ? (
