@@ -782,6 +782,55 @@ export class StudioService {
     assertPermission(actor, 'lessons:manage');
     const current = await this.requireLesson(id);
     assertBranchAccess(actor, current.branchId);
+    if (input.endTimeCorrection) {
+      const correction = input.endTimeCorrection;
+      return this.database.$transaction(async (transaction) => {
+        const fresh = await transaction.lesson.findUnique({
+          where: { id },
+          include: lessonInclude,
+        });
+        if (!fresh) throw new DomainError('NOT_FOUND', t('domain.notFound.lesson'));
+        assertBranchAccess(actor, fresh.branchId);
+        const summary = lessonSummary(fresh);
+        const end = new Date(input.endsAt);
+        const duration = end.getTime() - fresh.startsAt.getTime();
+        const day = 24 * 60 * 60_000;
+        if (
+          fresh.status === 'CANCELLED' ||
+          fresh.endsAt.getTime() - fresh.startsAt.getTime() <= day ||
+          fresh.endsAt.getTime() !== Date.parse(correction.expectedEndsAt) ||
+          fresh.startsAt.getTime() !== Date.parse(input.startsAt) ||
+          (input.coachId ?? null) !== (summary.coachId ?? null) ||
+          (input.roomId ?? null) !== (summary.roomId ?? null) ||
+          (input.room?.trim() ?? '') !== (summary.room?.trim() ?? '') ||
+          !Number.isFinite(duration) ||
+          duration <= 0 ||
+          duration > day ||
+          end >= fresh.endsAt ||
+          correction.reason.trim().length < 2 ||
+          correction.reason.trim().length > 500
+        ) {
+          throw new DomainError(
+            'CONFLICT',
+            'Можно исправить только ошибочное окончание многодневного занятия, не меняя начало, тренера и зал. Обновите карточку и проверьте данные.',
+          );
+        }
+        // A strict subset of the existing interval cannot introduce new time conflicts.
+        // Do not reschedule, reconcile attendance, or rewrite immutable payroll snapshots.
+        const updated = await transaction.lesson.update({
+          where: { id },
+          data: { endsAt: end },
+          include: lessonInclude,
+        });
+        await this.audit(transaction, actor.id, 'LESSON_END_TIME_CORRECTED', 'Lesson', id, {
+          fromEndsAt: fresh.endsAt.toISOString(),
+          toEndsAt: end.toISOString(),
+          startsAt: fresh.startsAt.toISOString(),
+          reason: correction.reason.trim(),
+        });
+        return lessonSummary(updated);
+      });
+    }
     if (current.status !== 'PLANNED')
       throw new DomainError('VALIDATION', 'Перенести можно только запланированное занятие.');
     if ((await this.database.attendance.count({ where: { lessonId: id } })) > 0)

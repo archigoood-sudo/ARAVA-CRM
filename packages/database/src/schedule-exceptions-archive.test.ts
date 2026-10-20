@@ -101,6 +101,128 @@ describe('Sprint 6.1 schedule exceptions and global archive', () => {
     return { branch, coach, group, room, student };
   }
 
+  it('corrects only an erroneous multi-day end with marked attendance, preserving finance and approved payroll', async () => {
+    const { branch, coach, group, room, student } = await foundation();
+    const tariff = await finance.createTariff(ownerToken, {
+      branchId: branch.id,
+      currency: 'RUB',
+      isActive: true,
+      lessonCount: 4,
+      name: 'Correction pack',
+      price: 40000,
+      type: 'LESSON_PACK',
+      validityDays: 60,
+    });
+    await finance.createSubscription(ownerToken, {
+      initialPayment: { amount: 40000, paidAt: '2026-08-01T09:00:00+03:00', paymentMethod: 'CASH' },
+      expiresAt: '2026-09-30',
+      salePrice: 40000,
+      startsAt: '2026-08-01',
+      studentId: student.id,
+      tariffId: tariff.id,
+    });
+    await management.saveTrainerPayoutProfile(ownerToken, {
+      effectiveFrom: '2026-08-01',
+      rules: PAYOUT_CATEGORIES.map((category) =>
+        category === 'REGULAR_ATTENDANCE'
+          ? { category, mode: 'FIXED_PER_ATTENDANCE' as const, amount: 1000 }
+          : { category },
+      ),
+      trainerId: coach.id,
+    });
+    const lesson = await studio.createLesson(ownerToken, {
+      coachId: coach.id,
+      roomId: room.id,
+      groupId: group.id,
+      startsAt: '2026-08-20T18:00:00+03:00',
+      endsAt: '2026-08-22T20:00:00+03:00',
+    });
+    await studio.saveAttendance(ownerToken, lesson.id, [
+      { studentId: student.id, status: 'PRESENT' },
+    ]);
+    await database.lesson.update({ where: { id: lesson.id }, data: { status: 'COMPLETED' } });
+    const period = await management.createPayrollPeriod(ownerToken, {
+      branchId: branch.id,
+      dateFrom: '2026-08-20',
+      dateTo: '2026-08-20',
+    });
+    await management.calculatePayrollPeriod(ownerToken, period.id);
+    await management.approvePayrollPeriod(ownerToken, period.id);
+    const protectedState = async () => ({
+      attendance: await database.attendance.findMany(),
+      subscriptions: await database.subscription.findMany(),
+      ledger: await database.subscriptionLedger.findMany(),
+      payments: await database.payment.findMany(),
+      periods: await database.payrollPeriod.findMany(),
+      accruals: await database.payrollAccrual.findMany(),
+      schedules: await database.weeklySchedule.findMany(),
+    });
+    const before = await protectedState();
+    const original = await database.lesson.findUniqueOrThrow({ where: { id: lesson.id } });
+    const input = {
+      startsAt: lesson.startsAt,
+      endsAt: '2026-08-20T19:00:00+03:00',
+      coachId: coach.id,
+      roomId: room.id,
+    };
+    await expect(studio.rescheduleLesson(ownerToken, lesson.id, input)).rejects.toThrow(
+      'Перенести можно только',
+    );
+    const correction = {
+      ...input,
+      endTimeCorrection: { expectedEndsAt: lesson.endsAt, reason: 'Ошибочная дата окончания' },
+    };
+    for (const invalid of [
+      { ...correction, startsAt: '2026-08-20T17:00:00+03:00' },
+      { ...correction, endsAt: '2026-08-20T17:00:00+03:00' },
+      { ...correction, endsAt: '2026-08-23T20:00:00+03:00' },
+      { ...correction, coachId: undefined },
+      { ...correction, roomId: undefined },
+      {
+        ...correction,
+        endTimeCorrection: {
+          ...correction.endTimeCorrection,
+          expectedEndsAt: '2026-08-22T21:00:00+03:00',
+        },
+      },
+    ])
+      await expect(studio.rescheduleLesson(ownerToken, lesson.id, invalid)).rejects.toThrow(
+        'Можно исправить только',
+      );
+    expect(await database.lesson.findUniqueOrThrow({ where: { id: lesson.id } })).toEqual(original);
+    const next = {
+      groupId: group.id,
+      startsAt: '2026-08-22T18:30:00+03:00',
+      endsAt: '2026-08-22T19:30:00+03:00',
+    };
+    await expect(studio.createLesson(ownerToken, next)).rejects.toThrow(
+      'У группы уже есть занятие',
+    );
+    await studio.rescheduleLesson(ownerToken, lesson.id, correction);
+    expect(await protectedState()).toEqual(before);
+    expect(await database.lesson.findUniqueOrThrow({ where: { id: lesson.id } })).toMatchObject({
+      startsAt: original.startsAt,
+      coachId: original.coachId,
+      roomId: original.roomId,
+      status: original.status,
+      originalStartsAt: original.originalStartsAt,
+      originalEndsAt: original.originalEndsAt,
+      endsAt: new Date(input.endsAt),
+    });
+    expect(
+      await database.auditLog.count({
+        where: { action: 'LESSON_END_TIME_CORRECTED', entityId: lesson.id },
+      }),
+    ).toBe(1);
+    await expect(studio.rescheduleLesson(ownerToken, lesson.id, correction)).rejects.toThrow(
+      'Можно исправить только',
+    );
+    await expect(studio.createLesson(ownerToken, next)).resolves.toMatchObject({
+      groupId: group.id,
+    });
+    expect(await protectedState()).toEqual(before);
+  });
+
   it('cancels without charging or payout and runs a linked makeup through canonical accounting', async () => {
     const { branch, coach, group, room, student } = await foundation();
     const tariff = await finance.createTariff(ownerToken, {

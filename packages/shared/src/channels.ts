@@ -2403,7 +2403,9 @@ export interface LessonMakeupInput {
   startsAt: string;
 }
 
-export type LessonRescheduleInput = LessonMakeupInput;
+export type LessonRescheduleInput = LessonMakeupInput & {
+  endTimeCorrection?: { expectedEndsAt: string; reason: string } | undefined;
+};
 
 export interface RoomInput {
   areaSquareMeters?: number | undefined;

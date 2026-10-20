@@ -629,7 +629,13 @@ const lessonExceptionInputSchema = z
 
 export const lessonMakeupInputSchema: z.ZodType<LessonMakeupInput> = lessonExceptionInputSchema;
 export const lessonRescheduleInputSchema: z.ZodType<LessonRescheduleInput> =
-  lessonExceptionInputSchema;
+  lessonExceptionInputSchema.and(
+    z.object({
+      endTimeCorrection: z
+        .object({ expectedEndsAt: isoDateTime, reason: z.string().trim().min(2).max(500) })
+        .optional(),
+    }),
+  );
 
 export const archiveQuerySchema: z.ZodType<ArchiveQuery> = z.object({
   search: z.string().trim().max(160).optional(),

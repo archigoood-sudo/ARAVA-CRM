@@ -20,6 +20,8 @@ import { invalidateLessonCaches } from '../../lib/operational-cache';
 import { queryKeys } from '../../lib/query-keys';
 import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { LessonDialog } from './lesson-dialog';
+import { LessonEndCorrectionControl } from './lesson-end-correction-control';
+import { getErrorMessage } from '../../lib/errors';
 import { LessonSubstitutionControl } from './lesson-substitution-control';
 
 export function LessonDetailsPage() {
@@ -151,6 +153,7 @@ export function LessonDetailsPage() {
             value={formatDate(detail.endsAt, { dateStyle: 'long', timeStyle: 'short' })}
           />
           <LessonSubstitutionControl lesson={detail} />
+          <LessonEndCorrectionControl lesson={detail} />
           <Info
             label={t('lesson.room')}
             value={detail.roomName ?? (detail.roomId ? detail.room : undefined) ?? 'Зал не указан'}
@@ -182,11 +185,20 @@ export function LessonDetailsPage() {
         </CardContent>
       </Card>
       <LessonDialog
+        error={
+          update.isError
+            ? getErrorMessage(update.error, 'Не удалось сохранить изменения занятия.')
+            : undefined
+        }
         groups={groups.data ?? []}
         lesson={detail}
         onClose={() => setEdit(false)}
         onSubmit={async (input) => {
-          await update.mutateAsync(input);
+          try {
+            await update.mutateAsync(input);
+          } catch {
+            return;
+          }
           await refresh();
           setEdit(false);
         }}
