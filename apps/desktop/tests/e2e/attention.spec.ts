@@ -165,6 +165,7 @@ test('центр внимания ведёт к действию, автораз
     await page.getByRole('link', { name: /Требует внимания/u }).click();
     await expect(page.getByRole('heading', { level: 2, name: 'Требует внимания' })).toBeVisible();
     await page.getByLabel('Категория').selectOption('PAYMENTS');
+    await page.locator(`[data-student-id="${context.studentId}"] > summary`).click();
     const debtItem = page.getByText(/Должникова E2E Мария: есть задолженность/u).first();
     await expect(debtItem).toBeVisible();
     await debtItem
@@ -185,6 +186,7 @@ test('центр внимания ведёт к действию, автораз
     await page.getByLabel('Категория').selectOption('PAYMENTS');
     await expect(page.getByText(/Должникова E2E Мария: есть задолженность/u)).toHaveCount(0);
     await page.getByLabel('Категория').selectOption('ATTENDANCE');
+    await page.locator(`[data-student-id="${context.studentId}"] > summary`).click();
     await expect(page.getByText(/не был на последних 3 занятиях/u)).toBeVisible();
     await expect(page.getByText('Не заполнена посещаемость')).toHaveCount(1);
     const attendance = page.getByText('Не заполнена посещаемость');

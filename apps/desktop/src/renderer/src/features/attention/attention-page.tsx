@@ -1,9 +1,4 @@
-import type {
-  AttentionCategory,
-  AttentionFilters,
-  AttentionItem,
-  AttentionSeverity,
-} from '@arava/shared';
+import type { AttentionCategory, AttentionFilters, AttentionSeverity } from '@arava/shared';
 import { formatDate, isLeadResponseOverdue } from '@arava/shared';
 import {
   AttentionCard,
@@ -43,6 +38,7 @@ import { getSessionToken, useAuthStore } from '../../stores/auth-store';
 import { WebActionsSection } from './web-actions-section';
 import { combinedAttentionCount } from './attention-model';
 import { leadAttentionKey } from '../leads/lead-model';
+import { AttentionTaskList } from './attention-task-list';
 
 const categories: { icon: typeof BellRing; label: string; value: AttentionCategory }[] = [
   { icon: Inbox, label: 'Заявки', value: 'LEADS' },
@@ -59,31 +55,6 @@ const categories: { icon: typeof BellRing; label: string; value: AttentionCatego
   { icon: HardDrive, label: 'Резервные копии', value: 'BACKUPS' },
   { icon: CloudCog, label: 'Интеграция', value: 'INTEGRATION' },
 ];
-
-const severityLabels: Record<AttentionSeverity, string> = {
-  CRITICAL: 'Критично',
-  INFO: 'Информация',
-  WARNING: 'Предупреждение',
-};
-
-function tone(severity: AttentionSeverity): 'critical' | 'info' | 'warning' {
-  return severity === 'CRITICAL' ? 'critical' : severity === 'INFO' ? 'info' : 'warning';
-}
-
-function categoryIcon(category: AttentionCategory) {
-  const Icon = categories.find(({ value }) => value === category)?.icon ?? BellRing;
-  return <Icon className="size-4" />;
-}
-
-function itemMeta(item: AttentionItem) {
-  return [
-    item.branchName,
-    item.dueAt ? formatDate(item.dueAt, { day: 'numeric', month: 'long', year: 'numeric' }) : '',
-    severityLabels[item.severity],
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
 
 export function AttentionPage() {
   const user = useAuthStore((state) => state.user);
@@ -299,26 +270,7 @@ export function AttentionPage() {
             })}
           </aside>
           <section aria-label="Список задач" className="space-y-3">
-            {(items.data ?? []).map((item) => (
-              <AttentionCard
-                action={
-                  <Button
-                    onClick={() => navigate(item.actionRoute)}
-                    size="small"
-                    variant="secondary"
-                  >
-                    {item.actionLabel}
-                    <ChevronRight className="size-4" />
-                  </Button>
-                }
-                description={item.description}
-                icon={categoryIcon(item.category)}
-                key={item.id}
-                meta={itemMeta(item)}
-                title={item.title}
-                tone={tone(item.severity)}
-              />
-            ))}
+            <AttentionTaskList items={items.data ?? []} />
           </section>
         </div>
       ) : null}

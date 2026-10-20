@@ -77,6 +77,7 @@ export function StudentFinance({
   const canAdjust = user?.role === 'OWNER';
   const queryClient = useQueryClient();
   const [issueOpen, setIssueOpen] = useState(false);
+  const [coverageStartsAt, setCoverageStartsAt] = useState<string>();
   const [financeMenuOpen, setFinanceMenuOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [attendancePayment, setAttendancePayment] = useState<{
@@ -112,7 +113,10 @@ export function StudentFinance({
       setAttendancePayment(undefined);
       setPaymentOpen(true);
     }
-    if (requestedAction === 'subscription' && !requestedRenewalOfId) setIssueOpen(true);
+    if (requestedAction === 'subscription' && !requestedRenewalOfId) {
+      setCoverageStartsAt(undefined);
+      setIssueOpen(true);
+    }
     if (requestedAction) onRequestedActionHandled?.();
   }, [onRequestedActionHandled, requestedAction, requestedRenewalOfId]);
   useEffect(() => {
@@ -396,6 +400,26 @@ export function StudentFinance({
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  {canManage && attendance.paymentStatus !== 'PENDING' ? (
+                    <Button
+                      variant="outline"
+                      size="small"
+                      onClick={() => {
+                        const date = new Date(attendance.startsAt);
+                        const localDate = new Date(
+                          date.getTime() - date.getTimezoneOffset() * 60_000,
+                        )
+                          .toISOString()
+                          .slice(0, 10);
+                        setCoverageStartsAt(localDate);
+                        setRenewalOf(undefined);
+                        setError(undefined);
+                        setIssueOpen(true);
+                      }}
+                    >
+                      Покрыть абонементом
+                    </Button>
+                  ) : null}
                   {attendance.paymentStatus === 'PENDING' ? (
                     <Badge>Оплата обрабатывается</Badge>
                   ) : attendance.tariffs.length === 0 ? (
@@ -600,6 +624,7 @@ export function StudentFinance({
             onClick={() => {
               setError(undefined);
               setFinanceMenuOpen(false);
+              setCoverageStartsAt(undefined);
               setRenewalOf(undefined);
               setIssueOpen(true);
             }}
@@ -611,9 +636,11 @@ export function StudentFinance({
       </Dialog>
       <SubscriptionDialog
         activeSubscriptionCount={current.length + overlaps.length}
+        initialStartsAt={coverageStartsAt}
         error={error}
         onClose={() => {
           setIssueOpen(false);
+          setCoverageStartsAt(undefined);
           setRenewalOf(undefined);
         }}
         onSubmit={sellSubscription}

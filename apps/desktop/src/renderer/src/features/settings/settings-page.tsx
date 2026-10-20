@@ -15,6 +15,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Database, Image, KeyRound, Laptop, Moon, Save, Sun, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { useLocation } from 'react-router-dom';
 import { z } from 'zod';
 
 import { getDesktopApi } from '../../lib/desktop-api';
@@ -65,6 +66,7 @@ const platformNames: Record<string, string> = {
 };
 
 export function SettingsPage() {
+  const location = useLocation();
   const user = useAuthStore((state) => state.user);
   const canManageWorkspace = user?.permissions.canManageSystemSettings ?? false;
   const [recoveryCode, setRecoveryCode] = useState<string>();
@@ -121,13 +123,13 @@ export function SettingsPage() {
   }, [reset, workspaceQuery.data]);
 
   useEffect(() => {
-    const target = window.location.hash;
+    const target = location.hash;
     if (target !== '#backups' && target !== '#integration') return;
     const frame = window.requestAnimationFrame(() =>
       document.querySelector(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [location.hash]);
 
   const saveWorkspace = useMutation({
     mutationFn: async ({ workspaceName }: SettingsForm) => {

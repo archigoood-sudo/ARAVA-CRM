@@ -470,6 +470,17 @@ export function StudentProfilePage() {
                   <Link
                     className="rounded-xl border border-amber-200 bg-white/70 p-3 text-sm transition hover:bg-white"
                     key={item.id}
+                    onClick={() => {
+                      const destination = new URL(item.actionRoute, 'https://crm.local');
+                      if (
+                        destination.pathname === '/students/' + studentId &&
+                        destination.searchParams.get('action') === 'attendance-payment'
+                      ) {
+                        setRequestedAttendanceLessonId(
+                          destination.searchParams.get('lessonId') ?? undefined,
+                        );
+                      }
+                    }}
                     to={item.actionRoute}
                   >
                     <span className="font-semibold">{item.title}</span>

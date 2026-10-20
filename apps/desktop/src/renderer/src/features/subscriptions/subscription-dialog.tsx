@@ -39,6 +39,7 @@ function dayAfter(value?: string): string {
 export function SubscriptionDialog({
   activeSubscriptionCount = 0,
   error,
+  initialStartsAt,
   onClose,
   onSubmit,
   open,
@@ -47,6 +48,7 @@ export function SubscriptionDialog({
   tariffs,
 }: {
   error?: string | undefined;
+  initialStartsAt?: string | undefined;
   onClose: () => void;
   activeSubscriptionCount?: number | undefined;
   onSubmit: (
@@ -73,14 +75,14 @@ export function SubscriptionDialog({
   useEffect(() => {
     if (!open) return;
     const first = tariffs[0];
-    const safeStart = renewalOf ? dayAfter(renewalOf.expiresAt) : today();
+    const safeStart = renewalOf ? dayAfter(renewalOf.expiresAt) : (initialStartsAt ?? today());
     setTariffId(first?.id ?? '');
     setStartsAt(safeStart);
     setExpiresAt(calculatedExpiryDate(safeStart, first?.validityDays));
     setNotes('');
     setValidationError(undefined);
     saleKey.current = crypto.randomUUID();
-  }, [open, renewalOf, tariffs]);
+  }, [open, renewalOf, tariffs, initialStartsAt]);
   const chooseTariff = (id: string) => {
     setTariffId(id);
     const tariff = tariffs.find((item) => item.id === id);
@@ -126,6 +128,12 @@ export function SubscriptionDialog({
       title={renewalOf ? 'Продлить абонемент' : t('subscription.createTitle')}
     >
       <div className="space-y-4">
+        {initialStartsAt && !renewalOf ? (
+          <p className="rounded-xl bg-sky-50 p-3 text-sm text-sky-900">
+            Дата начала установлена по выбранному непокрытому посещению. Проверьте тариф и срок
+            действия. Покрытие будет выполнено по обычным правилам после оплаты абонемента.
+          </p>
+        ) : null}
         {renewalOf ? (
           <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
             Текущий: {renewalOf.tariffName} · осталось {renewalOf.remainingLessons ?? '∞'}. Новый
