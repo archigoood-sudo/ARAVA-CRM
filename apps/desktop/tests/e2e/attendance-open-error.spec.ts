@@ -88,6 +88,65 @@ test('attendance exposes a real occurrence conflict without creating a duplicate
     await page.getByRole('button', { name: /Другая группа/u }).click();
     await expect(page).toHaveURL(new RegExp('/attendance/' + fixture.lessonId, 'u'));
     await expect(page.getByRole('heading', { name: 'Другая группа', exact: true })).toBeVisible();
+    const conflict = await page.evaluate(async ({ token, date }) => {
+      const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+      const branch = await api.branches.create(token, { name: 'Конфликт одной группы' });
+      const group = await api.groups.create(token, {
+        branchId: branch.id,
+        name: 'kds baby проверка',
+        direction: 'Танцы',
+        capacity: 10,
+        status: 'ACTIVE',
+      });
+      const lesson = await api.lessons.create(token, {
+        groupId: group.id,
+        startsAt: new Date(date + 'T18:20:00').toISOString(),
+        endsAt: new Date(date + 'T19:20:00').toISOString(),
+      });
+      await api.schedules.create(token, {
+        branchId: branch.id,
+        groupId: group.id,
+        weekday: 1,
+        startTime: '18:30',
+        endTime: '19:30',
+        validFrom: '2026-10-01',
+        isActive: true,
+      });
+      location.hash = '/attendance?date=' + date;
+      return { groupId: group.id, lesson };
+    }, fixture);
+    await page.reload();
+    await page
+      .getByRole('button', { name: /kds baby проверка/u })
+      .filter({ hasText: '18:30' })
+      .click();
+    await expect(alert).toContainText('У группы уже есть занятие в это время.');
+    await expect(alert).toContainText('18:20');
+    await alert.getByRole('link', { name: 'Открыть существующее занятие' }).click();
+    await expect(page).toHaveURL(new RegExp('/attendance/' + conflict.lesson.id, 'u'));
+    await expect(
+      page.getByRole('heading', { name: 'kds baby проверка', exact: true }),
+    ).toBeVisible();
+    const unchanged = await page.evaluate(
+      async ({ token, groupId, lesson }) => {
+        const api = (globalThis as typeof globalThis & { arava: AravaDesktopApi }).arava;
+        return {
+          lesson: await api.lessons.get(token, lesson.id),
+          lessons: await api.lessons.list(token, {
+            groupId,
+            dateFrom: '2026-10-18T00:00:00.000Z',
+            dateTo: '2026-10-20T23:59:59.999Z',
+          }),
+        };
+      },
+      { token: fixture.token, ...conflict },
+    );
+    expect(unchanged.lesson).toEqual(conflict.lesson);
+    expect(unchanged.lessons).toHaveLength(1);
+    await page.reload();
+    await expect(
+      page.getByRole('heading', { name: 'kds baby проверка', exact: true }),
+    ).toBeVisible();
   } finally {
     await application.close();
   }

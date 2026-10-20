@@ -24,6 +24,7 @@ import {
 } from './attendance-workspace';
 
 import { attendanceOpenError } from './attendance-open-error';
+import { AttendanceConflictLinks } from './attendance-conflict-links';
 
 const groupLabels: Record<AttendanceTimeGroup, string> = {
   COMPLETED: 'Завершённые',
@@ -239,6 +240,7 @@ export function AttendanceWorkspacePage() {
           <p className="whitespace-pre-wrap break-words font-medium">
             {attendanceOpenError(openOccurrence.error)}
           </p>
+          <AttendanceConflictLinks occurrence={openOccurrence.variables} />
           <p>
             Если причина непонятна, пришлите скриншот этого сообщения. Не удаляйте занятие для
             устранения ошибки.
