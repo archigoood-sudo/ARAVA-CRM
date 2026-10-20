@@ -125,7 +125,7 @@ test('attendance exposes a real occurrence conflict without creating a duplicate
     await alert.getByRole('link', { name: 'Открыть существующее занятие' }).click();
     await expect(page).toHaveURL(new RegExp('/attendance/' + conflict.lesson.id, 'u'));
     await expect(
-      page.getByRole('heading', { name: 'kds baby проверка', exact: true }),
+      page.getByRole('heading', { name: 'kds baby проверка', exact: true, level: 1 }),
     ).toBeVisible();
     const unchanged = await page.evaluate(
       async ({ token, groupId, lesson }) => {
@@ -145,7 +145,7 @@ test('attendance exposes a real occurrence conflict without creating a duplicate
     expect(unchanged.lessons).toHaveLength(1);
     await page.reload();
     await expect(
-      page.getByRole('heading', { name: 'kds baby проверка', exact: true }),
+      page.getByRole('heading', { name: 'kds baby проверка', exact: true, level: 1 }),
     ).toBeVisible();
   } finally {
     await application.close();
